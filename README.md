@@ -1,44 +1,194 @@
 # WebClaw
 
-WebClaw is a Chrome Manifest V3 extension that runs an AI agent inside the browser extension environment. It can inspect the active page, operate DOM elements, call selected Chrome extension APIs, and optionally execute JavaScript in the page through a guarded tool.
+[English](README.en.md)
 
-## Project Status
+WebClaw 是一个 Chrome Manifest V3 浏览器扩展，把 AI Agent 运行在浏览器扩展环境中。它可以读取当前页面上下文、操作 DOM、调用受控的 Chrome 扩展 API、接入多种模型 Provider，并在用户明确开启后执行页面 JavaScript。
 
-WebClaw is an experimental browser-native agent framework. It is intended for
-local development, testing, and controlled personal workflows. Review the
-security and privacy notes before using it with sensitive websites, credentials,
-or message channels.
+## 项目状态
 
-## Features
+WebClaw 目前是实验性的浏览器原生 Agent 框架，适合本地开发、个人自动化和受控测试流程。它具备读取网页、调用模型、收发通道消息和执行工具的能力。在敏感网站、凭证、消息通道或自动发送场景中使用前，请先阅读 [隐私说明](PRIVACY.md) 和 [安全说明](SECURITY.md)。
 
-- Side panel chat UI.
-- Local Ollama provider through `http://localhost:11434/api/chat`.
-- OpenAI API format compatible provider through `/v1/chat/completions`.
-- Chrome AI provider through Chrome's built-in Prompt API and Gemini Nano.
-- Codex / ChatGPT sign-in provider using a Codex CLI-compatible device OAuth flow.
-- GitHub Copilot sign-in provider using GitHub OAuth device flow.
-- Multiple custom providers. Each provider is one of `Codex / ChatGPT OAuth`, `GitHub Copilot OAuth`, `Chrome AI`, `Local Ollama`, or `OpenAI-compatible API`.
-- Browser tools: page snapshot, click, type, navigate, wait, page translation, current weather lookup, background HTTP requests, limited tab APIs, and JavaScript execution.
+## 功能概览
 
-## Repository Guide
+- Chrome Side Panel 会话界面。
+- 多会话 Session 管理，所有通道消息进入当前活跃会话。
+- Provider 管理：Local Ollama、OpenAI-compatible API、Chrome AI、Codex / ChatGPT OAuth、GitHub Copilot OAuth。
+- 模型列表刷新、模型下拉选择、Thinking mode 配置。
+- 浏览器工具：页面上下文、点击、输入、跳转、等待、页面翻译、天气查询、搜索网页、后台 HTTP 请求、企业微信推送、有限 Chrome API、可选页面 JavaScript 执行。
+- 自定义 Tool、Skill、Schedule。
+- 微信、Telegram、企业微信机器人通道。
+- Chrome 内置 Prompt API 和 Summarizer API 支持。
+- Agent 自管理能力：可通过受控 patch 增加 tool、skill、schedule。
 
-- [Privacy](PRIVACY.md)
-- [Security policy](SECURITY.md)
-- [Contributing](CONTRIBUTING.md)
-- [Changelog](CHANGELOG.md)
-- [License](LICENSE)
+## 仓库文档
 
-## Load in Chrome
+- [English README](README.en.md)
+- [隐私说明](PRIVACY.md)
+- [安全策略](SECURITY.md)
+- [贡献指南](CONTRIBUTING.md)
+- [变更日志](CHANGELOG.md)
+- [发布检查清单](RELEASE.md)
+- [许可证](LICENSE)
 
-1. Open `chrome://extensions`.
-2. Enable Developer mode.
-3. Click Load unpacked.
-4. Select this repository directory.
-5. Click the WebClaw extension icon to open the side panel.
+## 在 Chrome 中加载
 
-## Development Checks
+1. 打开 `chrome://extensions`。
+2. 开启右上角 `Developer mode`。
+3. 点击 `Load unpacked`。
+4. 选择本仓库目录，目录根部应直接包含 `manifest.json`。
+5. 点击 WebClaw 扩展图标打开 Side Panel。
 
-Run the same syntax checks used by CI:
+## Provider 配置
+
+打开 Side Panel 右上角设置按钮，可以管理 Provider。WebClaw 支持添加多个 Provider，每个 Provider 可以有独立名称、类型和模型配置。当前激活 Provider 会用于会话、工具执行和 Schedule。
+
+### Local Ollama
+
+先启动 Ollama，然后配置：
+
+- Provider type: `Local Ollama`
+- Base URL: `http://localhost:11434`
+- Model: 已拉取的模型，例如 `llama3.1`、`qwen3.6:latest`
+
+模型列表刷新会调用：
+
+```text
+GET http://localhost:11434/api/tags
+```
+
+### OpenAI-compatible API
+
+配置：
+
+- Provider type: `OpenAI-compatible API`
+- Base URL: OpenAI 可用 `https://api.openai.com/v1`，兼容服务填写对应 `/v1` 地址
+- API key
+- Model
+
+模型列表刷新会调用兼容接口：
+
+```text
+GET /models
+```
+
+### Chrome AI
+
+Provider type 选择 `Chrome AI` 后，WebClaw 会通过 Chrome 内置 Prompt API 使用本机模型。由于 MV3 background service worker 不能直接调用 Prompt API，WebClaw 会从 offscreen extension document 调用。
+
+Chrome AI 需要支持内置 AI 的 Chrome 版本、合适硬件、足够磁盘空间，以及已下载或可下载的 Gemini Nano 模型。可在以下页面排查：
+
+```text
+chrome://on-device-internals
+```
+
+当 `get_page_context` 页面正文较长时，WebClaw 会优先用 Chrome Summarizer API 对页面内容做摘要，再把摘要传给 Prompt API，以降低上下文超限概率。
+
+### Codex / ChatGPT OAuth
+
+WebClaw 内置 Codex CLI 兼容的设备码登录默认值：
+
+- Issuer URL: `https://auth.openai.com`
+- Authorization URL: `https://auth.openai.com/oauth/authorize`
+- Token URL: `https://auth.openai.com/oauth/token`
+- Client ID: `app_EMoamEEZ73f0CkXaXp7hrann`
+- Codex backend URL: `https://chatgpt.com/backend-api/codex`
+
+点击 `Sign in with ChatGPT` 后，WebClaw 会请求设备登录码，打开 ChatGPT 设备授权页面，在 Side Panel 显示设备码并轮询授权结果。授权成功后，access token 和 refresh token 会存入 `chrome.storage.local`。
+
+刷新 Codex 模型时，WebClaw 会调用：
+
+```text
+/models?client_version=0.142.0
+```
+
+### GitHub Copilot OAuth
+
+WebClaw 使用 GitHub OAuth device flow 登录 Copilot：
+
+- Device code URL: `https://github.com/login/device/code`
+- Access token URL: `https://github.com/login/oauth/access_token`
+- Copilot token URL: `https://api.github.com/copilot_internal/v2/token`
+- Copilot-compatible base URL: `https://api.githubcopilot.com`
+- 默认 model: `auto`
+
+选择 `auto` 时，WebClaw 会省略请求体里的 `model` 字段，让 Copilot 服务端执行 auto model selection。
+
+## Agent 协议
+
+WebClaw 不依赖模型原生 function calling，而是提示模型每一步输出一个 JSON 对象：
+
+```json
+{"tool":{"name":"get_page_context","args":{}}}
+```
+
+完成任务时输出：
+
+```json
+{"final":"Done"}
+```
+
+这种协议可以兼容本地模型、OpenAI-compatible 模型、Chrome AI、Codex 和 Copilot。
+
+## Tool、Skill 和 Schedule
+
+- Tool：可执行动作或返回结果的能力，例如读取页面、点击按钮、发送 HTTP 请求、推送企业微信消息。
+- Skill：长期规则、领域知识或操作流程，例如“分析币安公告时重点关注合约、杠杆、保证金调整”。
+- Schedule：定时触发自然语言任务，例如“每天 09:00 检查币安公告并推送摘要”。
+
+WebClaw 支持通过配置管理工具受控地增加 tool、skill 和 schedule。模型只能提出结构化 patch，真正写入前会经过校验。
+
+## 页面翻译
+
+打开目标页面后，对 WebClaw 说：
+
+```text
+帮我把当前页面翻译成中文
+```
+
+WebClaw 会使用 `translate_page` 工具收集可见文本节点，调用当前 Provider 翻译，并把翻译结果写回页面 DOM。它适用于普通 `http://` 和 `https://` 页面，不适用于 `chrome://extensions` 等浏览器内部页面。
+
+## 实时查询
+
+模型本身不知道实时信息。WebClaw 通过工具提供实时能力：
+
+- `search_web`：打开搜索结果、读取页面并总结。
+- `get_weather`：通过 Open-Meteo 查询天气。
+- `get_page_context`：读取当前页面上下文。
+
+例如：
+
+```text
+今天上海天气怎么样？
+```
+
+或：
+
+```text
+查一下币安最新公告并总结重点。
+```
+
+## 通道
+
+WebClaw 支持把外部消息通道接入当前活跃会话：
+
+- 微信 channel
+- Telegram bot channel
+- 企业微信机器人 webhook
+
+当前设计是：可以有多个会话，但只有一个活跃会话。所有 channel 收到的消息都会进入当前活跃会话，这样可以在 Side Panel、微信、Telegram 等多个终端延续同一个任务上下文。
+
+## 安全说明
+
+- JavaScript 执行默认关闭。只有在你信任当前任务和页面时才应开启。
+- `run_js` 使用 Chrome `userScripts` API，能绕过页面 CSP 对动态脚本的限制，但不能突破浏览器同源策略、HttpOnly Cookie、扩展权限或系统权限。
+- `http_request` 在扩展 background 中执行，用于调用页面 JS 因 CORS 无法调用的接口或 webhook。
+- API key、OAuth token、Webhook、会话和通道状态存储在 `chrome.storage.local`。
+- 页面内容和通道消息可能会发送给你当前选择的模型 Provider。
+- 新增工具、Provider、Channel 时应优先考虑权限边界和数据泄露风险。
+
+## 开发检查
+
+运行与 CI 相同的语法检查：
 
 ```bash
 node --check src/background.js
@@ -53,146 +203,18 @@ node --check src/wechat-storage.js
 node -e "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')); console.log('manifest ok')"
 ```
 
-## Provider setup
+## 打包
 
-Open Settings in the side panel to manage providers. You can add multiple providers, give each one a custom name, choose its type, and switch the active provider from the Provider dropdown.
+开发者模式分享可直接打包 unpacked extension：
 
-When the active provider is a `Codex / ChatGPT OAuth` provider and it does not already have a token, WebClaw automatically starts the ChatGPT sign-in flow after you select or save that provider.
-
-When the active provider is a `GitHub Copilot OAuth` provider and it does not already have a token, WebClaw automatically starts the GitHub device sign-in flow after you select or save that provider.
-
-Each provider's `Model` field is a typeable dropdown. Click `Refresh` next to the model field to load available models from the active provider:
-
-- Ollama: `GET /api/tags`
-- OpenAI-compatible API: `GET /models`
-- Chrome AI: Chrome Prompt API `LanguageModel.availability()`
-- Codex / ChatGPT OAuth: configured Codex backend `/models` when available, with built-in fallback options
-- GitHub Copilot OAuth: configured Copilot OpenAI-compatible `/models` when available, with built-in fallback options
-
-If model discovery fails because a local server is offline, an API key is missing, or a provider does not expose a model-list endpoint, you can still type the model name manually.
-
-Each provider also has a `Thinking mode` toggle in its model configuration. For Ollama, WebClaw sends Ollama's `think` flag. For Codex and OpenAI-compatible reasoning model names, WebClaw sends a reasoning effort hint (`medium` when enabled, `low` when disabled). Chrome AI and GitHub Copilot keep the setting for consistency but WebClaw does not send undocumented thinking parameters.
-
-For custom OAuth providers that publish standard metadata, set `OAuth issuer URL` and click `Discover metadata`. WebClaw will try:
-
-- `/.well-known/oauth-authorization-server`
-- `/.well-known/openid-configuration`
-
-It fills the authorization and token endpoints from metadata. If the metadata advertises a dynamic client registration endpoint, WebClaw registers itself as a public PKCE client and fills `clientId`.
-
-### Ollama
-
-Start Ollama locally, then set:
-
-- Provider type: `Local Ollama`
-- Base URL: `http://localhost:11434`
-- Model: any model you have pulled, for example `llama3.1`
-
-### OpenAI-compatible API
-
-Set:
-
-- Provider type: `OpenAI-compatible API`
-- Base URL: for OpenAI use `https://api.openai.com/v1`; for compatible services use their `/v1` base URL.
-- API key and model.
-
-### Chrome AI
-
-Set provider type to `Chrome AI` to use Chrome's built-in Prompt API with the on-device Gemini Nano model. WebClaw calls the API from an offscreen extension document because Chrome's Prompt API is not available in MV3 background service workers.
-
-Chrome AI requires a Chrome build with built-in AI support, supported hardware, enough free disk space, and a downloaded or downloadable Gemini Nano model. Check `chrome://on-device-internals` when availability is unclear. First use may download the model.
-
-### Codex / ChatGPT OAuth
-
-The extension ships with Codex CLI-compatible defaults:
-
-- Issuer URL: `https://auth.openai.com`
-- Authorization URL: `https://auth.openai.com/oauth/authorize`
-- Token URL: `https://auth.openai.com/oauth/token`
-- Client ID: `app_EMoamEEZ73f0CkXaXp7hrann`
-- Codex backend URL: `https://chatgpt.com/backend-api/codex`
-
-Click `Sign in with ChatGPT`. WebClaw requests a device login code from ChatGPT, opens the ChatGPT device page, shows the code in the side panel, and polls until ChatGPT returns the authorization code. The extension then exchanges that code for an access token and refresh token, stores them in `chrome.storage.local`, and calls the Codex backend `/responses` endpoint with the bearer token.
-
-When refreshing Codex models, WebClaw calls `/models?client_version=0.142.0`; the ChatGPT Codex backend requires a Codex client version on the model-list endpoint. The returned model catalog uses Codex fields such as `slug`, `display_name`, `visibility`, and `supported_in_api`.
-
-This follows the Codex CLI device-login shape instead of the default local callback server shape. A Chrome extension cannot bind a `127.0.0.1` callback server like a native CLI process, so device auth is the browser-extension friendly path.
-
-The older `Discover metadata` button remains for custom OAuth-compatible providers. It tries `/.well-known/oauth-authorization-server` and `/.well-known/openid-configuration`, and can fill endpoints or dynamically register a public PKCE client when the provider supports that.
-
-For enterprise automation, OpenAI also documents Codex access tokens created from the ChatGPT admin console. Those are intended for trusted non-interactive local workflows, not public browser-extension distribution.
-
-### GitHub Copilot OAuth
-
-The extension ships with GitHub device-flow defaults:
-
-- Device code URL: `https://github.com/login/device/code`
-- Access token URL: `https://github.com/login/oauth/access_token`
-- GitHub OAuth client ID: configurable in Settings
-- Scope: `read:user`
-- Copilot token URL: `https://api.github.com/copilot_internal/v2/token`
-- Copilot-compatible base URL: `https://api.githubcopilot.com`
-- Default model: `auto`
-
-Click `Sign in with GitHub`. WebClaw requests a GitHub device code, opens `https://github.com/login/device`, shows the code in the side panel, and polls until GitHub returns an OAuth access token. It then exchanges that GitHub token for a Copilot session token and calls the configured Copilot-compatible `/chat/completions` endpoint.
-
-GitHub's OAuth device flow is public and documented. GitHub documents the currently supported Copilot models in the GitHub Copilot AI model reference, but does not document a stable account-level model-list REST endpoint. WebClaw tries the Copilot OpenAI-compatible `GET /models` endpoint after exchanging the GitHub token for a Copilot token; the returned IDs depend on your plan, client surface, and organization or enterprise model policies. The Copilot chat/token endpoint shape is not a stable public REST contract, so WebClaw keeps the Copilot token URL, chat base URL, model, and integration ID configurable.
-
-GitHub's native `Auto` model option is a Copilot routing mode, not a single fixed model. GitHub's documentation says auto model selection chooses from supported models based on task complexity, system health, model availability, policies, and subscription type. Paid Copilot plans qualify for a 10% discount on model costs while using auto model selection in supported Copilot surfaces.
-
-When you choose `auto` in WebClaw, WebClaw omits the `model` field from the Copilot `/chat/completions` request body and lets the Copilot service decide whether to apply server-side auto model selection. Concrete model selections are still sent as `model`.
-
-## Agent protocol
-
-The model is prompted to emit a single JSON object per step:
-
-```json
-{"tool":{"name":"get_page_context","args":{}}}
+```bash
+zip -r webclaw-0.1.0.zip manifest.json src assets README.md README.en.md LICENSE PRIVACY.md SECURITY.md \
+  -x "*.DS_Store" \
+  -x "*/.DS_Store"
 ```
 
-or:
+压缩包根目录必须直接包含 `manifest.json`。
 
-```json
-{"final":"Done"}
-```
+## License
 
-This keeps the agent provider-neutral and works with local models that do not support native function calling.
-
-## Translating a page
-
-Open the page you want to translate in the active Chrome tab, then ask WebClaw:
-
-```text
-帮我把当前页面翻译成中文
-```
-
-WebClaw uses the `translate_page` tool to collect visible text nodes, translate them with the active provider, and replace the text in the page DOM. It works on normal `http://` and `https://` pages. It cannot translate browser-internal pages such as `about:blank`, `chrome://extensions`, or pages where Chrome blocks extension content scripts.
-
-## Real-time queries
-
-Models do not know live data by themselves. WebClaw adds live data by exposing browser and search tools to the agent.
-
-For current or recent facts, WebClaw can use `search_web` to open a search page, inspect the results, navigate to a likely source, read the page with `get_page_context`, and summarize the result. This is the general path for questions such as match results, news, public schedules, prices, and recently changed facts.
-
-For example:
-
-```text
-昨晚湖人比赛结果是什么
-```
-
-Weather questions also have a faster direct `get_weather` tool. For example:
-
-```text
-今天北京的天气怎么样
-```
-
-The direct weather tool geocodes the location with Open-Meteo, fetches current conditions and today's forecast, and returns the result to the model for a human-readable answer. For other domains, prefer the generic search-and-read workflow first; add a narrow API-backed tool only when a workflow needs higher reliability or structured data.
-
-## Security notes
-
-- JavaScript execution is disabled by default. Enable it only when you trust the task and page.
-- `run_js` uses Chrome's `userScripts` API so model-provided JavaScript can run without page CSP or extension `unsafe-eval` blocking it. In Chrome 138+, enable `Allow User Scripts` for WebClaw on the extension details page if Chrome reports that `userScripts` is unavailable.
-- Use `http_request` for cross-origin webhooks or APIs that pages cannot call because of CORS. It runs in the extension background service worker and uses the extension host permissions.
-- Configure `企业微信机器人 webhook` in settings to let the agent call `send_wecom_message` without exposing the webhook URL in prompts. Text messages use the Work WeCom robot payload shape documented at `https://developer.work.weixin.qq.com/document/path/99110`: `{"msgtype":"text","text":{"content":"..."}}`.
-- API keys and OAuth tokens are stored in `chrome.storage.local`.
-- The current Chrome API tool surface is intentionally small. Add operations deliberately instead of exposing all extension APIs to the model.
+MIT
