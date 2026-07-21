@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WebClaw</title>
+    <link rel="stylesheet" href="sidepanel.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>WebClaw</h1>
+        <p id="status">Ready</p>
+      </div>
+      <button id="settingsToggle" class="icon-button" title="Settings" aria-label="Settings">&#9881;</button>
+    </header>
+
+    <section id="settingsPanel" class="settings hidden" aria-label="Settings">
+      <div class="settings-group">
+        <div class="section-title">
+          <h2>Providers</h2>
+        </div>
+
+        <label>
+          Active provider
+          <select id="activeProviderId"></select>
+        </label>
+
+        <div class="row">
+          <button id="addProvider" type="button" class="secondary">Add provider</button>
+          <button id="editProvider" type="button">Edit provider</button>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <div class="grid-two">
+          <label>
+            Max steps
+            <input id="maxSteps" type="number" min="1" max="24">
+          </label>
+          <label>
+            Temperature
+            <input id="temperature" type="number" min="0" max="2" step="0.1">
+          </label>
+        </div>
+
+        <label class="check-row">
+          <input id="allowUnsafePageJs" type="checkbox">
+          <span>Allow agent JavaScript execution</span>
+        </label>
+      </div>
+
+      <div class="settings-group">
+        <div class="section-title">
+          <h2>Tools</h2>
+          <span id="toolCount">0 enabled</span>
+        </div>
+
+        <div id="toolList" class="tool-list"></div>
+
+        <div class="row">
+          <button id="addTool" type="button" class="secondary">Add tool</button>
+          <button id="saveTools" type="button">Save tools</button>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <div class="section-title">
+          <h2>Skills</h2>
+          <span id="skillCount">0 enabled</span>
+        </div>
+
+        <div id="skillList" class="tool-list"></div>
+
+        <div class="row">
+          <button id="addSkill" type="button" class="secondary">Add skill</button>
+          <button id="saveSkills" type="button">Save skills</button>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <div class="section-title">
+          <h2>Channels</h2>
+          <span id="channelCount">0 connected</span>
+        </div>
+
+        <div id="channelList" class="tool-list"></div>
+
+        <div class="row">
+          <button id="addChannel" type="button" class="secondary">Add channel</button>
+          <button id="saveChannels" type="button">Save channels</button>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <div class="section-title">
+          <h2>Schedules</h2>
+          <span id="scheduleCount">0 enabled</span>
+        </div>
+
+        <div id="scheduleList" class="tool-list"></div>
+
+        <div class="row">
+          <button id="addSchedule" type="button" class="secondary">Add schedule</button>
+          <button id="saveSchedules" type="button">Save schedules</button>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <div class="section-title">
+          <h2>Notifications</h2>
+        </div>
+
+        <label>
+          企业微信机器人 webhook
+          <input id="weComWebhookUrl" type="text" spellcheck="false" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...">
+        </label>
+
+        <button id="saveSettings" type="button">Save settings</button>
+      </div>
+    </section>
+
+    <section class="sessionbar" aria-label="Sessions">
+      <div class="session-picker">
+        <span>Session</span>
+        <select id="sessionSelect" title="Session"></select>
+      </div>
+      <div class="session-actions">
+        <button id="newSession" type="button" class="session-button" title="New session" aria-label="New session">+</button>
+        <button id="clearSession" type="button" class="session-button" title="Clear session" aria-label="Clear session">&#8635;</button>
+        <button id="deleteSession" type="button" class="session-button danger" title="Delete session" aria-label="Delete session">&times;</button>
+      </div>
+    </section>
+
+    <div id="providerModal" class="provider-modal hidden" aria-hidden="true">
+      <div class="provider-modal-backdrop"></div>
+      <section class="provider-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="providerModalTitle">
+        <header class="provider-modal-header">
+          <div>
+            <h2 id="providerModalTitle">Provider</h2>
+            <p id="providerEditState">Saved</p>
+          </div>
+          <div class="row provider-modal-actions">
+            <button id="closeProviderModal" type="button" class="secondary">Close</button>
+            <button id="saveProvider" type="button">Save provider</button>
+            <button id="modalDeleteProvider" type="button" class="danger">Delete</button>
+          </div>
+        </header>
+
+        <div class="provider-modal-body">
+          <div class="settings-group">
+            <label>
+              Provider type
+              <select id="providerType">
+                <option value="codex-oauth">Codex / ChatGPT OAuth</option>
+                <option value="github-copilot-oauth">GitHub Copilot OAuth</option>
+                <option value="chrome-ai">Chrome AI</option>
+                <option value="ollama">Local Ollama</option>
+                <option value="openai-compatible">OpenAI-compatible API</option>
+              </select>
+            </label>
+
+            <label>
+              Provider name
+              <input id="providerName" spellcheck="false">
+            </label>
+          </div>
+
+          <div data-provider-section="ollama" class="provider-section">
+            <label>
+              Ollama base URL
+              <input id="ollamaBaseUrl" spellcheck="false">
+            </label>
+            <label>
+              Ollama model
+              <div class="model-row">
+                <input id="ollamaModel" list="ollamaModelOptions" spellcheck="false">
+                <select id="ollamaModelSelect" aria-label="Ollama model options"></select>
+                <button id="refreshOllamaModels" type="button" class="secondary">Refresh</button>
+              </div>
+              <datalist id="ollamaModelOptions"></datalist>
+            </label>
+            <label class="check-row">
+              <input id="ollamaThinking" type="checkbox">
+              <span>Thinking mode</span>
+            </label>
+          </div>
+
+          <div data-provider-section="openai-compatible" class="provider-section">
+            <label>
+              Base URL
+              <input id="openaiBaseUrl" spellcheck="false">
+            </label>
+            <label>
+              API key
+              <input id="openaiApiKey" type="password" spellcheck="false">
+            </label>
+            <label>
+              Model
+              <div class="model-row">
+                <input id="openaiModel" list="openaiModelOptions" spellcheck="false">
+                <select id="openaiModelSelect" aria-label="OpenAI-compatible model options"></select>
+                <button id="refreshOpenAIModels" type="button" class="secondary">Refresh</button>
+              </div>
+              <datalist id="openaiModelOptions"></datalist>
+            </label>
+            <label class="check-row">
+              <input id="openaiThinking" type="checkbox">
+              <span>Thinking mode</span>
+            </label>
+          </div>
+
+          <div data-provider-section="chrome-ai" class="provider-section">
+            <p class="token-state">Uses Chrome's built-in Prompt API with the on-device Gemini Nano model.</p>
+            <label>
+              Model
+              <div class="model-row">
+                <input id="chromeAIModel" list="chromeAIModelOptions" spellcheck="false">
+                <select id="chromeAIModelSelect" aria-label="Chrome AI model options"></select>
+                <button id="refreshChromeAIModels" type="button" class="secondary">Refresh</button>
+              </div>
+              <datalist id="chromeAIModelOptions"></datalist>
+            </label>
+            <label class="check-row">
+              <input id="chromeAIThinking" type="checkbox">
+              <span>Thinking mode is not supported by Chrome Prompt API</span>
+            </label>
+            <label class="check-row">
+              <input id="chromeAIIncludeImages" type="checkbox">
+              <span>Pass image inputs when available</span>
+            </label>
+          </div>
+
+          <div data-provider-section="codex-oauth" class="provider-section">
+            <p id="codexTokenState" class="token-state" aria-live="polite"></p>
+            <div id="codexDeviceCodePanel" class="device-code-panel hidden">
+              <span>Device code</span>
+              <code id="codexDeviceCode">-</code>
+              <button id="copyCodexDeviceCode" type="button" class="secondary">Copy</button>
+            </div>
+            <label>
+              OAuth issuer URL
+              <input id="codexIssuerUrl" spellcheck="false">
+            </label>
+            <label>
+              OAuth authorize URL
+              <input id="codexAuthUrl" spellcheck="false">
+            </label>
+            <label>
+              OAuth token URL
+              <input id="codexTokenUrl" spellcheck="false">
+            </label>
+            <label>
+              OAuth client ID
+              <input id="codexClientId" spellcheck="false">
+            </label>
+            <label>
+              OAuth scope
+              <input id="codexScope" spellcheck="false">
+            </label>
+            <label>
+              Codex-compatible base URL
+              <input id="codexBaseUrl" spellcheck="false">
+            </label>
+            <label>
+              Model
+              <div class="model-row">
+                <input id="codexModel" list="codexModelOptions" spellcheck="false">
+                <select id="codexModelSelect" aria-label="Codex model options"></select>
+                <button id="refreshCodexModels" type="button" class="secondary">Refresh</button>
+              </div>
+              <datalist id="codexModelOptions"></datalist>
+            </label>
+            <label class="check-row">
+              <input id="codexThinking" type="checkbox">
+              <span>Thinking mode</span>
+            </label>
+            <div class="row">
+              <button id="discoverCodex" type="button">Discover metadata</button>
+              <button id="authorizeCodex" type="button">Sign in with ChatGPT</button>
+              <button id="checkCodex" type="button" class="secondary">Check sign-in</button>
+              <button id="clearCodex" type="button" class="secondary">Clear sign-in</button>
+            </div>
+          </div>
+
+          <div data-provider-section="github-copilot-oauth" class="provider-section">
+            <p id="githubCopilotTokenState" class="token-state" aria-live="polite"></p>
+            <div id="githubCopilotDeviceCodePanel" class="device-code-panel hidden">
+              <span>Device code</span>
+              <code id="githubCopilotDeviceCode">-</code>
+              <button id="copyGitHubCopilotDeviceCode" type="button" class="secondary">Copy</button>
+            </div>
+            <label>
+              GitHub device code URL
+              <input id="githubCopilotDeviceCodeUrl" spellcheck="false">
+            </label>
+            <label>
+              GitHub access token URL
+              <input id="githubCopilotAccessTokenUrl" spellcheck="false">
+            </label>
+            <label>
+              GitHub OAuth client ID
+              <input id="githubCopilotClientId" spellcheck="false">
+            </label>
+            <label>
+              GitHub OAuth scope
+              <input id="githubCopilotScope" spellcheck="false">
+            </label>
+            <label>
+              Copilot token URL
+              <input id="githubCopilotTokenUrl" spellcheck="false">
+            </label>
+            <label>
+              Copilot-compatible base URL
+              <input id="githubCopilotBaseUrl" spellcheck="false">
+            </label>
+            <label>
+              Model
+              <div class="model-row">
+                <input id="githubCopilotModel" list="githubCopilotModelOptions" spellcheck="false">
+                <select id="githubCopilotModelSelect" aria-label="GitHub Copilot model options"></select>
+                <button id="refreshGitHubCopilotModels" type="button" class="secondary">Refresh</button>
+              </div>
+              <datalist id="githubCopilotModelOptions"></datalist>
+            </label>
+            <label class="check-row">
+              <input id="githubCopilotThinking" type="checkbox">
+              <span>Thinking mode</span>
+            </label>
+            <label>
+              Integration ID
+              <input id="githubCopilotIntegrationId" spellcheck="false">
+            </label>
+            <div class="row">
+              <button id="authorizeGitHubCopilot" type="button">Sign in with GitHub</button>
+              <button id="checkGitHubCopilot" type="button" class="secondary">Check sign-in</button>
+              <button id="clearGitHubCopilot" type="button" class="secondary">Clear sign-in</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div id="toolModal" class="provider-modal hidden" aria-hidden="true">
+      <div class="provider-modal-backdrop"></div>
+      <section class="provider-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="toolModalTitle">
+        <header class="provider-modal-header">
+          <div>
+            <h2 id="toolModalTitle">Tool</h2>
+            <p id="toolEditState">Saved</p>
+          </div>
+          <div class="row provider-modal-actions">
+            <button id="closeToolModal" type="button" class="secondary">Close</button>
+            <button id="saveTool" type="button">Save tool</button>
+            <button id="deleteTool" type="button" class="danger">Delete</button>
+          </div>
+        </header>
+
+        <div class="provider-modal-body">
+          <div class="settings-group">
+            <label>
+              Tool name
+              <input id="toolName" spellcheck="false" placeholder="send_custom_message">
+            </label>
+            <label>
+              Display name
+              <input id="toolTitle" spellcheck="false">
+            </label>
+            <label>
+              Description for model
+              <textarea id="toolDescription" rows="3" spellcheck="false"></textarea>
+            </label>
+            <label>
+              Tool type
+              <select id="toolType">
+                <option value="builtin">Built-in</option>
+                <option value="http">HTTP request</option>
+                <option value="workflow">Natural language workflow</option>
+              </select>
+            </label>
+            <label class="check-row">
+              <input id="toolEnabled" type="checkbox">
+              <span>Enabled</span>
+            </label>
+          </div>
+
+          <div data-tool-section="http" class="tool-section">
+            <label>
+              Method
+              <select id="toolHttpMethod">
+                <option value="GET">GET</option>
+                <option value="POST">POST</option>
+                <option value="PUT">PUT</option>
+                <option value="PATCH">PATCH</option>
+                <option value="DELETE">DELETE</option>
+              </select>
+            </label>
+            <label>
+              URL template
+              <input id="toolHttpUrl" spellcheck="false" placeholder="https://example.com/api/{{id}}">
+            </label>
+            <label>
+              Headers JSON template
+              <textarea id="toolHttpHeaders" rows="4" spellcheck="false" placeholder="{&quot;Authorization&quot;:&quot;Bearer {{token}}&quot;}"></textarea>
+            </label>
+            <label>
+              Body template
+              <textarea id="toolHttpBody" rows="6" spellcheck="false" placeholder="{&quot;text&quot;:&quot;{{content}}&quot;}"></textarea>
+            </label>
+            <label>
+              Response body limit
+              <input id="toolResponseLimit" type="number" min="1000" max="60000" step="1000">
+            </label>
+          </div>
+
+          <div data-tool-section="workflow" class="tool-section">
+            <label>
+              Input schema JSON
+              <textarea id="toolWorkflowInputSchema" rows="8" spellcheck="false" placeholder="{&quot;type&quot;:&quot;object&quot;,&quot;properties&quot;:{&quot;keyword&quot;:{&quot;type&quot;:&quot;string&quot;,&quot;description&quot;:&quot;Search keyword&quot;}},&quot;required&quot;:[&quot;keyword&quot;]}"></textarea>
+            </label>
+            <label>
+              Workflow instruction
+              <textarea id="toolWorkflowInstruction" rows="10" spellcheck="false" placeholder="Describe exactly what this tool should do. The model call args are available as JSON context."></textarea>
+            </label>
+            <label>
+              Max workflow steps
+              <input id="toolWorkflowMaxSteps" type="number" min="1" max="12">
+            </label>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div id="skillModal" class="provider-modal hidden" aria-hidden="true">
+      <div class="provider-modal-backdrop"></div>
+      <section class="provider-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="skillModalTitle">
+        <header class="provider-modal-header">
+          <div>
+            <h2 id="skillModalTitle">Skill</h2>
+            <p id="skillEditState">Saved</p>
+          </div>
+          <div class="row provider-modal-actions">
+            <button id="closeSkillModal" type="button" class="secondary">Close</button>
+            <button id="saveSkill" type="button">Save skill</button>
+            <button id="deleteSkill" type="button" class="danger">Delete</button>
+          </div>
+        </header>
+
+        <div class="provider-modal-body">
+          <div class="settings-group">
+            <label>
+              Skill name
+              <input id="skillName" spellcheck="false" placeholder="web_monitoring">
+            </label>
+            <label>
+              Display name
+              <input id="skillTitle" spellcheck="false">
+            </label>
+            <label>
+              Description
+              <textarea id="skillDescription" rows="3" spellcheck="false"></textarea>
+            </label>
+            <label>
+              Skill instructions
+              <textarea id="skillContent" rows="12" spellcheck="false" placeholder="Describe when and how the agent should use this skill. Mention relevant tools, constraints, and expected output style."></textarea>
+            </label>
+            <label class="check-row">
+              <input id="skillEnabled" type="checkbox">
+              <span>Enabled</span>
+            </label>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div id="channelModal" class="provider-modal hidden" aria-hidden="true">
+      <div class="provider-modal-backdrop"></div>
+      <section class="provider-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="channelModalTitle">
+        <header class="provider-modal-header">
+          <div>
+            <h2 id="channelModalTitle">Channel</h2>
+            <p id="channelEditState">Saved</p>
+          </div>
+          <div class="row provider-modal-actions">
+            <button id="closeChannelModal" type="button" class="secondary">Close</button>
+            <button id="saveChannel" type="button">Save channel</button>
+            <button id="deleteChannel" type="button" class="danger">Delete</button>
+          </div>
+        </header>
+
+        <div class="provider-modal-body">
+          <div class="settings-group">
+            <label>
+              Channel name
+              <input id="channelName" spellcheck="false" placeholder="telegram_main">
+            </label>
+            <label>
+              Display name
+              <input id="channelTitle" spellcheck="false">
+            </label>
+            <label>
+              Channel type
+              <select id="channelType">
+                <option value="wechat">WeChat</option>
+                <option value="telegram">Telegram</option>
+              </select>
+            </label>
+            <label class="check-row">
+              <input id="channelEnabled" type="checkbox">
+              <span>Enabled</span>
+            </label>
+          </div>
+
+          <div data-channel-section="wechat" class="channel-section">
+            <p class="token-state">Uses WebClaw's internal browser bridge. No local WebSocket URL is required.</p>
+            <p id="wechatBridgeState" class="token-state" aria-live="polite"></p>
+
+            <div id="wechatQrPanel" class="wechat-qr hidden">
+              <canvas id="wechatQrCanvas" width="240" height="240" aria-label="WeChat QR code"></canvas>
+              <p id="wechatQrText"></p>
+              <p class="channel-help">
+                手机微信端操作说明：更新版本：把微信升级到官方最新版本（iOS 需 8.0.70 或以上，安卓同步更新），若找不到入口可完全退出微信后台再重新打开。
+                寻找插件：打开微信，点击 “我” -&gt; “设置” -&gt; “插件”。
+                启用插件：在列表中找到 “ClawBot” 并点击进入，如未显示可尝试重启微信，随后在页面中准备扫码。
+              </p>
+            </div>
+          </div>
+
+          <div data-channel-section="telegram" class="channel-section">
+            <label>
+              Bot token
+              <input id="telegramBotToken" type="text" spellcheck="false">
+            </label>
+            <p class="channel-help">
+              Telegram bot token 获取指引：在 Telegram 搜索并打开 BotFather，发送 /newbot，按提示设置 bot 名称和 username，创建完成后复制 BotFather 返回的 token 填到这里。随后给你的 bot 发送一条消息，WebClaw 才能收到该会话的后续消息。
+            </p>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div id="scheduleModal" class="provider-modal hidden" aria-hidden="true">
+      <div class="provider-modal-backdrop"></div>
+      <section class="provider-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="scheduleModalTitle">
+        <header class="provider-modal-header">
+          <div>
+            <h2 id="scheduleModalTitle">Schedule</h2>
+            <p id="scheduleEditState">Saved</p>
+          </div>
+          <div class="row provider-modal-actions">
+            <button id="closeScheduleModal" type="button" class="secondary">Close</button>
+            <button id="saveSchedule" type="button">Save schedule</button>
+            <button id="deleteSchedule" type="button" class="danger">Delete</button>
+          </div>
+        </header>
+
+        <div class="provider-modal-body">
+          <div class="settings-group">
+            <label>
+              Schedule name
+              <input id="scheduleName" spellcheck="false" placeholder="binance_announcements">
+            </label>
+            <label>
+              Display name
+              <input id="scheduleTitle" spellcheck="false">
+            </label>
+            <label>
+              Schedule
+              <input id="scheduleExpression" spellcheck="false" placeholder="0 9 * * * or every 30 minutes">
+            </label>
+            <label>
+              Natural language task
+              <textarea id="scheduleInstruction" rows="10" spellcheck="false" placeholder="Describe what WebClaw should do when this schedule runs."></textarea>
+            </label>
+            <label class="check-row">
+              <input id="scheduleEnabled" type="checkbox">
+              <span>Enabled</span>
+            </label>
+            <p id="scheduleNextRun" class="token-state"></p>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <main id="messages" class="messages" aria-live="polite"></main>
+
+    <form id="composer" class="composer">
+      <textarea id="prompt" rows="3" placeholder="Ask WebClaw to inspect or operate on this tab"></textarea>
+      <button id="send" type="submit">Send</button>
+      <button id="stop" type="button" class="secondary" disabled>Stop</button>
+    </form>
+
+    <script src="sidepanel.js" type="module"></script>
+  </body>
+</html>
