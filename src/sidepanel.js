@@ -1015,7 +1015,16 @@ function renderWechatBridgeStatus(status) {
   }
   if (channelDraft?.type === "wechat") {
     const draftStatus = getChannelRuntimeStatus(channelDraft.id);
-    if (draftStatus) status = draftStatus;
+    status = draftStatus || {
+      enabled: channelDraft.enabled !== false,
+      connected: false,
+      channelId: channelDraft.id,
+      channelType: "wechat",
+      loginState: channelDraft.enabled !== false ? "starting" : "idle",
+      lastError: "",
+      receivedCount: 0,
+      pendingCount: 0
+    };
   }
   const state = status.connected
     ? "connected"

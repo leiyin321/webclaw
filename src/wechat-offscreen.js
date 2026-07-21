@@ -1,10 +1,9 @@
 import { DEFAULT_BASE_URL, fetchQRCode, getUpdates, notifyStart, notifyStop, pollQRStatus, sendMessage } from "./wechat-api.js";
 import {
-  loadLatestWechatAccount,
-  getLocalTokenList,
+  loadWechatChannelAccount,
   loadWechatSyncBuf,
   normalizeAccountId,
-  saveWechatAccount,
+  saveWechatChannelAccount,
   saveWechatSyncBuf
 } from "./wechat-storage.js";
 import { downloadMessageMedia } from "./wechat-media.js";
@@ -155,7 +154,7 @@ async function runBridge(bridge, forceLogin) {
 
   try {
     while (!controller.signal.aborted) {
-      const storedAccount = await loadLatestWechatAccount();
+      const storedAccount = await loadWechatChannelAccount(bridge.state.channelId);
       if (storedAccount && storedAccount.token && !forceLogin) {
         await resumeAccount(bridge, storedAccount, controller.signal);
         return;
@@ -170,7 +169,6 @@ async function runBridge(bridge, forceLogin) {
 }
 
 async function loginAndRun(bridge, signal) {
-  const localTokenList = await getLocalTokenList().catch(() => []);
   let currentBaseUrl = DEFAULT_BASE_URL;
   let pendingVerifyCode = "";
   bridge.state = {
@@ -187,7 +185,7 @@ async function loginAndRun(bridge, signal) {
   const qr = await fetchQRCode({
     baseUrl: DEFAULT_BASE_URL,
     botType: DEFAULT_BOT_TYPE,
-    localTokenList
+    localTokenList: []
   });
   bridge.state = {
     ...bridge.state,
@@ -248,7 +246,7 @@ async function loginAndRun(bridge, signal) {
           userId: status.ilink_user_id || "",
           getUpdatesBuf: ""
         };
-        await saveWechatAccount(accountId, {
+        await saveWechatChannelAccount(bridge.state.channelId, accountId, {
           token: status.bot_token,
           baseUrl: bridge.activeSession.baseUrl,
           userId: bridge.activeSession.userId

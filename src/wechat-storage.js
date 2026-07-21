@@ -52,6 +52,7 @@ function normalizeState(state) {
   const raw = state && typeof state === "object" ? state : {};
   return {
     activeAccountId: String(raw.activeAccountId || ""),
+    channelAccounts: raw.channelAccounts && typeof raw.channelAccounts === "object" ? raw.channelAccounts : {},
     accounts: raw.accounts && typeof raw.accounts === "object" ? raw.accounts : {},
     syncBufs: raw.syncBufs && typeof raw.syncBufs === "object" ? raw.syncBufs : {},
     peers: raw.peers && typeof raw.peers === "object" ? raw.peers : {},
@@ -131,6 +132,31 @@ export async function loadLatestWechatAccount() {
   return state.accounts[id] || null;
 }
 
+export async function loadWechatChannelAccount(channelId) {
+  const state = await loadState();
+  const normalizedChannelId = normalizeChannelId(channelId);
+  const accountId = state.channelAccounts?.[normalizedChannelId];
+  if (!accountId && normalizedChannelId === "wechat") {
+    const fallbackId = state.activeAccountId || Object.keys(state.accounts || {}).at(-1);
+    if (!fallbackId) return null;
+    return state.accounts[fallbackId] || null;
+  }
+  if (!accountId) return null;
+  return state.accounts?.[normalizeAccountId(accountId)] || null;
+}
+
+export async function saveWechatChannelAccount(channelId, accountId, data) {
+  const saved = await saveWechatAccount(accountId, data);
+  const state = await loadState();
+  await saveState({
+    channelAccounts: {
+      ...(state.channelAccounts || {}),
+      [normalizeChannelId(channelId)]: saved.accountId
+    }
+  });
+  return saved;
+}
+
 export async function getLocalTokenList() {
   const state = await loadState();
   return Object.values(state.accounts || {})
@@ -138,6 +164,12 @@ export async function getLocalTokenList() {
     .reverse()
     .map((account) => account?.token)
     .filter(Boolean);
+}
+
+function normalizeChannelId(channelId) {
+  return String(channelId || "wechat")
+    .replace(/@/g, "-")
+    .replace(/[^a-zA-Z0-9_.-]/g, "-");
 }
 
 export async function loadWechatSyncBuf(accountId) {

@@ -1,10 +1,5 @@
-import { DEFAULT_BASE_URL as DEFAULT_WECHAT_BASE_URL, fetchQRCode, getUpdates, notifyStart, notifyStop, pollQRStatus, sendMessage as sendWechatApiMessage } from "./wechat-api.js";
 import {
-  getWechatMediaDataUrl,
-  loadLatestWechatAccount,
-  saveWechatAccount,
-  saveWechatState,
-  saveWechatSyncBuf
+  getWechatMediaDataUrl
 } from "./wechat-storage.js";
 
 const PROVIDER_DEFAULTS = {
