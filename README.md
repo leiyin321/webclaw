@@ -2,6 +2,13 @@
 
 WebClaw is a Chrome Manifest V3 extension that runs an AI agent inside the browser extension environment. It can inspect the active page, operate DOM elements, call selected Chrome extension APIs, and optionally execute JavaScript in the page through a guarded tool.
 
+## Project Status
+
+WebClaw is an experimental browser-native agent framework. It is intended for
+local development, testing, and controlled personal workflows. Review the
+security and privacy notes before using it with sensitive websites, credentials,
+or message channels.
+
 ## Features
 
 - Side panel chat UI.
@@ -13,6 +20,14 @@ WebClaw is a Chrome Manifest V3 extension that runs an AI agent inside the brows
 - Multiple custom providers. Each provider is one of `Codex / ChatGPT OAuth`, `GitHub Copilot OAuth`, `Chrome AI`, `Local Ollama`, or `OpenAI-compatible API`.
 - Browser tools: page snapshot, click, type, navigate, wait, page translation, current weather lookup, background HTTP requests, limited tab APIs, and JavaScript execution.
 
+## Repository Guide
+
+- [Privacy](PRIVACY.md)
+- [Security policy](SECURITY.md)
+- [Contributing](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md)
+- [License](LICENSE)
+
 ## Load in Chrome
 
 1. Open `chrome://extensions`.
@@ -20,6 +35,23 @@ WebClaw is a Chrome Manifest V3 extension that runs an AI agent inside the brows
 3. Click Load unpacked.
 4. Select this repository directory.
 5. Click the WebClaw extension icon to open the side panel.
+
+## Development Checks
+
+Run the same syntax checks used by CI:
+
+```bash
+node --check src/background.js
+node --check src/content.js
+node --check src/sidepanel.js
+node --check src/chrome-ai-offscreen.js
+node --check src/wechat-offscreen.js
+node --check src/wechat-api.js
+node --check src/wechat-media.js
+node --check src/wechat-message.js
+node --check src/wechat-storage.js
+node -e "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')); console.log('manifest ok')"
+```
 
 ## Provider setup
 
