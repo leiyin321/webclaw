@@ -3,6 +3,14 @@
 *.zip
 *.crx
 *.pem
+.env
+.env.*
+.vscode/
+.idea/
+.cache/
+.parcel-cache/
+.turbo/
+coverage/
 node_modules/
 dist/
 build/
