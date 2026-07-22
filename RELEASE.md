@@ -20,7 +20,7 @@ node -e "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')); consol
 ## Package Unpacked Extension
 
 ```bash
-zip -r webclaw-0.1.0.zip manifest.json src assets README.md LICENSE PRIVACY.md SECURITY.md \
+zip -r webclaw-0.2.0.zip manifest.json src assets README.md LICENSE PRIVACY.md SECURITY.md \
   -x "*.DS_Store" \
   -x "*/.DS_Store"
 ```

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "WebClaw",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A browser-native AI agent that can inspect pages, call extension APIs, and execute controlled JavaScript.",
   "permissions": [
     "activeTab",
@@ -12,7 +12,8 @@
     "scripting",
     "storage",
     "tabs",
-    "userScripts"
+    "userScripts",
+    "windows"
   ],
   "host_permissions": [
     "http://*/*",

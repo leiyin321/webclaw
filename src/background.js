@@ -1,6 +1,22 @@
 import {
   getWechatMediaDataUrl
 } from "./wechat-storage.js";
+import {
+  runVirtualFileSystemShell,
+  vfsApplyPatch,
+  vfsDelete,
+  vfsEditFile,
+  vfsEmptyTrash,
+  vfsGetUsage,
+  vfsList,
+  vfsMkdir,
+  vfsMove,
+  vfsPurge,
+  vfsReadFile,
+  vfsRestore,
+  vfsSearch,
+  vfsWriteFile
+} from "./virtual-file-system.js";
 
 const PROVIDER_DEFAULTS = {
   ollama: {
@@ -154,6 +170,76 @@ const BUILTIN_TOOLS = [
     example: { tool: { name: "wait", args: { ms: 1000 } } }
   },
   {
+    name: "fs_shell",
+    description: "Run one safe virtual filesystem command. Supported commands: pwd, ls, stat, mkdir, touch, cat, cp, mv, rm. This never runs a real OS shell and only operates on WebClaw's virtual filesystem. Default directory: /workspace.",
+    example: { tool: { name: "fs_shell", args: { command: "mkdir -p notes/daily" } } }
+  },
+  {
+    name: "fs_list",
+    description: "List a virtual filesystem directory or inspect one file.",
+    example: { tool: { name: "fs_list", args: { path: "/workspace" } } }
+  },
+  {
+    name: "fs_read",
+    description: "Read a virtual filesystem file. For text files, optional startLine and endLine limit the returned range.",
+    example: { tool: { name: "fs_read", args: { path: "/workspace/notes/today.md", startLine: 1, endLine: 80 } } }
+  },
+  {
+    name: "fs_write",
+    description: "Create or replace a text file in the virtual filesystem. Use expectedVersion after reading an existing file to prevent overwrites.",
+    example: { tool: { name: "fs_write", args: { path: "/workspace/notes/today.md", content: "# Today", createParents: true } } }
+  },
+  {
+    name: "fs_edit",
+    description: "Safely replace exact text in a virtual text file. Use oldText as context and expectedVersion from fs_read.",
+    example: { tool: { name: "fs_edit", args: { path: "/workspace/notes/today.md", oldText: "# Today", newText: "# Today\n\n- Review tasks", expectedVersion: 1 } } }
+  },
+  {
+    name: "fs_search",
+    description: "Search text files in a virtual filesystem directory and return matching lines.",
+    example: { tool: { name: "fs_search", args: { query: "TODO", path: "/workspace" } } }
+  },
+  {
+    name: "fs_apply_patch",
+    description: "Apply a validated batch of virtual filesystem mkdir, write, edit, move, or delete operations.",
+    example: { tool: { name: "fs_apply_patch", args: { operations: [{ op: "write", path: "/workspace/README.md", content: "# Project", createParents: true }] } } }
+  },
+  {
+    name: "fs_mkdir",
+    description: "Create a virtual filesystem directory.",
+    example: { tool: { name: "fs_mkdir", args: { path: "/workspace/notes", parents: true } } }
+  },
+  {
+    name: "fs_move",
+    description: "Move or rename a virtual filesystem file or directory.",
+    example: { tool: { name: "fs_move", args: { from: "/workspace/draft.md", to: "/workspace/final.md" } } }
+  },
+  {
+    name: "fs_delete",
+    description: "Move a virtual filesystem file or directory to /.trash.",
+    example: { tool: { name: "fs_delete", args: { path: "/workspace/old.md", recursive: true } } }
+  },
+  {
+    name: "fs_restore",
+    description: "Restore an item from /.trash. By default a conflicting destination fails; use onConflict=rename, or onConflict=overwrite with confirmOverwrite=true.",
+    example: { tool: { name: "fs_restore", args: { trashPath: "/.trash/example-old.md", destination: "/workspace/old.md", onConflict: "rename" } } }
+  },
+  {
+    name: "fs_purge",
+    description: "Permanently delete an item from /.trash. This cannot be undone.",
+    example: { tool: { name: "fs_purge", args: { path: "/.trash/example-old.md", recursive: true, confirm: true } } }
+  },
+  {
+    name: "fs_empty_trash",
+    description: "Permanently delete every item in /.trash. This cannot be undone.",
+    example: { tool: { name: "fs_empty_trash", args: { confirm: true } } }
+  },
+  {
+    name: "fs_usage",
+    description: "Get virtual filesystem file count and browser storage usage.",
+    example: { tool: { name: "fs_usage", args: {} } }
+  },
+  {
     name: "list_webclaw_config",
     description: "Read a redacted summary of WebClaw tools, skills, schedules, providers, channels, and pending self-management patches.",
     example: { tool: { name: "list_webclaw_config", args: {} } }
@@ -288,6 +374,8 @@ You can use tools by replying with exactly one JSON object and no extra prose:
 {"tool":{"name":"send_wecom_message","args":{"content":"hello from WebClaw","msgtype":"text"}}}
 {"tool":{"name":"chrome_api","args":{"operation":"get_current_tab"}}}
 {"tool":{"name":"wait","args":{"ms":1000}}}
+{"tool":{"name":"fs_shell","args":{"command":"ls /workspace"}}}
+{"tool":{"name":"fs_read","args":{"path":"/workspace/notes/today.md"}}}
 
 When the task is complete, reply with:
 {"final":"short answer for the user"}
@@ -540,6 +628,8 @@ function handleChromeAIRuntimeMessage(message) {
 
 async function handleMessage(message) {
   switch (message?.type) {
+    case "WEBCLAW_OPEN_AUXILIARY_WINDOW":
+      return { ok: true, result: await openAuxiliaryWindow(message.view) };
     case "WEBCLAW_GET_SETTINGS":
       return { ok: true, settings: await ensureSettings() };
     case "WEBCLAW_SAVE_SETTINGS":
@@ -606,6 +696,25 @@ async function handleMessage(message) {
     default:
       throw new Error(`Unknown message type: ${message?.type}`);
   }
+}
+
+async function openAuxiliaryWindow(view) {
+  const normalizedView = view === "workspace" ? "workspace" : "settings";
+  const url = chrome.runtime.getURL(`src/sidepanel.html?view=${normalizedView}`);
+  const windows = await chrome.windows.getAll({ populate: true });
+  const existing = windows.find((item) => item.tabs?.some((tab) => tab.url === url));
+  if (existing?.id !== undefined) {
+    await chrome.windows.update(existing.id, { focused: true });
+    return { windowId: existing.id, reused: true };
+  }
+  const created = await chrome.windows.create({
+    url,
+    type: "popup",
+    width: 540,
+    height: 800,
+    focused: true
+  });
+  return { windowId: created.id, reused: false };
 }
 
 async function ensureSettings() {
@@ -1697,11 +1806,12 @@ function enqueueWechatAgentMessage(payload) {
 
 async function processWechatAgentQueue() {
   if (wechatAgentBusy) return;
-  const payload = wechatAgentQueue.shift();
+  let payload = wechatAgentQueue.shift();
   if (!payload) return;
   wechatAgentBusy = true;
   let sessionId = "";
   try {
+    payload = await persistChannelMediaToVirtualFileSystem(payload);
     const peerId = payload.peerId || "unknown";
     const channelId = payload.channelId || "wechat";
     const content = buildWechatPromptContent(payload);
@@ -1792,11 +1902,59 @@ function buildWechatPromptContent(payload) {
         `- mime: ${item.mime || ""}`,
         `- size: ${size}`,
         `- mediaId: ${item.mediaId || ""}`,
+        `- workspacePath: ${item.workspacePath || ""}`,
         `- url: ${item.url || ""}`
       ].join("\n");
     })
     .join("\n\n");
   return [text, mediaText].filter(Boolean).join("\n\n");
+}
+
+async function persistChannelMediaToVirtualFileSystem(payload) {
+  const media = Array.isArray(payload?.media) ? payload.media : [];
+  if (!media.length) return payload;
+  const channel = safeVirtualPathSegment(payload.channelId || payload.channelType || "channel");
+  const message = safeVirtualPathSegment(payload.messageId || payload.queueId || String(Date.now()));
+  const updatedMedia = [];
+  for (let index = 0; index < media.length; index += 1) {
+    const item = media[index];
+    if (item?.error) {
+      updatedMedia.push(item);
+      continue;
+    }
+    try {
+      const data = await fetchWechatMediaDataUrl(item);
+      const blob = dataUrlToBlob(data.dataUrl, data.mime || item.mime);
+      const fileName = safeVirtualPathSegment(data.fileName || item.fileName || `attachment-${index + 1}`);
+      const path = `/inbox/${channel}/${message}-${index + 1}-${fileName}`;
+      await vfsWriteFile(path, blob, {
+        mimeType: data.mime || item.mime || blob.type,
+        createParents: true
+      });
+      updatedMedia.push({ ...item, workspacePath: path });
+    } catch (error) {
+      updatedMedia.push({ ...item, workspaceError: normalizeError(error) });
+    }
+  }
+  return { ...payload, media: updatedMedia };
+}
+
+function safeVirtualPathSegment(value) {
+  return String(value || "file")
+    .replace(/[\\/\0]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120) || "file";
+}
+
+function dataUrlToBlob(dataUrl, fallbackMime = "application/octet-stream") {
+  const match = String(dataUrl || "").match(/^data:([^;,]*)(?:;base64)?,(.*)$/s);
+  if (!match) throw new Error("Invalid media data URL.");
+  const mime = match[1] || fallbackMime;
+  const raw = match[2] || "";
+  const binary = String(dataUrl).includes(";base64,") ? atob(raw) : decodeURIComponent(raw);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return new Blob([bytes], { type: mime });
 }
 
 async function appendChannelSessionMessage(payload, role, content, options = {}) {
@@ -2924,6 +3082,39 @@ async function dispatchTool(name, args, settings, options = {}) {
     case "wait":
       await sleep(Math.min(Number(args.ms || 1000), 10000));
       return { ok: true, waitedMs: Math.min(Number(args.ms || 1000), 10000) };
+    case "fs_shell":
+      return runVirtualFileSystemShell(required(args.command, "command"), { cwd: args.cwd || "/workspace" });
+    case "fs_list":
+      return vfsList(args.path || "/workspace");
+    case "fs_read":
+      return vfsReadFile(required(args.path, "path"), args);
+    case "fs_write":
+      return vfsWriteFile(required(args.path, "path"), String(args.content ?? ""), args);
+    case "fs_edit":
+      return vfsEditFile(required(args.path, "path"), args);
+    case "fs_search":
+      return vfsSearch(required(args.query, "query"), args);
+    case "fs_apply_patch":
+      return vfsApplyPatch(args.operations);
+    case "fs_mkdir":
+      return vfsMkdir(required(args.path, "path"), { parents: args.parents === true });
+    case "fs_move":
+      return vfsMove(required(args.from, "from"), required(args.to, "to"));
+    case "fs_delete":
+      return vfsDelete(required(args.path, "path"), { recursive: args.recursive !== false });
+    case "fs_restore":
+      return vfsRestore(required(args.trashPath, "trashPath"), args.destination, {
+        onConflict: args.onConflict,
+        confirmOverwrite: args.confirmOverwrite === true
+      });
+    case "fs_purge":
+      if (args.confirm !== true) throw new Error("fs_purge requires confirm=true.");
+      return vfsPurge(required(args.path, "path"), { recursive: args.recursive !== false });
+    case "fs_empty_trash":
+      if (args.confirm !== true) throw new Error("fs_empty_trash requires confirm=true.");
+      return vfsEmptyTrash();
+    case "fs_usage":
+      return vfsGetUsage();
     case "chrome_api":
       return runChromeApi(args);
     case "list_webclaw_config":

@@ -1,4 +1,17 @@
 import { renderQrCodeToCanvas } from "./qr-code.js";
+import {
+  vfsDelete,
+  vfsEmptyTrash,
+  vfsGetFileBlob,
+  vfsGetUsage,
+  vfsList,
+  vfsMkdir,
+  vfsMove,
+  vfsPurge,
+  vfsReadFile,
+  vfsRestore,
+  vfsWriteFile
+} from "./virtual-file-system.js";
 
 const PROVIDER_DEFAULTS = {
   ollama: {
@@ -76,6 +89,20 @@ const BUILTIN_TOOLS = [
   ["send_wecom_message", "Send messages through the WeCom webhook setting."],
   ["chrome_api", "Use limited Chrome tab APIs."],
   ["wait", "Wait for a short period."],
+  ["fs_shell", "Run safe commands in the virtual filesystem."],
+  ["fs_list", "List virtual filesystem directories."],
+  ["fs_read", "Read virtual filesystem files."],
+  ["fs_write", "Create or replace virtual text files."],
+  ["fs_edit", "Safely replace exact text in virtual files."],
+  ["fs_search", "Search virtual text files."],
+  ["fs_apply_patch", "Apply a batch of virtual filesystem changes."],
+  ["fs_mkdir", "Create virtual directories."],
+  ["fs_move", "Move or rename virtual files and directories."],
+  ["fs_delete", "Move virtual files and directories to trash."],
+  ["fs_restore", "Restore virtual files from trash."],
+  ["fs_purge", "Permanently delete items from trash."],
+  ["fs_empty_trash", "Permanently empty virtual filesystem trash."],
+  ["fs_usage", "Read virtual filesystem storage usage."],
   ["list_webclaw_config", "Read a redacted summary of WebClaw configuration."],
   ["propose_webclaw_config_patch", "Propose validated changes to tools, skills, or schedules."],
   ["apply_webclaw_config_patch", "Apply a previously validated WebClaw config patch."],
@@ -94,11 +121,37 @@ const CHAT_HISTORY_KEY = "webclawChatHistory";
 const CHAT_SESSIONS_KEY = "webclawChatSessions";
 const MAX_STORED_CHAT_MESSAGES = 200;
 const MAX_STORED_SESSIONS = 80;
+const standaloneView = new URLSearchParams(window.location.search).get("view");
 
 const elements = {
   status: document.querySelector("#status"),
+  appTitle: document.querySelector("#appTitle"),
   settingsToggle: document.querySelector("#settingsToggle"),
+  closeWindow: document.querySelector("#closeWindow"),
   settingsPanel: document.querySelector("#settingsPanel"),
+  workspaceToggle: document.querySelector("#workspaceToggle"),
+  workspacePanel: document.querySelector("#workspacePanel"),
+  workspaceUsage: document.querySelector("#workspaceUsage"),
+  workspacePath: document.querySelector("#workspacePath"),
+  workspaceGo: document.querySelector("#workspaceGo"),
+  workspaceUp: document.querySelector("#workspaceUp"),
+  workspaceNewFolder: document.querySelector("#workspaceNewFolder"),
+  workspaceNewFile: document.querySelector("#workspaceNewFile"),
+  workspaceUpload: document.querySelector("#workspaceUpload"),
+  workspaceFileInput: document.querySelector("#workspaceFileInput"),
+  workspaceDownload: document.querySelector("#workspaceDownload"),
+  workspaceRename: document.querySelector("#workspaceRename"),
+  workspaceMove: document.querySelector("#workspaceMove"),
+  workspaceRestore: document.querySelector("#workspaceRestore"),
+  workspaceDelete: document.querySelector("#workspaceDelete"),
+  workspacePurge: document.querySelector("#workspacePurge"),
+  workspaceEmptyTrash: document.querySelector("#workspaceEmptyTrash"),
+  workspaceList: document.querySelector("#workspaceList"),
+  workspaceEditor: document.querySelector("#workspaceEditor"),
+  workspaceEditorName: document.querySelector("#workspaceEditorName"),
+  workspaceEditorVersion: document.querySelector("#workspaceEditorVersion"),
+  workspaceEditorContent: document.querySelector("#workspaceEditorContent"),
+  workspaceSaveFile: document.querySelector("#workspaceSaveFile"),
   activeProviderId: document.querySelector("#activeProviderId"),
   addProvider: document.querySelector("#addProvider"),
   editProvider: document.querySelector("#editProvider"),
@@ -285,6 +338,9 @@ let scheduleDraftIsNew = false;
 let scheduleDirty = false;
 let wechatBridgeLatestStatus = {};
 let renderingSettings = false;
+let workspacePath = "/workspace";
+let workspaceSelection = null;
+let workspaceEditorState = null;
 const incomingWechatQueue = [];
 const renderedWechatEventIds = new Set();
 const chat = [];
@@ -301,6 +357,10 @@ async function init() {
     bindEvents();
     settings = normalizePanelSettings((await runtimeMessage({ type: "WEBCLAW_GET_SETTINGS" })).settings);
     renderSettings();
+    if (standaloneView === "settings" || standaloneView === "workspace") {
+      await activateStandaloneView(standaloneView);
+      return;
+    }
     await restoreChatHistory();
     ensureWechatBridgeConnection();
     drainWechatAgentEvents();
@@ -312,14 +372,53 @@ async function init() {
   }
 }
 
+async function openAuxiliaryWindow(view) {
+  try {
+    await runtimeMessage({ type: "WEBCLAW_OPEN_AUXILIARY_WINDOW", view });
+  } catch (error) {
+    elements.status.textContent = `Unable to open window: ${error.message}`;
+  }
+}
+
+async function activateStandaloneView(view) {
+  document.body.classList.add("standalone-view");
+  elements.closeWindow.classList.remove("hidden");
+  if (view === "settings") {
+    elements.appTitle.textContent = "WebClaw Settings";
+    elements.settingsPanel.classList.remove("hidden");
+    elements.workspacePanel.classList.add("hidden");
+    await refreshSettingsFromStorage();
+    return;
+  }
+  elements.appTitle.textContent = "WebClaw Files";
+  elements.settingsPanel.classList.add("hidden");
+  elements.workspacePanel.classList.remove("hidden");
+  await renderWorkspace({ preserveEditor: false });
+}
+
 function bindEvents() {
-  elements.settingsToggle.addEventListener("click", async () => {
-    const willOpen = elements.settingsPanel.classList.contains("hidden");
-    if (willOpen) {
-      await refreshSettingsFromStorage();
-    }
-    elements.settingsPanel.classList.toggle("hidden");
+  elements.settingsToggle.addEventListener("click", () => openAuxiliaryWindow("settings"));
+  elements.workspaceToggle.addEventListener("click", () => openAuxiliaryWindow("workspace"));
+  elements.closeWindow.addEventListener("click", () => window.close());
+  elements.workspaceGo.addEventListener("click", () => openWorkspacePath(elements.workspacePath.value));
+  elements.workspacePath.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    openWorkspacePath(elements.workspacePath.value);
   });
+  elements.workspaceUp.addEventListener("click", () => openWorkspacePath(parentVirtualPath(workspacePath)));
+  elements.workspaceNewFolder.addEventListener("click", createWorkspaceFolder);
+  elements.workspaceNewFile.addEventListener("click", createWorkspaceFile);
+  elements.workspaceUpload.addEventListener("click", () => elements.workspaceFileInput.click());
+  elements.workspaceFileInput.addEventListener("change", uploadWorkspaceFiles);
+  elements.workspaceDownload.addEventListener("click", downloadWorkspaceSelection);
+  elements.workspaceRename.addEventListener("click", renameWorkspaceSelection);
+  elements.workspaceMove.addEventListener("click", moveWorkspaceSelection);
+  elements.workspaceRestore.addEventListener("click", restoreWorkspaceSelection);
+  elements.workspaceDelete.addEventListener("click", deleteWorkspaceSelection);
+  elements.workspacePurge.addEventListener("click", purgeWorkspaceSelection);
+  elements.workspaceEmptyTrash.addEventListener("click", emptyWorkspaceTrash);
+  elements.workspaceSaveFile.addEventListener("click", saveWorkspaceEditor);
   elements.activeProviderId.addEventListener("change", changeActiveProvider);
   elements.addProvider.addEventListener("click", openNewProviderModal);
   elements.editProvider.addEventListener("click", () => openProviderModal(elements.activeProviderId.value));
@@ -2404,6 +2503,326 @@ async function refreshActiveProviderModels() {
   } finally {
     setBusy(false);
   }
+}
+
+async function renderWorkspace({ preserveEditor = true } = {}) {
+  try {
+    const [listing, usage] = await Promise.all([vfsList(workspacePath), vfsGetUsage()]);
+    workspacePath = listing.path;
+    elements.workspacePath.value = workspacePath;
+    elements.workspaceUsage.textContent = `${usage.files} files, ${formatBytes(usage.bytes)}`;
+    renderWorkspaceList(listing.entries);
+    if (!preserveEditor || (workspaceEditorState && workspaceEditorState.path !== workspaceSelection?.path)) {
+      hideWorkspaceEditor();
+    }
+  } catch (error) {
+    elements.status.textContent = `Files: ${error.message}`;
+  }
+}
+
+function renderWorkspaceList(entries) {
+  elements.workspaceList.replaceChildren();
+  if (!entries.length) {
+    const empty = document.createElement("p");
+    empty.className = "workspace-empty";
+    empty.textContent = "Empty directory";
+    elements.workspaceList.append(empty);
+    updateWorkspaceActionState();
+    return;
+  }
+  for (const entry of entries) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "workspace-item";
+    item.classList.toggle("selected", entry.path === workspaceSelection?.path);
+    item.title = entry.path;
+    item.addEventListener("click", () => selectWorkspaceEntry(entry));
+
+    const icon = document.createElement("span");
+    icon.textContent = entry.type === "directory" ? "\uD83D\uDCC1" : "\uD83D\uDCC4";
+    const name = document.createElement("span");
+    name.className = "workspace-name";
+    name.textContent = entry.name;
+    const meta = document.createElement("span");
+    meta.className = "workspace-meta";
+    meta.textContent = entry.trash
+      ? `${entry.trash.originalPath} · ${formatDeletedAt(entry.trash.deletedAt)}`
+      : entry.type === "directory" ? "Folder" : `${formatBytes(entry.size)} · v${entry.version}`;
+    item.append(icon, name, meta);
+    elements.workspaceList.append(item);
+  }
+  updateWorkspaceActionState();
+}
+
+async function openWorkspacePath(path) {
+  workspaceSelection = null;
+  hideWorkspaceEditor();
+  workspacePath = String(path || "/workspace");
+  updateWorkspaceActionState();
+  await renderWorkspace({ preserveEditor: false });
+}
+
+async function selectWorkspaceEntry(entry) {
+  if (entry.type === "directory" && !isWorkspaceTrashItem(entry.path)) {
+    await openWorkspacePath(entry.path);
+    return;
+  }
+  workspaceSelection = entry;
+  updateWorkspaceActionState();
+  renderWorkspaceList((await vfsList(workspacePath)).entries);
+  if (isWorkspaceTrashItem(entry.path)) {
+    hideWorkspaceEditor();
+    return;
+  }
+  try {
+    const file = await vfsReadFile(entry.path, { maxChars: 200_000 });
+    if (!file.isText) {
+      hideWorkspaceEditor();
+      elements.status.textContent = `${entry.name}: binary file, download to inspect.`;
+      return;
+    }
+    if (file.truncated) {
+      hideWorkspaceEditor();
+      elements.status.textContent = `${entry.name}: text file is too large for the editor.`;
+      return;
+    }
+    workspaceEditorState = { path: entry.path, version: entry.version, mimeType: entry.mimeType || "text/plain" };
+    elements.workspaceEditorName.textContent = entry.path;
+    elements.workspaceEditorVersion.textContent = `v${entry.version}`;
+    elements.workspaceEditorContent.value = file.content;
+    elements.workspaceEditor.classList.remove("hidden");
+  } catch (error) {
+    elements.status.textContent = `Files: ${error.message}`;
+  }
+}
+
+function hideWorkspaceEditor() {
+  workspaceEditorState = null;
+  elements.workspaceEditor.classList.add("hidden");
+  elements.workspaceEditorName.textContent = "";
+  elements.workspaceEditorContent.value = "";
+}
+
+function updateWorkspaceActionState() {
+  const selected = workspaceSelection;
+  const trashItem = Boolean(selected && isWorkspaceTrashItem(selected.path));
+  const inTrash = workspacePath === "/.trash" || isWorkspaceTrashItem(workspacePath);
+  elements.workspaceUp.disabled = workspacePath === "/";
+  elements.workspaceNewFolder.disabled = inTrash;
+  elements.workspaceNewFile.disabled = inTrash;
+  elements.workspaceUpload.disabled = inTrash;
+  elements.workspaceDownload.disabled = !selected || selected.type !== "file" || trashItem;
+  elements.workspaceRename.disabled = !selected || trashItem;
+  elements.workspaceMove.disabled = !selected || trashItem;
+  elements.workspaceDelete.disabled = !selected || trashItem;
+  elements.workspaceRestore.disabled = !trashItem;
+  elements.workspacePurge.disabled = !trashItem;
+  elements.workspaceEmptyTrash.disabled = workspacePath !== "/.trash";
+}
+
+function isWorkspaceTrashItem(path) {
+  return String(path || "").startsWith("/.trash/");
+}
+
+async function createWorkspaceFolder() {
+  if (workspacePath === "/.trash" || isWorkspaceTrashItem(workspacePath)) return;
+  const name = window.prompt("Folder name");
+  if (!name) return;
+  try {
+    await vfsMkdir(joinVirtualPath(workspacePath, name), { parents: false });
+    await renderWorkspace({ preserveEditor: false });
+  } catch (error) {
+    elements.status.textContent = `Files: ${error.message}`;
+  }
+}
+
+async function createWorkspaceFile() {
+  if (workspacePath === "/.trash" || isWorkspaceTrashItem(workspacePath)) return;
+  const name = window.prompt("File name");
+  if (!name) return;
+  try {
+    const result = await vfsWriteFile(joinVirtualPath(workspacePath, name), "", { createParents: false });
+    await renderWorkspace({ preserveEditor: false });
+    await selectWorkspaceEntry(result.entry);
+  } catch (error) {
+    elements.status.textContent = `Files: ${error.message}`;
+  }
+}
+
+async function uploadWorkspaceFiles() {
+  if (workspacePath === "/.trash" || isWorkspaceTrashItem(workspacePath)) return;
+  const files = Array.from(elements.workspaceFileInput.files || []);
+  if (!files.length) return;
+  try {
+    for (const file of files) {
+      await vfsWriteFile(joinVirtualPath(workspacePath, file.name), file, {
+        mimeType: file.type || "application/octet-stream",
+        createParents: false
+      });
+    }
+    elements.status.textContent = `Imported ${files.length} file${files.length === 1 ? "" : "s"}`;
+    await renderWorkspace({ preserveEditor: false });
+  } catch (error) {
+    elements.status.textContent = `Files: ${error.message}`;
+  } finally {
+    elements.workspaceFileInput.value = "";
+  }
+}
+
+async function saveWorkspaceEditor() {
+  if (!workspaceEditorState) return;
+  try {
+    const result = await vfsWriteFile(workspaceEditorState.path, elements.workspaceEditorContent.value, {
+      mimeType: workspaceEditorState.mimeType,
+      expectedVersion: workspaceEditorState.version
+    });
+    workspaceEditorState = { ...workspaceEditorState, version: result.entry.version };
+    workspaceSelection = result.entry;
+    elements.workspaceEditorVersion.textContent = `v${result.entry.version}`;
+    elements.status.textContent = "File saved";
+    await renderWorkspace();
+  } catch (error) {
+    elements.status.textContent = `Files: ${error.message}`;
+  }
+}
+
+async function renameWorkspaceSelection() {
+  if (!workspaceSelection || isWorkspaceTrashItem(workspaceSelection.path)) return;
+  const name = window.prompt("New name", workspaceSelection.name);
+  if (!name || name === workspaceSelection.name) return;
+  try {
+    const result = await vfsMove(workspaceSelection.path, joinVirtualPath(parentVirtualPath(workspaceSelection.path), name));
+    workspaceSelection = { ...workspaceSelection, path: result.destination, name };
+    hideWorkspaceEditor();
+    await renderWorkspace({ preserveEditor: false });
+  } catch (error) {
+    elements.status.textContent = `Files: ${error.message}`;
+  }
+}
+
+async function moveWorkspaceSelection() {
+  if (!workspaceSelection || isWorkspaceTrashItem(workspaceSelection.path)) return;
+  const destination = window.prompt("Move destination", parentVirtualPath(workspaceSelection.path));
+  if (!destination) return;
+  try {
+    await vfsMove(workspaceSelection.path, destination);
+    workspaceSelection = null;
+    hideWorkspaceEditor();
+    await renderWorkspace({ preserveEditor: false });
+  } catch (error) {
+    elements.status.textContent = `Files: ${error.message}`;
+  }
+}
+
+async function deleteWorkspaceSelection() {
+  if (!workspaceSelection || isWorkspaceTrashItem(workspaceSelection.path)) return;
+  if (!window.confirm(`Move ${workspaceSelection.name} to trash?`)) return;
+  try {
+    await vfsDelete(workspaceSelection.path, { recursive: true });
+    workspaceSelection = null;
+    hideWorkspaceEditor();
+    await renderWorkspace({ preserveEditor: false });
+  } catch (error) {
+    elements.status.textContent = `Files: ${error.message}`;
+  }
+}
+
+async function restoreWorkspaceSelection() {
+  if (!workspaceSelection?.path.startsWith("/.trash/")) return;
+  const destination = window.prompt("Restore destination", workspaceSelection.trash?.originalPath || `/workspace/${workspaceSelection.name.replace(/^\d+-[\w-]+-/, "")}`);
+  if (!destination) return;
+  try {
+    await finishWorkspaceRestore(destination, { onConflict: "error" });
+  } catch (error) {
+    if (!String(error.message || "").startsWith("Restore destination already exists:")) {
+      elements.status.textContent = `Files: ${error.message}`;
+      return;
+    }
+    const onConflict = window.prompt("Destination already exists. Choose: rename, overwrite, or error", "rename");
+    if (!onConflict || !["rename", "overwrite", "error"].includes(onConflict) || onConflict === "error") return;
+    const confirmOverwrite = onConflict !== "overwrite" || window.confirm("Move the existing destination to trash, then restore this item?");
+    if (!confirmOverwrite) return;
+    try {
+      await finishWorkspaceRestore(destination, { onConflict, confirmOverwrite });
+    } catch (restoreError) {
+      elements.status.textContent = `Files: ${restoreError.message}`;
+    }
+  }
+}
+
+async function finishWorkspaceRestore(destination, options) {
+  const result = await vfsRestore(workspaceSelection.path, destination, options);
+  workspaceSelection = null;
+  hideWorkspaceEditor();
+  await renderWorkspace({ preserveEditor: false });
+  elements.status.textContent = `Restored to ${result.destination}`;
+}
+
+async function purgeWorkspaceSelection() {
+  if (!workspaceSelection?.path.startsWith("/.trash/")) return;
+  if (!window.confirm(`Permanently delete ${workspaceSelection.name}? This cannot be undone.`)) return;
+  try {
+    await vfsPurge(workspaceSelection.path, { recursive: true });
+    workspaceSelection = null;
+    hideWorkspaceEditor();
+    await renderWorkspace({ preserveEditor: false });
+  } catch (error) {
+    elements.status.textContent = `Files: ${error.message}`;
+  }
+}
+
+async function emptyWorkspaceTrash() {
+  if (workspacePath !== "/.trash") return;
+  if (!window.confirm("Permanently delete every item in trash? This cannot be undone.")) return;
+  try {
+    const result = await vfsEmptyTrash();
+    workspaceSelection = null;
+    hideWorkspaceEditor();
+    await renderWorkspace({ preserveEditor: false });
+    elements.status.textContent = `Permanently deleted ${result.purgedCount} item${result.purgedCount === 1 ? "" : "s"}`;
+  } catch (error) {
+    elements.status.textContent = `Files: ${error.message}`;
+  }
+}
+
+async function downloadWorkspaceSelection() {
+  if (!workspaceSelection || workspaceSelection.type !== "file") return;
+  try {
+    const blob = await vfsGetFileBlob(workspaceSelection.path);
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = workspaceSelection.name;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    elements.status.textContent = `Files: ${error.message}`;
+  }
+}
+
+function parentVirtualPath(path) {
+  const normalized = String(path || "/").replace(/\/+$/, "") || "/";
+  if (normalized === "/") return "/";
+  const index = normalized.lastIndexOf("/");
+  return index <= 0 ? "/" : normalized.slice(0, index);
+}
+
+function joinVirtualPath(parent, child) {
+  const value = String(child || "").trim();
+  if (!value) return parent;
+  return value.startsWith("/") ? value : `${String(parent || "/").replace(/\/$/, "")}/${value}`;
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatDeletedAt(value) {
+  const date = new Date(Number(value || 0));
+  return Number.isNaN(date.getTime()) ? "Deleted" : date.toLocaleString();
 }
 
 function renderSettings() {

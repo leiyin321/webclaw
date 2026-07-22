@@ -9,10 +9,14 @@
   <body>
     <header class="topbar">
       <div>
-        <h1>WebClaw</h1>
+        <h1 id="appTitle">WebClaw</h1>
         <p id="status">Ready</p>
       </div>
-      <button id="settingsToggle" class="icon-button" title="Settings" aria-label="Settings">&#9881;</button>
+      <div class="topbar-actions">
+        <button id="workspaceToggle" class="icon-button" title="Files" aria-label="Files">&#128193;</button>
+        <button id="settingsToggle" class="icon-button" title="Settings" aria-label="Settings">&#9881;</button>
+      </div>
+      <button id="closeWindow" class="icon-button hidden" title="Close window" aria-label="Close window">&#215;</button>
     </header>
 
     <section id="settingsPanel" class="settings hidden" aria-label="Settings">
@@ -118,6 +122,44 @@
 
         <button id="saveSettings" type="button">Save settings</button>
       </div>
+    </section>
+
+    <section id="workspacePanel" class="workspace-panel hidden" aria-label="Files">
+      <header class="workspace-header">
+        <div>
+          <h2>Files</h2>
+          <p id="workspaceUsage">Loading</p>
+        </div>
+        <div class="workspace-actions">
+          <button id="workspaceUp" type="button" class="session-button" title="Parent directory" aria-label="Parent directory">&#8593;</button>
+          <button id="workspaceNewFolder" type="button" class="session-button" title="New folder" aria-label="New folder">&#8862;</button>
+          <button id="workspaceNewFile" type="button" class="session-button" title="New file" aria-label="New file">+</button>
+          <button id="workspaceUpload" type="button" class="session-button" title="Upload" aria-label="Upload">&#8593;</button>
+          <button id="workspaceDownload" type="button" class="session-button" title="Download selected file" aria-label="Download selected file">&#8595;</button>
+          <button id="workspaceRename" type="button" class="session-button" title="Rename selected item" aria-label="Rename selected item">&#9998;</button>
+          <button id="workspaceMove" type="button" class="session-button" title="Move selected item" aria-label="Move selected item">&#8644;</button>
+          <button id="workspaceRestore" type="button" class="session-button" title="Restore selected trash item" aria-label="Restore selected trash item">&#8635;</button>
+          <button id="workspaceDelete" type="button" class="session-button danger" title="Move selected item to trash" aria-label="Move selected item to trash">&#215;</button>
+          <button id="workspacePurge" type="button" class="session-button danger" title="Permanently delete selected trash item" aria-label="Permanently delete selected trash item">&#10006;</button>
+          <button id="workspaceEmptyTrash" type="button" class="session-button danger" title="Empty trash" aria-label="Empty trash">&#9762;</button>
+        </div>
+      </header>
+      <div class="workspace-location">
+        <input id="workspacePath" type="text" spellcheck="false" aria-label="Virtual filesystem path">
+        <button id="workspaceGo" type="button" class="secondary" title="Open path" aria-label="Open path">&#8594;</button>
+      </div>
+      <input id="workspaceFileInput" class="hidden" type="file" multiple>
+      <div id="workspaceList" class="workspace-list" role="list"></div>
+      <section id="workspaceEditor" class="workspace-editor hidden" aria-label="File editor">
+        <div class="workspace-editor-header">
+          <strong id="workspaceEditorName"></strong>
+          <div class="row">
+            <span id="workspaceEditorVersion" class="token-state"></span>
+            <button id="workspaceSaveFile" type="button">Save</button>
+          </div>
+        </div>
+        <textarea id="workspaceEditorContent" rows="12" spellcheck="false"></textarea>
+      </section>
     </section>
 
     <section class="sessionbar" aria-label="Sessions">
@@ -512,7 +554,6 @@
           </div>
 
           <div data-channel-section="wechat" class="channel-section">
-            <p class="token-state">Uses WebClaw's internal browser bridge. No local WebSocket URL is required.</p>
             <p id="wechatBridgeState" class="token-state" aria-live="polite"></p>
 
             <div id="wechatQrPanel" class="wechat-qr hidden">

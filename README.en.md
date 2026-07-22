@@ -12,6 +12,7 @@ or message channels.
 ## Features
 
 - Side panel chat UI.
+- Settings and the file manager open in separate extension windows, leaving chat unobstructed.
 - Local Ollama provider through `http://localhost:11434/api/chat`.
 - OpenAI API format compatible provider through `/v1/chat/completions`.
 - Chrome AI provider through Chrome's built-in Prompt API and Gemini Nano.
@@ -19,6 +20,8 @@ or message channels.
 - GitHub Copilot sign-in provider using GitHub OAuth device flow.
 - Multiple custom providers. Each provider is one of `Codex / ChatGPT OAuth`, `GitHub Copilot OAuth`, `Chrome AI`, `Local Ollama`, or `OpenAI-compatible API`.
 - Browser tools: page snapshot, click, type, navigate, wait, page translation, current weather lookup, background HTTP requests, limited tab APIs, and JavaScript execution.
+- Virtual filesystem: the file manager and agent tools share an IndexedDB-backed filesystem with directory browsing, text editing, upload, download, rename, trash, restore, permanent deletion, and structured tools including `fs_list`, `fs_read`, `fs_write`, `fs_edit`, `fs_search`, and `fs_apply_patch`.
+- Restricted `fs_shell`: provides `pwd`, `ls`, `stat`, `mkdir`, `touch`, `cat`, `cp`, `mv`, and `rm` in that extension-private filesystem without running a real system shell.
 
 ## Repository Guide
 
@@ -193,6 +196,9 @@ The direct weather tool geocodes the location with Open-Meteo, fetches current c
 - JavaScript execution is disabled by default. Enable it only when you trust the task and page.
 - `run_js` uses Chrome's `userScripts` API so model-provided JavaScript can run without page CSP or extension `unsafe-eval` blocking it. In Chrome 138+, enable `Allow User Scripts` for WebClaw on the extension details page if Chrome reports that `userScripts` is unavailable.
 - Use `http_request` for cross-origin webhooks or APIs that pages cannot call because of CORS. It runs in the extension background service worker and uses the extension host permissions.
+- `fs_shell` only operates on the IndexedDB-backed virtual filesystem and cannot access local machine files. It rejects pipes, redirection, command substitution, and multi-command input; `rm` moves entries into `/.trash`.
+- Trash records retain the original path and deletion time. `fs_restore` rejects a conflicting destination by default, supports `onConflict: "rename"`, and can move the existing destination to trash when `confirmOverwrite: true`; `fs_purge` and `fs_empty_trash` permanently delete only trash entries and require `confirm: true`.
+- Successfully downloaded WeChat channel media is also archived under `/inbox/<channel>/`. Its content is still sent to the active provider according to that provider's media capabilities.
 - Configure `企业微信机器人 webhook` in settings to let the agent call `send_wecom_message` without exposing the webhook URL in prompts. Text messages use the Work WeCom robot payload shape documented at `https://developer.work.weixin.qq.com/document/path/99110`: `{"msgtype":"text","text":{"content":"..."}}`.
 - API keys and OAuth tokens are stored in `chrome.storage.local`.
 - The current Chrome API tool surface is intentionally small. Add operations deliberately instead of exposing all extension APIs to the model.
