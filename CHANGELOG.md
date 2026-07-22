@@ -2,6 +2,15 @@
 
 All notable changes to WebClaw will be documented in this file.
 
+## 0.4.5
+
+- Replace mixed letter-and-number Channel approval codes with six-digit numeric
+  codes that are easier to enter from WeChat and Telegram.
+- Allow a remote operation by replying with the exact six-digit code alone, or
+  reject pending approvals for that Channel conversation by replying with `0`.
+- Keep numeric approvals bound to the originating Channel and peer, with the
+  existing ten-minute expiration.
+
 ## 0.4.4
 
 - Temporarily restore the public GitHub Copilot Client ID used by earlier

@@ -561,7 +561,7 @@ For reusable page logic, store a small JavaScript file in VFS and call it throug
 - Every connected Channel is on standby. Multiple channels can coexist; their incoming messages retain channel and peer identity but use the active session.
 - WeChat runs through the internal browser bridge and may require QR login. Telegram uses a Bot Token and replies to the chat that sent the message.
 - Channel attachments are saved to /inbox before the agent handles the message. Use VFS paths and media context when supported by the active provider.
-- A Channel authorization prompt is bound to its Channel and peer. Reply with the supplied allow or deny code before it expires; new Chrome origin permissions still require a local browser click.
+- A Channel authorization prompt is bound to its Channel and peer. Reply with the supplied six-digit numeric code alone to allow, or reply 0 to deny; new Chrome origin permissions still require a local browser click.
 - WeCom robot webhook is for outbound notifications, not an interactive channel.
 
 Before sending a message externally, verify destination, summary, format, and whether the user asked to send it.
@@ -2302,37 +2302,49 @@ async function requestChannelApproval(route, approval) {
 }
 
 function resolvePendingChannelApproval(payload) {
-  const match = String(payload?.text || "").trim().match(/^(授权|允许|approve|拒绝|deny)\s*([A-Z0-9]{6})$/i);
-  if (!match) return false;
-  const code = match[2].toUpperCase();
-  const pending = pendingChannelApprovals.get(code);
-  if (!pending) return false;
+  const response = String(payload?.text || "").trim();
+  if (response !== "0" && !/^\d{6}$/.test(response)) return false;
   const route = channelAuthorizationRoute(payload);
+
+  if (response === "0") {
+    const matching = [...pendingChannelApprovals.values()].filter((pending) => (
+      route.channelId === pending.route.channelId && route.peerId === pending.route.peerId
+    ));
+    if (matching.length === 0) return false;
+    for (const pending of matching) settlePendingChannelApproval(pending, route, false);
+    sendAuthorizationChannelText(
+      route,
+      matching.length === 1 ? "已拒绝 WebClaw 授权请求。" : `已拒绝当前会话中的 ${matching.length} 个 WebClaw 授权请求。`
+    ).catch(() => {});
+    return true;
+  }
+
+  const pending = pendingChannelApprovals.get(response);
+  if (!pending) return false;
   if (route.channelId !== pending.route.channelId || route.peerId !== pending.route.peerId) return false;
-  pendingChannelApprovals.delete(code);
+  settlePendingChannelApproval(pending, route, true);
+  sendAuthorizationChannelText(pending.route, "已确认 WebClaw 授权，正在继续原任务。").catch(() => {});
+  return true;
+}
+
+function settlePendingChannelApproval(pending, route, approved) {
+  pendingChannelApprovals.delete(pending.code);
   clearTimeout(pending.timer);
   Object.assign(pending.route, route);
-  const approved = /^(授权|允许|approve)$/i.test(match[1]);
   pending.resolve({
     approved,
     remember: approved && pending.approval?.rememberByDefault === true,
     error: approved ? "" : "Remote approval was denied."
   });
-  sendAuthorizationChannelText(
-    pending.route,
-    approved ? `已确认 WebClaw 授权 ${code}，正在继续原任务。` : `已拒绝 WebClaw 授权 ${code}。`
-  ).catch(() => {});
-  return true;
 }
 
 function createRemoteApprovalCode() {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    const bytes = crypto.getRandomValues(new Uint8Array(6));
-    const code = Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
+  for (let attempt = 0; attempt < 32; attempt += 1) {
+    const randomValue = crypto.getRandomValues(new Uint32Array(1))[0];
+    const code = String(100000 + randomValue % 900000);
     if (!pendingChannelApprovals.has(code)) return code;
   }
-  return crypto.randomUUID().replace(/-/g, "").slice(0, 6).toUpperCase();
+  throw new Error("Unable to allocate a remote approval code. Retry the operation.");
 }
 
 function formatChannelApprovalPrompt(code, approval) {
@@ -2347,7 +2359,7 @@ function formatChannelApprovalPrompt(code, approval) {
     details ? `\n详情：\n${details}` : "",
     approval?.rememberByDefault ? "\n本次允许后，只会记住完全相同的定时操作；代码、目标或 Schedule 变化时会重新询问。" : "",
     "",
-    `回复“授权 ${code}”允许，或回复“拒绝 ${code}”拒绝。`,
+    `直接回复 ${code} 表示授权，回复 0 表示拒绝。`,
     "授权请求 10 分钟后失效。"
   ].filter(Boolean).join("\n");
 }

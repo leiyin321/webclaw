@@ -105,7 +105,7 @@ Client ID 不是秘密，但这个默认值是暂时的兼容依赖：OpenAI 当
 
 点击 `Sign in with ChatGPT` 后，WebClaw 会请求设备登录码，并在独立窗口打开 ChatGPT 设备授权页面，避免授权页替换 Settings popup。Codex 待授权状态由扩展后台 Alarm 持续轮询，因此 Settings 被遮挡或关闭也不会中断 token 交换；成功后独立授权窗口会关闭并重新聚焦原 Settings 窗口。也可以直接在会话中发送消息：缺少可用 token 时，WebClaw 会先显示授权确认，允许后启动同一设备登录流程，并在成功后继续原请求。
 
-从微信或 Telegram 发起的请求无法点击 Side Panel。此时 WebClaw 会向原 Channel 会话发送授权请求；回复 `授权 ABC123` 或 `拒绝 ABC123` 后，允许时会继续发送 ChatGPT 授权网址和设备码。授权回复只对发起请求的 Channel 和联系人有效，十分钟后失效。完成网页授权后原任务自动继续。
+从微信或 Telegram 发起的请求无法点击 Side Panel。此时 WebClaw 会向原 Channel 会话发送一个六位数字授权码；直接回复该六位数字（例如提示为 `123456` 时回复 `123456`）表示授权，回复 `0` 表示拒绝。授权码只对发起请求的 Channel 和联系人有效，十分钟后失效。允许后 WebClaw 会继续发送 ChatGPT 授权网址和设备码，完成网页授权后原任务自动继续。
 
 access token 和 refresh token 保存在 `chrome.storage.local` 并自动刷新，因此正常情况下只登录一次；退出登录、token 被撤销或刷新凭证失效后才会重新授权。Chrome 对新域名的 optional host permission 必须先在运行扩展的浏览器中点击授予，Channel 回复不能代替这个浏览器系统权限。设计边界见 [OAuth 配置与发布建议](OAUTH.md)。
 

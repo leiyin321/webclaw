@@ -110,6 +110,13 @@ requireCondition(
   "Channel authorization routing is missing"
 );
 requireCondition(
+  source.includes('response !== "0" && !/^\\d{6}$/.test(response)') &&
+    source.includes("100000 + randomValue % 900000") &&
+    source.includes("直接回复 ${code} 表示授权，回复 0 表示拒绝。") &&
+    !source.includes("[A-Z0-9]{6}"),
+  "Channel approval replies must use a six-digit numeric code to allow and 0 to deny"
+);
+requireCondition(
   source.includes("WEBCLAW_CODEX_DEVICE_ALARM") && source.includes("openDeviceAuthorizationPopup"),
   "background Codex device authorization completion is missing"
 );
