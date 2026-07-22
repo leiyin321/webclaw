@@ -2,7 +2,7 @@
 
 [English](README.en.md)
 
-WebClaw 是一个 Chrome Manifest V3 浏览器扩展，把 AI Agent 运行在浏览器扩展环境中。它可以读取当前页面上下文、操作 DOM、调用受控的 Chrome 扩展 API、接入多种模型 Provider，并在用户明确开启后执行页面 JavaScript。
+WebClaw 是一个“用户控制的浏览器 AI 助手”，以 Chrome Manifest V3 扩展运行。它可以接入用户选择的模型 Provider，并在显著披露、按域名授权和高风险操作确认的约束下读取页面、操作 DOM 和调用受控 Tool。
 
 ## 项目状态
 
@@ -21,8 +21,8 @@ WebClaw 目前是实验性的浏览器原生 Agent 框架，适合本地开发�
 - 工作区记忆：自动初始化 `AGENTS.md`、`SOUL.md`、`TOOLS.md`、`IDENTITY.md`、`USER.md`、`MEMORY.md` 及每日记忆文件，并在每次 Agent 运行前按上下文预算注入。
 - 受控 Tool 轨迹：保留受限长度的工具结果和失败原因，用于后续会话与 Provider 切换时的自我纠错。
 - 受限 `fs_shell`：可在该虚拟文件系统中执行 `pwd`、`ls`、`stat`、`mkdir`、`touch`、`cat`、`cp`、`mv`、`rm`，不执行真实系统 Shell。
-- 自定义 Tool、Skill、Schedule。
-- 微信、Telegram、企业微信机器人通道。
+- 自定义 Tool、Skill，以及可选的高级 Schedule 和自我配置 Tool。
+- 微信和 Telegram Channel；企业微信机器人通知由独立的 `qiyewechat_notification` Tool 提供。
 - Chrome 内置 Prompt API 和 Summarizer API 支持。
 - Agent 自管理能力：可通过受控 patch 增加 tool、skill、schedule。
 
@@ -34,6 +34,8 @@ WebClaw 目前是实验性的浏览器原生 Agent 框架，适合本地开发�
 - [贡献指南](CONTRIBUTING.md)
 - [变更日志](CHANGELOG.md)
 - [发布检查清单](RELEASE.md)
+- [OAuth 配置与发布建议](OAUTH.md)
+- [Chrome Web Store 上架资料](STORE_LISTING.md)
 - [许可证](LICENSE)
 
 ## 在 Chrome 中加载
@@ -91,15 +93,21 @@ chrome://on-device-internals
 
 ### Codex / ChatGPT OAuth
 
-WebClaw 内置 Codex CLI 兼容的设备码登录默认值：
+该 Provider 是实验性集成。为了让当前纯浏览器扩展仍可添加 Codex Provider，本仓库暂时集中内置 Codex CLI 的公开 Client ID 作为兼容默认值：
 
 - Issuer URL: `https://auth.openai.com`
 - Authorization URL: `https://auth.openai.com/oauth/authorize`
 - Token URL: `https://auth.openai.com/oauth/token`
-- Client ID: `app_EMoamEEZ73f0CkXaXp7hrann`
+- Client ID: 默认使用公开的 Codex CLI Client ID，也可在 Provider 中覆盖
 - Codex backend URL: `https://chatgpt.com/backend-api/codex`
 
-点击 `Sign in with ChatGPT` 后，WebClaw 会请求设备登录码，打开 ChatGPT 设备授权页面，在 Side Panel 显示设备码并轮询授权结果。授权成功后，access token 和 refresh token 会存入 `chrome.storage.local`。
+Client ID 不是秘密，但这个默认值是暂时的兼容依赖：OpenAI 当前没有文档化第三方 Chrome 扩展的 Client 注册流程，因此它可能因服务端或发布政策变化而失效。官方注册方式可用后应替换该默认值，扩展中不得加入 Client Secret。
+
+点击 `Sign in with ChatGPT` 后，WebClaw 会请求设备登录码，并在独立窗口打开 ChatGPT 设备授权页面，避免授权页替换 Settings popup。Codex 待授权状态由扩展后台 Alarm 持续轮询，因此 Settings 被遮挡或关闭也不会中断 token 交换；成功后独立授权窗口会关闭并重新聚焦原 Settings 窗口。也可以直接在会话中发送消息：缺少可用 token 时，WebClaw 会先显示授权确认，允许后启动同一设备登录流程，并在成功后继续原请求。
+
+从微信或 Telegram 发起的请求无法点击 Side Panel。此时 WebClaw 会向原 Channel 会话发送授权请求；回复 `授权 ABC123` 或 `拒绝 ABC123` 后，允许时会继续发送 ChatGPT 授权网址和设备码。授权回复只对发起请求的 Channel 和联系人有效，十分钟后失效。完成网页授权后原任务自动继续。
+
+access token 和 refresh token 保存在 `chrome.storage.local` 并自动刷新，因此正常情况下只登录一次；退出登录、token 被撤销或刷新凭证失效后才会重新授权。Chrome 对新域名的 optional host permission 必须先在运行扩展的浏览器中点击授予，Channel 回复不能代替这个浏览器系统权限。设计边界见 [OAuth 配置与发布建议](OAUTH.md)。
 
 刷新 Codex 模型时，WebClaw 会调用：
 
@@ -113,9 +121,14 @@ WebClaw 使用 GitHub OAuth device flow 登录 Copilot：
 
 - Device code URL: `https://github.com/login/device/code`
 - Access token URL: `https://github.com/login/oauth/access_token`
+- Client ID: 暂时默认使用早期 WebClaw 版本采用的公开 GitHub Copilot Client ID，可在 Provider 中覆盖
 - Copilot token URL: `https://api.github.com/copilot_internal/v2/token`
 - Copilot-compatible base URL: `https://api.githubcopilot.com`
 - 默认 model: `auto`
+
+该公开 Client ID 不是秘密，但它不由 WebClaw 发布者控制，也不是稳定的第三方扩展契约，可能随服务端或分发政策变化而失效。正式发行版应注册自己的 GitHub OAuth App 或 GitHub App、启用 Device Flow 并覆盖默认值。不要把 Client Secret 放进扩展。
+
+点击 `Sign in with GitHub` 后，WebClaw 会显示设备码，并在独立窗口打开 GitHub 授权页面。待授权状态由扩展后台 Alarm 持续轮询，因此 Settings 被隐藏或关闭也不会中断 token 保存；授权成功后独立窗口会关闭，并尝试重新聚焦原 Settings 窗口。GitHub access token 保存在 `chrome.storage.local`，重新打开 Provider 时会显示已连接。
 
 选择 `auto` 时，WebClaw 会省略请求体里的 `model` 字段，让 Copilot 服务端执行 auto model selection。
 
@@ -139,7 +152,7 @@ WebClaw 不依赖模型原生 function calling，而是提示模型每一步输�
 
 - Tool：可执行动作或返回结果的能力，例如读取页面、点击按钮、发送 HTTP 请求、推送企业微信消息。
 - Skill：长期规则、领域知识或操作流程，例如“分析币安公告时重点关注合约、杠杆、保证金调整”。
-- Schedule：定时触发自然语言任务，例如“每天 09:00 检查币安公告并推送摘要”。
+- Schedule：可选高级功能，定时触发自然语言任务，例如“每天 09:00 检查币安公告并推送摘要”。
 
 WebClaw 支持通过配置管理工具受控地增加 tool、skill 和 schedule。模型只能提出结构化 patch，真正写入前会经过校验。
 
@@ -179,14 +192,19 @@ WebClaw 支持把外部消息通道接入当前活跃会话：
 
 - 微信 channel
 - Telegram bot channel
-- 企业微信机器人 webhook
+
+企业微信机器人 webhook 不作为全局配置或 Channel，而是在 Tools 中编辑并启用 `qiyewechat_notification`。它支持 `text` 和 `markdown` 消息。
 
 当前设计是：可以有多个会话，但只有一个活跃会话。所有 channel 收到的消息都会进入当前活跃会话，这样可以在 Side Panel、微信、Telegram 等多个终端延续同一个任务上下文。
 
+当 Channel 请求需要操作确认或 Codex 重新登录时，提示会返回原 Channel 会话。操作确认使用十分钟有效、绑定 Channel 与联系人的回复码；Codex 网页授权完成后会自动继续原任务。
+
 ## 安全说明
 
-- JavaScript 执行默认关闭。只有在你信任当前任务和页面时才应开启。
-- `run_js` 使用 Chrome `userScripts` API，能绕过页面 CSP 对动态脚本的限制，但不能突破浏览器同源策略、HttpOnly Cookie、扩展权限或系统权限。
+- JavaScript 执行默认关闭。开启总开关后，临时会话中的 `run_js` 每次都会显示目标页面和待执行代码并要求批准。Schedule 可以在第一次批准时记住完全相同的操作；Schedule、完整目标 URL、执行 world 或代码任一变化都会重新询问。
+- 已保存的 Schedule 操作授权位于 Settings 的 Privacy & control，可随时全部清除。Chrome 域名权限被撤销后仍必须在浏览器中重新授予，保存的操作授权不会绕过它。
+- `run_js` 要求 Chrome 135 或更高版本，并且只使用 Chrome `userScripts.execute()`，不提供 `eval` / `new Function` 回退。Chrome 138 及以上如果提示 API 不可用，请在扩展详情页打开 **Allow User Scripts** 后重新加载扩展。
+- `userScripts` 注入不受页面 CSP 的动态求值限制，但不能突破浏览器同源策略、HttpOnly Cookie、扩展权限或系统权限。
 - `run_js` 可直接接收 `code`，或通过 `vfsPath` 执行 VFS 内的 `.js`、`.mjs`、`.cjs` 文件；两者只能提供一个。
 - `http_request` 在扩展 background 中执行，用于调用页面 JS 因 CORS 无法调用的接口或 webhook。
 - `fs_shell` 仅操作扩展 IndexedDB 中的虚拟文件系统；不访问本机文件。它拒绝管道、重定向、命令替换和多命令输入，`rm` 会移动到 `/.trash`。
@@ -194,6 +212,7 @@ WebClaw 支持把外部消息通道接入当前活跃会话：
 - 通过微信通道收到且已下载成功的媒体会归档到 `/inbox/<channel>/`；文件内容仍按当前 Provider 的媒体能力发送给模型。
 - API key、OAuth token、Webhook、会话和通道状态存储在 `chrome.storage.local`。
 - 页面内容和通道消息可能会发送给你当前选择的模型 Provider。
+- HTTP(S) host access 使用 optional host permissions；首次访问页面、Provider、Channel 或网络 Tool endpoint 前会说明原因并按域名申请。
 - 新增工具、Provider、Channel 时应优先考虑权限边界和数据泄露风险。
 
 ## 开发检查
@@ -201,29 +220,19 @@ WebClaw 支持把外部消息通道接入当前活跃会话：
 运行与 CI 相同的语法检查：
 
 ```bash
-node --check src/background.js
-node --check src/content.js
-node --check src/sidepanel.js
-node --check src/chrome-ai-offscreen.js
-node --check src/wechat-offscreen.js
-node --check src/wechat-api.js
-node --check src/wechat-media.js
-node --check src/wechat-message.js
-node --check src/wechat-storage.js
-node -e "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')); console.log('manifest ok')"
+./scripts/check-syntax.sh
+node scripts/validate-release.mjs
 ```
 
 ## 打包
 
-开发者模式分享可直接打包 unpacked extension：
+执行发布校验并按 `manifest.json` 版本生成最小化扩展包：
 
 ```bash
-zip -r webclaw-0.1.0.zip manifest.json src assets README.md README.en.md LICENSE PRIVACY.md SECURITY.md \
-  -x "*.DS_Store" \
-  -x "*/.DS_Store"
+./scripts/package-extension.sh
 ```
 
-压缩包根目录必须直接包含 `manifest.json`。
+输出位于 `dist/webclaw-<version>.zip`，压缩包根目录直接包含 `manifest.json`。完整流程见 [发布检查清单](RELEASE.md)，商店文案和素材见 [Chrome Web Store 上架资料](STORE_LISTING.md)。
 
 ## License
 

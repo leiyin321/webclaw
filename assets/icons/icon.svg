@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="WebClaw">
+  <rect width="512" height="512" rx="88" fill="#202124"/>
+  <rect x="64" y="82" width="384" height="348" rx="34" fill="#f8f9fa"/>
+  <path d="M64 116c0-18.8 15.2-34 34-34h316c18.8 0 34 15.2 34 34v42H64z" fill="#dfe3ea"/>
+  <circle cx="104" cy="120" r="10" fill="#d93025"/>
+  <circle cx="136" cy="120" r="10" fill="#f9ab00"/>
+  <circle cx="168" cy="120" r="10" fill="#188038"/>
+  <path d="M108 223L138 212L176 320L217 246L242 260L284 321L375 187L401 205L282 379L230 288L168 383Z" fill="#1769e0"/>
+  <circle cx="124" cy="218" r="18" fill="#19a974"/>
+  <circle cx="388" cy="196" r="18" fill="#f9ab00"/>
+  <path d="M342 368h48" stroke="#202124" stroke-width="18" stroke-linecap="round"/>
+</svg>

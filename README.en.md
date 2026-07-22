@@ -1,6 +1,6 @@
 # WebClaw
 
-WebClaw is a Chrome Manifest V3 extension that runs an AI agent inside the browser extension environment. It can inspect the active page, operate DOM elements, call selected Chrome extension APIs, and optionally execute JavaScript in the page through a guarded tool.
+WebClaw is a user-controlled browser AI assistant built as a Chrome Manifest V3 extension. It connects to a model provider selected by the user and can inspect or operate pages only after prominent disclosure, per-origin access, and high-risk action approval.
 
 ## Project Status
 
@@ -32,6 +32,9 @@ or message channels.
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
+- [OAuth configuration and release guidance](OAUTH.md)
+- [Release checklist](RELEASE.md)
+- [Chrome Web Store listing material](STORE_LISTING.md)
 - [License](LICENSE)
 
 ## Load in Chrome
@@ -47,25 +50,17 @@ or message channels.
 Run the same syntax checks used by CI:
 
 ```bash
-node --check src/background.js
-node --check src/content.js
-node --check src/sidepanel.js
-node --check src/chrome-ai-offscreen.js
-node --check src/wechat-offscreen.js
-node --check src/wechat-api.js
-node --check src/wechat-media.js
-node --check src/wechat-message.js
-node --check src/wechat-storage.js
-node -e "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')); console.log('manifest ok')"
+./scripts/check-syntax.sh
+node scripts/validate-release.mjs
 ```
 
 ## Provider setup
 
 Open Settings in the side panel to manage providers. You can add multiple providers, give each one a custom name, choose its type, and switch the active provider from the Provider dropdown.
 
-When the active provider is a `Codex / ChatGPT OAuth` provider and it does not already have a token, WebClaw automatically starts the ChatGPT sign-in flow after you select or save that provider.
+For a `Codex / ChatGPT OAuth` provider, open Edit provider and click `Sign in with ChatGPT` after entering an authorized public Client ID.
 
-When the active provider is a `GitHub Copilot OAuth` provider and it does not already have a token, WebClaw automatically starts the GitHub device sign-in flow after you select or save that provider.
+For a `GitHub Copilot OAuth` provider, open Edit provider and click `Sign in with GitHub`. This compatibility build supplies a temporary public Client ID, which distributors can override with an app they control.
 
 Each provider's `Model` field is a typeable dropdown. Click `Refresh` next to the model field to load available models from the active provider:
 
@@ -110,15 +105,21 @@ Chrome AI requires a Chrome build with built-in AI support, supported hardware, 
 
 ### Codex / ChatGPT OAuth
 
-The extension ships with Codex CLI-compatible defaults:
+This provider is experimental. To keep Codex providers usable in the current browser-only build, the repository temporarily centralizes the public Codex CLI Client ID as its compatibility default:
 
 - Issuer URL: `https://auth.openai.com`
 - Authorization URL: `https://auth.openai.com/oauth/authorize`
 - Token URL: `https://auth.openai.com/oauth/token`
-- Client ID: `app_EMoamEEZ73f0CkXaXp7hrann`
+- Client ID: the public Codex CLI Client ID by default, overridable per Provider
 - Codex backend URL: `https://chatgpt.com/backend-api/codex`
 
-Click `Sign in with ChatGPT`. WebClaw requests a device login code from ChatGPT, opens the ChatGPT device page, shows the code in the side panel, and polls until ChatGPT returns the authorization code. The extension then exchanges that code for an access token and refresh token, stores them in `chrome.storage.local`, and calls the Codex backend `/responses` endpoint with the bearer token.
+The Client ID is not a secret, but this default is a temporary compatibility dependency. OpenAI does not currently document a client-registration path for third-party Chrome extensions, so service or distribution policy changes may break it. Replace the default when an official registration path exists, and never package a Client Secret.
+
+Click `Sign in with ChatGPT`. WebClaw requests a device login code and opens the ChatGPT device page in a dedicated window so it cannot replace the Settings popup. A background Chrome Alarm keeps polling even when Settings is hidden or closed; after token exchange, WebClaw closes the dedicated authorization window and refocuses the originating Settings window. An ordinary chat request can start the same flow when no usable token exists: approve the request in the side panel, sign in, and WebClaw continues the original request.
+
+For a request originating from WeChat or Telegram, WebClaw sends the approval prompt back to that conversation. Reply with `授权 ABC123` to allow or `拒绝 ABC123` to deny. On approval, WebClaw sends the ChatGPT verification URL and device code. The reply code is bound to the originating Channel and peer and expires after ten minutes. The original task resumes after web authorization succeeds.
+
+Access and refresh tokens are stored in `chrome.storage.local` and refreshed automatically, so sign-in is normally one-time. Sign-out, revocation, or an unusable refresh token starts authorization again. A new Chrome optional host permission still requires a click in the browser running WebClaw; a Channel reply cannot grant browser-level site access. See [OAuth configuration and release guidance](OAUTH.md).
 
 When refreshing Codex models, WebClaw calls `/models?client_version=0.142.0`; the ChatGPT Codex backend requires a Codex client version on the model-list endpoint. The returned model catalog uses Codex fields such as `slug`, `display_name`, `visibility`, and `supported_in_api`.
 
@@ -134,13 +135,15 @@ The extension ships with GitHub device-flow defaults:
 
 - Device code URL: `https://github.com/login/device/code`
 - Access token URL: `https://github.com/login/oauth/access_token`
-- GitHub OAuth client ID: configurable in Settings
+- GitHub OAuth client ID: temporarily defaults to the public compatibility ID used by earlier WebClaw builds and remains configurable in Settings
 - Scope: `read:user`
 - Copilot token URL: `https://api.github.com/copilot_internal/v2/token`
 - Copilot-compatible base URL: `https://api.githubcopilot.com`
 - Default model: `auto`
 
-Click `Sign in with GitHub`. WebClaw requests a GitHub device code, opens `https://github.com/login/device`, shows the code in the side panel, and polls until GitHub returns an OAuth access token. It then exchanges that GitHub token for a Copilot session token and calls the configured Copilot-compatible `/chat/completions` endpoint.
+The compatibility Client ID is not a secret, but WebClaw's distributor does not control it and it is not a stable third-party extension contract. It may stop working because of service, risk-control, or distribution-policy changes. Each distributor should register its own GitHub OAuth App or GitHub App, enable Device Flow, and override the default. Never package a Client Secret in the extension.
+
+Click `Sign in with GitHub`. WebClaw requests a GitHub device code, opens `https://github.com/login/device` in a dedicated window, and shows the code in Settings. A background Alarm keeps polling even if Settings is hidden or closed. After GitHub returns an OAuth access token, WebClaw saves it in `chrome.storage.local`, closes the authorization window, restores Settings when possible, and exchanges the GitHub token for a Copilot session token before calling the configured Copilot-compatible `/chat/completions` endpoint.
 
 GitHub's OAuth device flow is public and documented. GitHub documents the currently supported Copilot models in the GitHub Copilot AI model reference, but does not document a stable account-level model-list REST endpoint. WebClaw tries the Copilot OpenAI-compatible `GET /models` endpoint after exchanging the GitHub token for a Copilot token; the returned IDs depend on your plan, client surface, and organization or enterprise model policies. The Copilot chat/token endpoint shape is not a stable public REST contract, so WebClaw keeps the Copilot token URL, chat base URL, model, and integration ID configurable.
 
@@ -196,13 +199,25 @@ The direct weather tool geocodes the location with Open-Meteo, fetches current c
 
 ## Security notes
 
-- JavaScript execution is disabled by default. Enable it only when you trust the task and page.
-- `run_js` uses Chrome's `userScripts` API so model-provided JavaScript can run without page CSP or extension `unsafe-eval` blocking it. In Chrome 138+, enable `Allow User Scripts` for WebClaw on the extension details page if Chrome reports that `userScripts` is unavailable.
+- JavaScript execution is disabled by default. After enabling it, every ad-hoc `run_js` call shows the target and source and requires approval. A Schedule can remember an exact operation after its first approval; changing the Schedule, full target URL, execution world, or code requires another approval.
+- Saved Schedule operation approvals can be cleared under Settings > Privacy & control. Revoking the Chrome origin permission still requires a new browser grant and is never bypassed by the saved operation approval.
+- `run_js` requires Chrome 135 or newer and uses only `userScripts.execute()`; there is no `eval` / `new Function` fallback. In Chrome 138+, enable `Allow User Scripts` for WebClaw on the extension details page if Chrome reports that the API is unavailable.
+- `userScripts` injection is not blocked by page CSP dynamic-evaluation rules, but it cannot bypass the same-origin policy, HttpOnly cookies, extension permissions, or operating-system permissions.
 - `run_js` accepts inline `code` or `vfsPath` for a VFS `.js`, `.mjs`, or `.cjs` file; provide exactly one.
-- Use `http_request` for cross-origin webhooks or APIs that pages cannot call because of CORS. It runs in the extension background service worker and uses the extension host permissions.
+- Use `http_request` for cross-origin webhooks or APIs that pages cannot call because of CORS. HTTP(S) access uses optional host permissions requested per origin with a reason before first use.
 - `fs_shell` only operates on the IndexedDB-backed virtual filesystem and cannot access local machine files. It rejects pipes, redirection, command substitution, and multi-command input; `rm` moves entries into `/.trash`.
 - Trash records retain the original path and deletion time. `fs_restore` rejects a conflicting destination by default, supports `onConflict: "rename"`, and can move the existing destination to trash when `confirmOverwrite: true`; `fs_purge` and `fs_empty_trash` permanently delete only trash entries and require `confirm: true`.
 - Successfully downloaded WeChat channel media is also archived under `/inbox/<channel>/`. Its content is still sent to the active provider according to that provider's media capabilities.
-- Configure `企业微信机器人 webhook` in settings to let the agent call `send_wecom_message` without exposing the webhook URL in prompts. Text messages use the Work WeCom robot payload shape documented at `https://developer.work.weixin.qq.com/document/path/99110`: `{"msgtype":"text","text":{"content":"..."}}`.
+- Edit and enable the `qiyewechat_notification` Tool to configure an enterprise WeChat robot webhook. It supports text and markdown payloads without putting the webhook into model prompts.
 - API keys and OAuth tokens are stored in `chrome.storage.local`.
 - The current Chrome API tool surface is intentionally small. Add operations deliberately instead of exposing all extension APIs to the model.
+
+## Packaging
+
+Validate the release and build a minimal archive named from the manifest version:
+
+```bash
+./scripts/package-extension.sh
+```
+
+The result is written to `dist/webclaw-<version>.zip`. See [RELEASE.md](RELEASE.md) for clean-profile testing, Chrome Web Store submission, and tag-based GitHub releases.

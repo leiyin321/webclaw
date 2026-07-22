@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800" viewBox="0 0 1280 800">
+  <rect width="1280" height="800" fill="#eef1f6"/>
+  <rect x="40" y="38" width="1200" height="724" rx="8" fill="#ffffff" stroke="#c9ced8" stroke-width="2"/>
+  <rect x="40" y="38" width="1200" height="58" rx="8" fill="#202124"/>
+  <circle cx="76" cy="67" r="8" fill="#d93025"/>
+  <circle cx="102" cy="67" r="8" fill="#f9ab00"/>
+  <circle cx="128" cy="67" r="8" fill="#188038"/>
+  <rect x="178" y="52" width="690" height="30" rx="6" fill="#3c4043"/>
+  <text x="198" y="72" fill="#e8eaed" font-family="Arial Unicode MS" font-size="13">dashboard.example.com</text>
+  <text x="92" y="162" fill="#202124" font-family="Arial Unicode MS" font-size="34" font-weight="700">Account dashboard</text>
+  <rect x="92" y="202" width="760" height="12" rx="6" fill="#dfe3ea"/>
+  <rect x="92" y="232" width="680" height="12" rx="6" fill="#dfe3ea"/>
+  <rect x="92" y="300" width="320" height="180" rx="6" fill="#f8f9fa" stroke="#dfe3ea"/>
+  <rect x="438" y="300" width="320" height="180" rx="6" fill="#f8f9fa" stroke="#dfe3ea"/>
+  <rect x="0" y="0" width="1280" height="800" fill="#121418" opacity="0.48"/>
+
+  <rect x="290" y="102" width="700" height="596" rx="8" fill="#ffffff" stroke="#dfe3ea" stroke-width="2"/>
+  <rect x="290" y="102" width="700" height="92" rx="8" fill="#ffffff"/>
+  <line x1="290" y1="194" x2="990" y2="194" stroke="#dfe3ea" stroke-width="2"/>
+  <text x="326" y="142" fill="#202124" font-family="Arial Unicode MS" font-size="24" font-weight="700">Allow JavaScript execution</text>
+  <text x="326" y="170" fill="#5f6368" font-family="Arial Unicode MS" font-size="13">JavaScript execution request · one execution only</text>
+  <text x="326" y="234" fill="#202124" font-family="Arial Unicode MS" font-size="15">This code can read and change page-visible content in the target tab.</text>
+  <text x="326" y="258" fill="#202124" font-family="Arial Unicode MS" font-size="15">Review the target and source before allowing it.</text>
+
+  <rect x="326" y="286" width="628" height="64" rx="6" fill="#f8fbff" stroke="#c8d2e1"/>
+  <text x="344" y="312" fill="#3c4043" font-family="monospace" font-size="12">Chrome access requested:</text>
+  <text x="344" y="334" fill="#174ea6" font-family="monospace" font-size="12">https://dashboard.example.com/*</text>
+
+  <rect x="326" y="370" width="628" height="218" rx="6" fill="#f6f7f9" stroke="#dfe3ea"/>
+  <text x="344" y="398" fill="#5f6368" font-family="monospace" font-size="12">Target: https://dashboard.example.com/account</text>
+  <text x="344" y="420" fill="#5f6368" font-family="monospace" font-size="12">Source: inline model output</text>
+  <text x="344" y="442" fill="#5f6368" font-family="monospace" font-size="12">World: USER_SCRIPT</text>
+  <text x="344" y="482" fill="#202124" font-family="monospace" font-size="13">const choice = await window.confirm(</text>
+  <text x="344" y="506" fill="#202124" font-family="monospace" font-size="13">  'Continue with this page action?'</text>
+  <text x="344" y="530" fill="#202124" font-family="monospace" font-size="13">);</text>
+  <text x="344" y="554" fill="#202124" font-family="monospace" font-size="13">return { choice };</text>
+
+  <rect x="656" y="620" width="132" height="42" rx="6" fill="#e5e8ef"/>
+  <text x="704" y="647" fill="#202124" font-family="Arial Unicode MS" font-size="14" font-weight="700">Deny</text>
+  <rect x="804" y="620" width="150" height="42" rx="6" fill="#1769e0"/>
+  <text x="830" y="647" fill="#ffffff" font-family="Arial Unicode MS" font-size="14" font-weight="700">Run this code</text>
+</svg>

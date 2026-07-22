@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="440" height="280" viewBox="0 0 440 280">
+  <rect width="440" height="280" fill="#f8f9fa"/>
+  <rect x="24" y="24" width="64" height="64" rx="12" fill="#202124"/>
+  <path d="M36 48L43 72L53 55L63 72L78 43L83 48L63 82L53 65L42 83Z" fill="#1769e0"/>
+  <circle cx="36" cy="48" r="4" fill="#19a974"/>
+  <circle cx="78" cy="43" r="4" fill="#f9ab00"/>
+  <text x="108" y="57" fill="#202124" font-family="Arial Unicode MS" font-size="30" font-weight="700">WebClaw</text>
+  <text x="108" y="81" fill="#5f6368" font-family="Arial Unicode MS" font-size="14">用户控制的浏览器 AI 助手</text>
+  <rect x="24" y="116" width="392" height="140" rx="8" fill="#ffffff" stroke="#dfe3ea"/>
+  <rect x="44" y="136" width="148" height="12" rx="6" fill="#dfe3ea"/>
+  <rect x="44" y="160" width="192" height="9" rx="4" fill="#eef1f6"/>
+  <rect x="44" y="181" width="174" height="9" rx="4" fill="#eef1f6"/>
+  <rect x="252" y="132" width="144" height="50" rx="7" fill="#1769e0"/>
+  <text x="266" y="153" fill="#ffffff" font-family="Arial Unicode MS" font-size="11">总结当前页面</text>
+  <text x="266" y="171" fill="#ffffff" font-family="Arial Unicode MS" font-size="11">并列出行动项</text>
+  <rect x="252" y="194" width="144" height="42" rx="7" fill="#eef5ff" stroke="#b8d4f4"/>
+  <text x="264" y="219" fill="#29415f" font-family="monospace" font-size="9">tool: get_page_context</text>
+</svg>

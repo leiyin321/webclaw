@@ -12,6 +12,7 @@ import {
   vfsRestore,
   vfsWriteFile
 } from "./virtual-file-system.js";
+import { DISTRIBUTION_OAUTH_CLIENT_IDS } from "./oauth-clients.js";
 
 const PROVIDER_DEFAULTS = {
   ollama: {
@@ -34,7 +35,7 @@ const PROVIDER_DEFAULTS = {
     issuerUrl: "https://auth.openai.com",
     authUrl: "https://auth.openai.com/oauth/authorize",
     tokenUrl: "https://auth.openai.com/oauth/token",
-    clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
+    clientId: DISTRIBUTION_OAUTH_CLIENT_IDS.codex,
     scope: "openid profile email offline_access api.connectors.read api.connectors.invoke",
     baseUrl: "https://chatgpt.com/backend-api/codex",
     model: "gpt-5.4",
@@ -55,7 +56,7 @@ const PROVIDER_DEFAULTS = {
   "github-copilot-oauth": {
     deviceCodeUrl: "https://github.com/login/device/code",
     accessTokenUrl: "https://github.com/login/oauth/access_token",
-    clientId: "Iv1.b507a08c87ecfe98",
+    clientId: DISTRIBUTION_OAUTH_CLIENT_IDS.githubCopilot,
     scope: "read:user",
     copilotTokenUrl: "https://api.github.com/copilot_internal/v2/token",
     baseUrl: "https://api.githubcopilot.com",
@@ -86,7 +87,7 @@ const BUILTIN_TOOLS = [
   ["search_web", "Open search results and read context."],
   ["get_weather", "Fetch weather from Open-Meteo."],
   ["http_request", "Send HTTP requests from the extension background."],
-  ["send_wecom_message", "Send messages through the WeCom webhook setting."],
+  ["qiyewechat_notification", "Send text or markdown through a configured WeCom robot webhook."],
   ["chrome_api", "Use limited Chrome tab APIs."],
   ["wait", "Wait for a short period."],
   ["fs_shell", "Run safe commands in the virtual filesystem."],
@@ -103,6 +104,11 @@ const BUILTIN_TOOLS = [
   ["fs_purge", "Permanently delete items from trash."],
   ["fs_empty_trash", "Permanently empty virtual filesystem trash."],
   ["fs_usage", "Read virtual filesystem storage usage."],
+  ["knowledge_ingest", "Index a VFS text file for local knowledge search."],
+  ["knowledge_search", "Search indexed local knowledge."],
+  ["knowledge_read", "Read indexed knowledge chunks."],
+  ["knowledge_forget", "Remove a document from the local knowledge index."],
+  ["knowledge_status", "Read local knowledge index status."],
   ["list_webclaw_config", "Read a redacted summary of WebClaw configuration."],
   ["propose_webclaw_config_patch", "Propose validated changes to tools, skills, or schedules."],
   ["apply_webclaw_config_patch", "Apply a previously validated WebClaw config patch."],
@@ -117,8 +123,21 @@ const BUILTIN_TOOLS = [
   builtin: true
 }));
 
+const ADVANCED_BUILTIN_TOOLS = new Set([
+  "list_webclaw_config",
+  "propose_webclaw_config_patch",
+  "apply_webclaw_config_patch",
+  "rollback_webclaw_config_patch"
+]);
+const DEFAULT_DISABLED_BUILTIN_TOOLS = new Set([
+  ...ADVANCED_BUILTIN_TOOLS,
+  "qiyewechat_notification"
+]);
+const PRODUCT_DISCLOSURE_VERSION = 1;
+
 const CHAT_HISTORY_KEY = "webclawChatHistory";
 const CHAT_SESSIONS_KEY = "webclawChatSessions";
+const OPERATION_APPROVAL_GRANTS_KEY = "webclawOperationApprovalGrants";
 const MAX_STORED_CHAT_MESSAGES = 200;
 const MAX_STORED_SESSIONS = 80;
 const standaloneView = new URLSearchParams(window.location.search).get("view");
@@ -239,6 +258,7 @@ const elements = {
   toolWorkflowInputSchema: document.querySelector("#toolWorkflowInputSchema"),
   toolWorkflowInstruction: document.querySelector("#toolWorkflowInstruction"),
   toolWorkflowMaxSteps: document.querySelector("#toolWorkflowMaxSteps"),
+  toolQiyeWechatWebhookUrl: document.querySelector("#toolQiyeWechatWebhookUrl"),
   skillCount: document.querySelector("#skillCount"),
   skillList: document.querySelector("#skillList"),
   addSkill: document.querySelector("#addSkill"),
@@ -285,12 +305,26 @@ const elements = {
   scheduleInstruction: document.querySelector("#scheduleInstruction"),
   scheduleEnabled: document.querySelector("#scheduleEnabled"),
   scheduleNextRun: document.querySelector("#scheduleNextRun"),
-  weComWebhookUrl: document.querySelector("#weComWebhookUrl"),
   wechatBridgeState: document.querySelector("#wechatBridgeState"),
   wechatQrPanel: document.querySelector("#wechatQrPanel"),
   wechatQrCanvas: document.querySelector("#wechatQrCanvas"),
   wechatQrText: document.querySelector("#wechatQrText"),
   saveSettings: document.querySelector("#saveSettings"),
+  disclosureState: document.querySelector("#disclosureState"),
+  reviewDisclosure: document.querySelector("#reviewDisclosure"),
+  approvalGrantState: document.querySelector("#approvalGrantState"),
+  clearApprovalGrants: document.querySelector("#clearApprovalGrants"),
+  productDisclosureModal: document.querySelector("#productDisclosureModal"),
+  acceptProductDisclosure: document.querySelector("#acceptProductDisclosure"),
+  declineProductDisclosure: document.querySelector("#declineProductDisclosure"),
+  approvalModal: document.querySelector("#approvalModal"),
+  approvalTitle: document.querySelector("#approvalTitle"),
+  approvalKind: document.querySelector("#approvalKind"),
+  approvalReason: document.querySelector("#approvalReason"),
+  approvalOrigins: document.querySelector("#approvalOrigins"),
+  approvalDetails: document.querySelector("#approvalDetails"),
+  allowApproval: document.querySelector("#allowApproval"),
+  denyApproval: document.querySelector("#denyApproval"),
   discoverCodex: document.querySelector("#discoverCodex"),
   authorizeCodex: document.querySelector("#authorizeCodex"),
   checkCodex: document.querySelector("#checkCodex"),
@@ -314,6 +348,7 @@ let codexPollTimer = null;
 let githubCopilotPollTimer = null;
 let activeAgentPort = null;
 let activeAssistantNode = null;
+let pendingAgentApproval = null;
 let wechatDrainTimer = null;
 let wechatAutoConnectStarted = false;
 let providerDirty = false;
@@ -357,6 +392,7 @@ async function init() {
     bindEvents();
     settings = normalizePanelSettings((await runtimeMessage({ type: "WEBCLAW_GET_SETTINGS" })).settings);
     renderSettings();
+    showProductDisclosureIfNeeded();
     if (standaloneView === "settings" || standaloneView === "workspace") {
       await activateStandaloneView(standaloneView);
       return;
@@ -428,6 +464,12 @@ function bindEvents() {
   elements.providerType.addEventListener("change", changeProviderType);
   elements.saveProvider.addEventListener("click", saveProviderModal);
   elements.saveSettings.addEventListener("click", saveSettings);
+  elements.reviewDisclosure.addEventListener("click", () => showProductDisclosure(true));
+  elements.clearApprovalGrants.addEventListener("click", clearSavedOperationApprovals);
+  elements.acceptProductDisclosure.addEventListener("click", acceptProductDisclosure);
+  elements.declineProductDisclosure.addEventListener("click", declineProductDisclosure);
+  elements.allowApproval.addEventListener("click", () => resolveAgentApproval(true));
+  elements.denyApproval.addEventListener("click", () => resolveAgentApproval(false));
   elements.discoverCodex.addEventListener("click", discoverActiveCodex);
   elements.authorizeCodex.addEventListener("click", authorizeActiveCodex);
   elements.checkCodex.addEventListener("click", checkActiveCodex);
@@ -546,7 +588,8 @@ function bindToolDirtyEvents() {
     elements.toolResponseLimit,
     elements.toolWorkflowInputSchema,
     elements.toolWorkflowInstruction,
-    elements.toolWorkflowMaxSteps
+    elements.toolWorkflowMaxSteps,
+    elements.toolQiyeWechatWebhookUrl
   ].forEach((element) => {
     element.addEventListener("input", markToolDirty);
     element.addEventListener("change", markToolDirty);
@@ -594,10 +637,66 @@ function bindScheduleDirtyEvents() {
 
 async function sendPrompt(event) {
   event.preventDefault();
+  if (!hasAcceptedProductDisclosure()) {
+    showProductDisclosure(true);
+    elements.status.textContent = "Review and accept the disclosure before sending a message";
+    return;
+  }
   const content = elements.prompt.value.trim();
   if (!content) return;
   elements.prompt.value = "";
   await submitUserMessage(content, null);
+}
+
+function hasAcceptedProductDisclosure() {
+  return Number(settings?.disclosures?.productVersion || 0) >= PRODUCT_DISCLOSURE_VERSION &&
+    Number(settings?.disclosures?.productAcceptedAt || 0) > 0;
+}
+
+function showProductDisclosureIfNeeded() {
+  if (!hasAcceptedProductDisclosure()) showProductDisclosure(false);
+}
+
+function showProductDisclosure(force) {
+  if (!force && hasAcceptedProductDisclosure()) return;
+  elements.declineProductDisclosure.textContent = hasAcceptedProductDisclosure() ? "Close" : "Decline";
+  elements.productDisclosureModal.classList.remove("hidden");
+  elements.productDisclosureModal.setAttribute("aria-hidden", "false");
+}
+
+function hideProductDisclosure() {
+  elements.productDisclosureModal.classList.add("hidden");
+  elements.productDisclosureModal.setAttribute("aria-hidden", "true");
+}
+
+async function acceptProductDisclosure() {
+  elements.acceptProductDisclosure.disabled = true;
+  try {
+    settings.disclosures = {
+      ...(settings.disclosures || {}),
+      productVersion: PRODUCT_DISCLOSURE_VERSION,
+      productAcceptedAt: Date.now()
+    };
+    applySettings((await runtimeMessage({
+      type: "WEBCLAW_SAVE_SETTINGS",
+      settings: serializableSettings()
+    })).settings);
+    hideProductDisclosure();
+    elements.status.textContent = "Ready";
+  } catch (error) {
+    elements.status.textContent = error.message;
+  } finally {
+    elements.acceptProductDisclosure.disabled = false;
+  }
+}
+
+function declineProductDisclosure() {
+  if (hasAcceptedProductDisclosure()) {
+    hideProductDisclosure();
+    return;
+  }
+  elements.status.textContent = "Disclosure acceptance is required before WebClaw can store or process your data";
+  window.close();
 }
 
 async function refreshSettingsFromStorage() {
@@ -610,6 +709,7 @@ async function refreshSettingsFromStorage() {
 
 function handleStorageChanged(changes, areaName) {
   if (areaName !== "local") return;
+  if (changes[OPERATION_APPROVAL_GRANTS_KEY]) refreshOperationApprovalGrantState();
   if (changes[CHAT_SESSIONS_KEY]?.newValue && !activeAgentPort) {
     const currentActive = chatSessions.activeSessionId;
     chatSessions = normalizeChatSessions(changes[CHAT_SESSIONS_KEY].newValue);
@@ -708,6 +808,14 @@ function stopActiveAgent() {
 }
 
 function streamAgentMessage(messages) {
+  return streamAgentRequest({ type: "start", messages });
+}
+
+function streamScheduleRun(scheduleId) {
+  return streamAgentRequest({ type: "start_schedule", scheduleId });
+}
+
+function streamAgentRequest(startMessage) {
   return new Promise((resolve, reject) => {
     const port = chrome.runtime.connect({ name: "WEBCLAW_AGENT_STREAM" });
     activeAgentPort = port;
@@ -724,6 +832,7 @@ function streamAgentMessage(messages) {
       if (settled) return;
       settled = true;
       activeAgentPort = null;
+      clearAgentApproval(port);
       clearInterval(keepAlive);
       try {
         port.disconnect();
@@ -734,8 +843,23 @@ function streamAgentMessage(messages) {
     };
 
     port.onMessage.addListener((message) => {
+      if (message.type === "approval_request") {
+        showAgentApproval(port, message);
+        return;
+      }
       if (message.type === "status") {
         elements.status.textContent = message.text || "Thinking";
+        return;
+      }
+      if (message.type === "authorization_challenge") {
+        const challenge = message.challenge || {};
+        appendMessage("tool", [
+          `${challenge.providerName || "ChatGPT"} authorization`,
+          `Open: ${challenge.verificationUrl || ""}`,
+          `Device code: ${challenge.userCode || ""}`,
+          "WebClaw will continue automatically after authorization."
+        ].join("\n"), { persist: false });
+        elements.status.textContent = `Waiting for ${challenge.providerName || "ChatGPT"} authorization`;
         return;
       }
       if (message.type === "pong") {
@@ -765,8 +889,212 @@ function streamAgentMessage(messages) {
       if (!settled) finish(reject, new Error(chrome.runtime.lastError?.message || "Agent stream disconnected"));
     });
     port.postMessage({ type: "ping" });
-    port.postMessage({ type: "start", messages });
+    port.postMessage(startMessage);
   });
+}
+
+function showAgentApproval(port, message) {
+  if (pendingAgentApproval) {
+    pendingAgentApproval.port.postMessage({
+      type: "approval_response",
+      requestId: pendingAgentApproval.requestId,
+      approved: false
+    });
+  }
+  const approval = message.approval && typeof message.approval === "object" ? message.approval : {};
+  pendingAgentApproval = {
+    port,
+    requestId: String(message.requestId || ""),
+    approval
+  };
+  elements.approvalTitle.textContent = String(approval.title || "Approval required");
+  elements.approvalKind.textContent = approval.kind === "run_js"
+    ? "JavaScript execution request"
+    : approval.kind === "external_data"
+      ? "External data disclosure"
+      : approval.kind === "oauth"
+        ? "Provider authorization request"
+      : "Site or service access request";
+  elements.approvalReason.textContent = String(approval.reason || "Review this request before allowing it.");
+  const origins = uniqueStrings(approval.origins);
+  elements.approvalOrigins.textContent = origins.length
+    ? `Chrome access requested:\n${origins.join("\n")}`
+    : "";
+  elements.approvalOrigins.classList.toggle("hidden", origins.length === 0);
+  elements.approvalDetails.textContent = String(approval.details || "");
+  elements.approvalDetails.classList.toggle("hidden", !approval.details);
+  elements.allowApproval.textContent = String(approval.allowLabel || "Allow once");
+  elements.allowApproval.disabled = false;
+  elements.denyApproval.disabled = false;
+  elements.approvalModal.classList.remove("hidden");
+  elements.approvalModal.setAttribute("aria-hidden", "false");
+}
+
+async function resolveAgentApproval(approved) {
+  const pending = pendingAgentApproval;
+  if (!pending) return;
+  elements.allowApproval.disabled = true;
+  elements.denyApproval.disabled = true;
+  let granted = Boolean(approved);
+  let error = "";
+  if (granted) {
+    const origins = uniqueStrings(pending.approval.origins);
+    if (origins.length > 0) {
+      try {
+        granted = await chrome.permissions.request({ origins });
+        if (!granted) error = "Chrome origin permission was not granted.";
+      } catch (permissionError) {
+        granted = false;
+        error = permissionError?.message || String(permissionError);
+      }
+    }
+  }
+  try {
+    pending.port.postMessage({
+      type: "approval_response",
+      requestId: pending.requestId,
+      approved: granted,
+      remember: granted && pending.approval.rememberByDefault === true,
+      error
+    });
+  } catch {
+    // The agent port may close while the permission prompt is open.
+  }
+  clearAgentApproval(pending.port);
+}
+
+function clearAgentApproval(port) {
+  if (pendingAgentApproval && port && pendingAgentApproval.port !== port) return;
+  pendingAgentApproval = null;
+  elements.approvalModal.classList.add("hidden");
+  elements.approvalModal.setAttribute("aria-hidden", "true");
+}
+
+function requestLocalApproval(approval) {
+  return new Promise((resolve) => {
+    const localPort = {
+      postMessage(message) {
+        resolve(Boolean(message?.approved));
+      }
+    };
+    showAgentApproval(localPort, {
+      type: "approval_request",
+      requestId: crypto.randomUUID(),
+      approval
+    });
+  });
+}
+
+async function requestOriginPermissionsForUrls(urls, reason) {
+  const requested = uniqueStrings((Array.isArray(urls) ? urls : [urls]).map(originPatternForUrl).filter(Boolean));
+  const missing = [];
+  for (const origin of requested) {
+    if (!(await chrome.permissions.contains({ origins: [origin] }))) missing.push(origin);
+  }
+  if (missing.length === 0) return true;
+  const approved = await requestLocalApproval({
+    kind: "host_permission",
+    title: "Allow site or service access",
+    reason,
+    origins: missing,
+    details: "Chrome grants these origins to WebClaw until you revoke them from the extension's site access settings.",
+    allowLabel: "Allow access"
+  });
+  if (!approved) {
+    elements.status.textContent = "Site or service access was not granted";
+    return false;
+  }
+  return true;
+}
+
+function originPatternForUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (/^https?:\/\/\*\./i.test(text) && text.endsWith("/*")) return text;
+  try {
+    const url = new URL(text);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+    return `${url.origin}/*`;
+  } catch {
+    return "";
+  }
+}
+
+function providerPermissionUrls(provider) {
+  if (!provider) return [];
+  const config = provider.config || {};
+  if (provider.type === "chrome-ai") return [];
+  if (provider.type === "ollama" || provider.type === "openai-compatible") return [config.baseUrl];
+  if (provider.type === "codex-oauth") {
+    return [config.issuerUrl, config.authUrl, config.tokenUrl, config.baseUrl];
+  }
+  if (provider.type === "github-copilot-oauth") {
+    return [
+      config.deviceCodeUrl,
+      config.accessTokenUrl,
+      config.copilotTokenUrl,
+      config.baseUrl,
+      "https://api.github.com/"
+    ];
+  }
+  return [];
+}
+
+function channelPermissionUrls(channel) {
+  if (channel?.type === "telegram") return ["https://api.telegram.org/"];
+  if (channel?.type === "wechat") {
+    return ["https://*.weixin.qq.com/*"];
+  }
+  return [];
+}
+
+async function ensureExternalProviderDisclosureForAutomation(reason) {
+  const provider = activeProvider();
+  if (!hasAcceptedProductDisclosure()) {
+    showProductDisclosure(true);
+    elements.status.textContent = "Accept the product disclosure before enabling background automation";
+    return false;
+  }
+  if (!isExternalProvider(provider)) {
+    return requestOriginPermissionsForUrls(
+      providerPermissionUrls(provider),
+      `${reason} Chrome needs access to the configured local model service before background tasks can use it.`
+    );
+  }
+  if (Number(settings?.disclosures?.externalProviders?.[provider.id] || 0) > 0) {
+    return requestOriginPermissionsForUrls(providerPermissionUrls(provider), reason);
+  }
+  const approved = await requestLocalApproval({
+    kind: "external_data",
+    title: `Allow data sharing with ${provider.name}`,
+    reason,
+    origins: uniqueStrings(providerPermissionUrls(provider).map(originPatternForUrl).filter(Boolean)),
+    details: "WebClaw will send prompts, relevant active-session history, and only the page content, files, media, or tool results needed for enabled channel or schedule tasks. Data goes directly from this browser to the configured provider.",
+    allowLabel: "Accept and allow"
+  });
+  if (!approved) return false;
+  settings.disclosures = normalizePanelDisclosures(settings.disclosures);
+  settings.disclosures.externalProviders[provider.id] = Date.now();
+  return true;
+}
+
+function isExternalProvider(provider) {
+  if (!provider || provider.type === "chrome-ai") return false;
+  if (provider.type !== "ollama" && provider.type !== "openai-compatible") return true;
+  try {
+    const hostname = new URL(provider.config?.baseUrl || "").hostname;
+    return !isLoopbackHostname(hostname);
+  } catch {
+    return true;
+  }
+}
+
+function isLoopbackHostname(hostname) {
+  const normalized = String(hostname || "").toLowerCase();
+  return normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    normalized === "::1" ||
+    normalized === "[::1]";
 }
 
 function formatToolCall(tool) {
@@ -1229,13 +1557,27 @@ function hasEnabledChannels() {
   return normalizePanelChannels(settings).items.some((channel) => channel.enabled);
 }
 
+function hasEnabledBackgroundAutomation() {
+  return hasEnabledChannels() || normalizePanelSchedules(settings.schedules).some((schedule) => schedule.enabled);
+}
+
 async function changeActiveProvider() {
   settings = await loadLatestSettings();
+  const previousProviderId = settings.activeProviderId;
   settings.activeProviderId = elements.activeProviderId.value;
+  if (hasEnabledBackgroundAutomation() && !(await ensureExternalProviderDisclosureForAutomation(
+    `Enabled Channels or Schedules can send tasks and relevant active-session context to ${activeProvider().name} while Chrome is running.`
+  ))) {
+    settings.activeProviderId = previousProviderId;
+    renderSettings();
+    return;
+  }
   renderSettings();
-  persistSettings({ silent: true, authorizeCodex: false, authorizeGitHubCopilot: false }).catch((error) => {
+  try {
+    await persistSettings({ silent: true, authorizeCodex: false, authorizeGitHubCopilot: false });
+  } catch (error) {
     elements.status.textContent = error.message;
-  });
+  }
 }
 
 async function openNewProviderModal() {
@@ -1318,6 +1660,13 @@ async function saveProviderModal() {
     providers,
     activeProviderId: providerDraftIsNew ? nextProvider.id : settings.activeProviderId
   });
+  if (
+    settings.activeProviderId === nextProvider.id &&
+    hasEnabledBackgroundAutomation() &&
+    !(await ensureExternalProviderDisclosureForAutomation(
+      `Saving this active Provider allows enabled Channels or Schedules to send tasks and relevant active-session context to ${nextProvider.name} while Chrome is running.`
+    ))
+  ) return;
   providerModalOpen = false;
   providerDraft = null;
   providerDraftIsNew = false;
@@ -1374,13 +1723,13 @@ function renderToolList() {
       const title = document.createElement("strong");
       title.textContent = tool.title || tool.name;
       const description = document.createElement("span");
-      description.textContent = `${tool.name} · ${tool.builtin ? "built-in" : tool.type}${tool.description ? ` · ${tool.description}` : ""}`;
+      description.textContent = `${tool.name} · ${tool.builtin ? "built-in" : tool.type}${tool.advanced ? " · optional advanced" : ""}${tool.description ? ` · ${tool.description}` : ""}`;
       text.append(title, description);
 
       const edit = document.createElement("button");
       edit.type = "button";
       edit.className = "secondary";
-      edit.textContent = tool.builtin ? "View" : "Edit";
+      edit.textContent = tool.builtin && tool.name !== "qiyewechat_notification" ? "View" : "Edit";
       edit.addEventListener("click", () => openToolModal(tool.name));
 
       item.append(enabled, text, edit);
@@ -1474,8 +1823,12 @@ function renderToolModal() {
   elements.toolWorkflowInputSchema.value = JSON.stringify(config.inputSchema, null, 2);
   elements.toolWorkflowInstruction.value = config.instruction;
   elements.toolWorkflowMaxSteps.value = config.maxSteps;
+  elements.toolQiyeWechatWebhookUrl.value = String(toolDraft.config?.webhookUrl || "");
+  const activeSection = toolDraft.name === "qiyewechat_notification"
+    ? "qiyewechat_notification"
+    : toolDraft.type || "http";
   document.querySelectorAll(".tool-section").forEach((section) => {
-    section.classList.toggle("hidden", section.dataset.toolSection !== (toolDraft.type || "http"));
+    section.classList.toggle("hidden", section.dataset.toolSection !== activeSection);
   });
 }
 
@@ -1515,6 +1868,16 @@ async function saveToolModal() {
   if (!nextTool.builtin && nextTool.type === "workflow" && !nextTool.config.instruction) {
     elements.status.textContent = "Workflow instruction is required.";
     return;
+  }
+  if (nextTool.name === "qiyewechat_notification" && nextTool.enabled && !nextTool.config.webhookUrl) {
+    elements.status.textContent = "企业微信机器人 webhook is required while this tool is enabled.";
+    return;
+  }
+  if (nextTool.name === "qiyewechat_notification" && nextTool.enabled) {
+    if (!(await requestOriginPermissionsForUrls(
+      [nextTool.config.webhookUrl],
+      "WebClaw needs access to this enterprise WeChat webhook only when the qiyewechat_notification tool sends a notification you requested."
+    ))) return;
   }
   settings.tools = toolDraftIsNew
     ? [...tools, nextTool]
@@ -1558,7 +1921,8 @@ function syncToolFormToDraft() {
       responseLimit: Number(elements.toolResponseLimit.value || 12000),
       inputSchema,
       instruction: elements.toolWorkflowInstruction.value.trim(),
-      maxSteps: Number(elements.toolWorkflowMaxSteps.value || 4)
+      maxSteps: Number(elements.toolWorkflowMaxSteps.value || 4),
+      webhookUrl: elements.toolQiyeWechatWebhookUrl.value.trim()
     }
   };
 }
@@ -1879,6 +2243,15 @@ async function saveChannelModal() {
     elements.status.textContent = `Channel name already exists: ${nextChannel.name}`;
     return;
   }
+  if (nextChannel.enabled) {
+    if (!(await requestOriginPermissionsForUrls(
+      channelPermissionUrls(nextChannel),
+      `WebClaw needs access to ${channelTypeLabel(nextChannel.type)} to receive messages and return model replies for this enabled channel.`
+    ))) return;
+    if (!(await ensureExternalProviderDisclosureForAutomation(
+      `This enabled ${channelTypeLabel(nextChannel.type)} channel can send incoming messages and relevant media to ${activeProvider().name} and return its replies while Chrome is running.`
+    ))) return;
+  }
   settings.channels = channelsObjectFromItems(
     channelDraftIsNew
       ? [...channels, nextChannel]
@@ -2067,6 +2440,9 @@ async function saveScheduleModal() {
     elements.status.textContent = `Schedule name already exists: ${nextSchedule.name}`;
     return;
   }
+  if (nextSchedule.enabled && !(await ensureExternalProviderDisclosureForAutomation(
+    `This optional Schedule can send its natural-language task and relevant active-session context to ${activeProvider().name} while Chrome is running.`
+  ))) return;
   settings.schedules = scheduleDraftIsNew
     ? [...schedules, nextSchedule]
     : schedules.map((schedule) => (schedule.id === nextSchedule.id ? nextSchedule : schedule));
@@ -2083,13 +2459,13 @@ async function deleteScheduleModal() {
 }
 
 async function runScheduleNow(scheduleId) {
+  if (!(await ensureExternalProviderDisclosureForAutomation(
+    `Running this Schedule now sends its task and relevant context to ${activeProvider().name}.`
+  ))) return;
   setBusy(true, "Running schedule");
   try {
     await persistSettings({ silent: true, authorizeCodex: false, authorizeGitHubCopilot: false });
-    const response = await runtimeMessage({
-      type: "WEBCLAW_RUN_SCHEDULE",
-      scheduleId
-    });
+    const response = { result: await streamScheduleRun(scheduleId) };
     applySettings((await runtimeMessage({ type: "WEBCLAW_GET_SETTINGS" })).settings);
     const final = String(response.result?.final || "").trim();
     elements.status.textContent = final ? `Schedule completed: ${final.slice(0, 160)}` : "Schedule completed";
@@ -2132,6 +2508,22 @@ async function saveSettings() {
   const currentSkills = normalizePanelSkills(settings?.skills);
   const currentChannels = normalizePanelChannels(settings).object;
   const currentSchedules = normalizePanelSchedules(settings?.schedules);
+  const configuredQiyeWechat = currentTools.find((tool) => tool.name === "qiyewechat_notification" && tool.enabled);
+  const accessUrls = [
+    ...Object.values(currentChannels).filter((channel) => channel.enabled).flatMap(channelPermissionUrls),
+    configuredQiyeWechat?.config?.webhookUrl || ""
+  ];
+  if (!(await requestOriginPermissionsForUrls(
+    accessUrls,
+    "WebClaw needs access only to the enabled Channels and notification service configured in these settings."
+  ))) return;
+  if (
+    (Object.values(currentChannels).some((channel) => channel.enabled) || currentSchedules.some((schedule) => schedule.enabled)) &&
+    !(await ensureExternalProviderDisclosureForAutomation(
+      `Enabled Channels or Schedules can send their task input and relevant active-session context to ${activeProvider().name} while Chrome is running.`
+    ))
+  ) return;
+  const currentDisclosures = normalizePanelDisclosures(settings.disclosures);
   settings = await loadLatestSettings();
   const latestSchedulesById = new Map(normalizePanelSchedules(settings?.schedules).map((schedule) => [schedule.id, schedule]));
   settings.tools = currentTools;
@@ -2149,6 +2541,7 @@ async function saveSettings() {
     };
   });
   settings.wechatBridgeEnabled = Boolean(currentChannels.wechat?.enabled);
+  settings.disclosures = currentDisclosures;
   syncGeneralFormToSettings();
   await persistSettings({ silent: false, authorizeCodex: false, authorizeGitHubCopilot: false });
 }
@@ -2202,6 +2595,14 @@ async function authorizeActiveCodex() {
   stopCodexPolling();
   syncOpenProviderDraftToSettings();
   syncGeneralFormToSettings();
+  if (activeProvider().type !== "codex-oauth" || !activeProvider().config.clientId) {
+    elements.status.textContent = "Enter an authorized Codex OAuth client ID before signing in";
+    return;
+  }
+  if (!(await requestOriginPermissionsForUrls(
+    providerPermissionUrls(activeProvider()),
+    "WebClaw needs access to the configured ChatGPT OAuth and Codex endpoints to sign you in and send model requests."
+  ))) return;
   setBusy(true, "Starting ChatGPT sign-in");
   try {
     applySettings((await runtimeMessage({
@@ -2280,6 +2681,10 @@ async function discoverActiveCodex(options = {}) {
   const continueToAuthorize = Boolean(options.continueToAuthorize);
   syncOpenProviderDraftToSettings();
   syncGeneralFormToSettings();
+  if (!(await requestOriginPermissionsForUrls(
+    providerPermissionUrls(activeProvider()),
+    "WebClaw needs access to the configured OAuth issuer to discover its public authorization metadata."
+  ))) return;
   setBusy(true, "Discovering OAuth");
   try {
     applySettings((await runtimeMessage({
@@ -2328,6 +2733,14 @@ async function authorizeActiveGitHubCopilot() {
   stopGitHubCopilotPolling();
   syncOpenProviderDraftToSettings();
   syncGeneralFormToSettings();
+  if (activeProvider().type !== "github-copilot-oauth" || !activeProvider().config.clientId) {
+    elements.status.textContent = "Enter your GitHub OAuth App client ID before signing in";
+    return;
+  }
+  if (!(await requestOriginPermissionsForUrls(
+    providerPermissionUrls(activeProvider()),
+    "WebClaw needs access to GitHub and Copilot endpoints to complete Device Flow sign-in and send model requests."
+  ))) return;
   setBusy(true, "Starting GitHub sign-in");
   try {
     applySettings((await runtimeMessage({
@@ -2451,6 +2864,10 @@ async function refreshActiveProviderModels() {
   syncProviderFormToDraft();
   const draftProvider = cloneProvider(providerDraft);
   if (!draftProvider) return;
+  if (!(await requestOriginPermissionsForUrls(
+    providerPermissionUrls(draftProvider),
+    `WebClaw needs access to ${draftProvider.name} only to retrieve its available model list.`
+  ))) return;
   setBusy(true, "Loading models");
   try {
     const response = await runtimeMessage({
@@ -2850,7 +3267,7 @@ function renderSettings() {
     elements.maxSteps.value = settings.maxSteps;
     elements.temperature.value = settings.temperature;
     elements.allowUnsafePageJs.checked = Boolean(settings.allowUnsafePageJs);
-    elements.weComWebhookUrl.value = settings.weComWebhookUrl || "";
+    elements.disclosureState.textContent = hasAcceptedProductDisclosure() ? "Accepted" : "Not accepted";
   } finally {
     renderingSettings = false;
   }
@@ -2872,6 +3289,32 @@ function renderSettings() {
   runtimeMessage({ type: "WEBCLAW_GET_WECHAT_BRIDGE_STATUS" })
     .then((response) => renderWechatBridgeStatus(response.result || {}))
     .catch(() => renderWechatBridgeStatus({ enabled: false, connected: false }));
+  refreshOperationApprovalGrantState();
+}
+
+async function refreshOperationApprovalGrantState() {
+  try {
+    const stored = await chrome.storage.local.get(OPERATION_APPROVAL_GRANTS_KEY);
+    const count = Array.isArray(stored[OPERATION_APPROVAL_GRANTS_KEY])
+      ? stored[OPERATION_APPROVAL_GRANTS_KEY].filter((grant) => grant?.key && Number(grant?.approvedAt) > 0).length
+      : 0;
+    elements.approvalGrantState.textContent = count === 0
+      ? "No saved scheduled approvals"
+      : `${count} saved scheduled approval${count === 1 ? "" : "s"}`;
+    elements.clearApprovalGrants.disabled = count === 0;
+  } catch (error) {
+    elements.approvalGrantState.textContent = `Saved approvals unavailable: ${error.message}`;
+  }
+}
+
+async function clearSavedOperationApprovals() {
+  try {
+    await runtimeMessage({ type: "WEBCLAW_CLEAR_OPERATION_APPROVAL_GRANTS" });
+    await refreshOperationApprovalGrantState();
+    elements.status.textContent = "Saved scheduled approvals cleared";
+  } catch (error) {
+    elements.status.textContent = error.message;
+  }
 }
 
 function applySettings(nextSettings) {
@@ -3077,7 +3520,6 @@ function syncGeneralFormToSettings() {
   settings.maxSteps = Number(elements.maxSteps.value || 8);
   settings.temperature = Number(elements.temperature.value || 0.2);
   settings.allowUnsafePageJs = elements.allowUnsafePageJs.checked;
-  settings.weComWebhookUrl = elements.weComWebhookUrl.value.trim();
   settings.channels = normalizePanelChannels(settings).object;
   settings.wechatBridgeEnabled = Boolean(settings.channels.wechat?.enabled);
 }
@@ -3152,7 +3594,7 @@ function serializableSettings() {
     maxSteps: settings.maxSteps,
     temperature: settings.temperature,
     allowUnsafePageJs: settings.allowUnsafePageJs,
-    weComWebhookUrl: settings.weComWebhookUrl,
+    disclosures: normalizePanelDisclosures(settings.disclosures),
     channels: normalizePanelChannels(settings).object,
     wechatBridgeEnabled: Boolean(normalizePanelChannels(settings).object.wechat?.enabled),
     pendingConfigPatches: Array.isArray(settings.pendingConfigPatches) ? settings.pendingConfigPatches : [],
@@ -3200,13 +3642,13 @@ function normalizePanelSettings(value) {
   return {
     activeProviderId,
     providers,
-    tools: normalizePanelTools(raw.tools),
+    tools: normalizePanelTools(raw.tools, { legacyWeComWebhookUrl: raw.weComWebhookUrl }),
     skills: normalizePanelSkills(raw.skills),
     schedules: normalizePanelSchedules(raw.schedules),
     maxSteps: clampNumber(raw.maxSteps, 1, 24, 8),
     temperature: clampNumber(raw.temperature, 0, 2, 0.2),
     allowUnsafePageJs: Boolean(raw.allowUnsafePageJs),
-    weComWebhookUrl: String(raw.weComWebhookUrl || ""),
+    disclosures: normalizePanelDisclosures(raw.disclosures),
     channels: channels.object,
     wechatBridgeEnabled: channels.wechat.enabled,
     pendingConfigPatches: Array.isArray(raw.pendingConfigPatches) ? raw.pendingConfigPatches : [],
@@ -3307,28 +3749,42 @@ function channelTypeLabel(type) {
 function normalizePanelProvider(provider) {
   const type = provider?.type;
   if (!PROVIDER_DEFAULTS[type]) return null;
+  const config = {
+    ...structuredClone(PROVIDER_DEFAULTS[type]),
+    ...(provider.config || {})
+  };
+  if (type === "codex-oauth" && !String(config.clientId || "").trim()) {
+    config.clientId = PROVIDER_DEFAULTS["codex-oauth"].clientId;
+  }
+  if (type === "github-copilot-oauth" && !String(config.clientId || "").trim()) {
+    config.clientId = PROVIDER_DEFAULTS["github-copilot-oauth"].clientId;
+  }
   return {
     id: String(provider.id || crypto.randomUUID()),
     name: String(provider.name || defaultProviderName(type)),
     type,
-    config: {
-      ...structuredClone(PROVIDER_DEFAULTS[type]),
-      ...(provider.config || {})
-    }
+    config
   };
 }
 
-function normalizePanelTools(value) {
+function normalizePanelTools(value, options = {}) {
   const rawTools = Array.isArray(value) ? value : [];
   const byName = new Map(rawTools.map((tool) => [String(tool?.name || ""), tool]));
   const tools = BUILTIN_TOOLS.map((definition) => {
-    const raw = byName.get(definition.name) || {};
+    const matched = byName.get(definition.name) || (
+      definition.name === "qiyewechat_notification" ? byName.get("send_wecom_message") : null
+    );
+    const raw = matched || {};
     return {
       ...definition,
       id: definition.name,
       title: String(raw.title || definition.title),
       description: String(raw.description || definition.description),
-      enabled: raw.enabled !== false
+      enabled: matched ? raw.enabled !== false : !DEFAULT_DISABLED_BUILTIN_TOOLS.has(definition.name),
+      advanced: ADVANCED_BUILTIN_TOOLS.has(definition.name),
+      config: definition.name === "qiyewechat_notification"
+        ? { webhookUrl: String(raw.config?.webhookUrl || options.legacyWeComWebhookUrl || "") }
+        : {}
     };
   });
   for (const raw of rawTools) {
@@ -3353,7 +3809,12 @@ function normalizePanelTool(tool) {
     description: String(tool.description || ""),
     enabled: tool.enabled !== false,
     builtin,
-    config: builtin ? {} : normalizeToolConfig(tool.config || {})
+    advanced: ADVANCED_BUILTIN_TOOLS.has(name),
+    config: builtin
+      ? name === "qiyewechat_notification"
+        ? { webhookUrl: String(tool.config?.webhookUrl || "") }
+        : {}
+      : normalizeToolConfig(tool.config || {})
   };
 }
 
@@ -3368,6 +3829,22 @@ function normalizeToolConfig(config) {
     inputSchema: normalizeInputSchema(config.inputSchema),
     instruction: String(config.instruction || ""),
     maxSteps: clampNumber(config.maxSteps, 1, 12, 4)
+  };
+}
+
+function normalizePanelDisclosures(value) {
+  const raw = value && typeof value === "object" ? value : {};
+  const externalProviders = raw.externalProviders && typeof raw.externalProviders === "object"
+    ? Object.fromEntries(
+        Object.entries(raw.externalProviders)
+          .filter(([id, acceptedAt]) => id && Number(acceptedAt) > 0)
+          .map(([id, acceptedAt]) => [String(id), Number(acceptedAt)])
+      )
+    : {};
+  return {
+    productVersion: Number(raw.productVersion || 0),
+    productAcceptedAt: Number(raw.productAcceptedAt || 0),
+    externalProviders
   };
 }
 

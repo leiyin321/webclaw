@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800" viewBox="0 0 1280 800">
+  <rect width="1280" height="800" fill="#eef1f6"/>
+  <rect x="40" y="38" width="1200" height="724" rx="8" fill="#ffffff" stroke="#c9ced8" stroke-width="2"/>
+  <rect x="40" y="38" width="1200" height="54" rx="8" fill="#202124"/>
+  <circle cx="76" cy="65" r="8" fill="#d93025"/>
+  <circle cx="102" cy="65" r="8" fill="#f9ab00"/>
+  <circle cx="128" cy="65" r="8" fill="#188038"/>
+  <rect x="176" y="51" width="650" height="28" rx="6" fill="#3c4043"/>
+  <text x="198" y="70" fill="#e8eaed" font-family="Arial Unicode MS" font-size="13">docs.example.com/product</text>
+
+  <rect x="40" y="92" width="770" height="670" fill="#f8f9fa"/>
+  <text x="104" y="160" fill="#202124" font-family="Arial Unicode MS" font-size="15" font-weight="700">PRODUCT NOTES</text>
+  <text x="104" y="222" fill="#202124" font-family="Arial Unicode MS" font-size="36" font-weight="700">Quarterly launch plan</text>
+  <rect x="104" y="260" width="594" height="12" rx="6" fill="#c9ced8"/>
+  <rect x="104" y="288" width="548" height="12" rx="6" fill="#dfe3ea"/>
+  <rect x="104" y="316" width="570" height="12" rx="6" fill="#dfe3ea"/>
+  <rect x="104" y="382" width="280" height="156" rx="6" fill="#ffffff" stroke="#dfe3ea"/>
+  <rect x="414" y="382" width="280" height="156" rx="6" fill="#ffffff" stroke="#dfe3ea"/>
+  <text x="128" y="418" fill="#5f6368" font-family="Arial Unicode MS" font-size="13">Launch readiness</text>
+  <text x="128" y="464" fill="#188038" font-family="Arial Unicode MS" font-size="34" font-weight="700">82%</text>
+  <text x="438" y="418" fill="#5f6368" font-family="Arial Unicode MS" font-size="13">Open decisions</text>
+  <text x="438" y="464" fill="#d93025" font-family="Arial Unicode MS" font-size="34" font-weight="700">4</text>
+  <rect x="104" y="582" width="590" height="10" rx="5" fill="#dfe3ea"/>
+  <rect x="104" y="608" width="530" height="10" rx="5" fill="#dfe3ea"/>
+
+  <rect x="810" y="92" width="430" height="670" fill="#f6f7f9"/>
+  <rect x="810" y="92" width="430" height="68" fill="#ffffff" stroke="#dfe3ea"/>
+  <rect x="832" y="108" width="36" height="36" rx="7" fill="#202124"/>
+  <text x="842" y="134" fill="#ffffff" font-family="Arial Unicode MS" font-size="20" font-weight="700">W</text>
+  <text x="884" y="124" fill="#202124" font-family="Arial Unicode MS" font-size="18" font-weight="700">WebClaw</text>
+  <text x="884" y="143" fill="#5f6368" font-family="Arial Unicode MS" font-size="11">Ready · Local Ollama</text>
+  <circle cx="1188" cy="126" r="17" fill="#eef1f6"/>
+  <text x="1182" y="132" fill="#3c4043" font-family="Arial Unicode MS" font-size="17">⚙</text>
+
+  <rect x="826" y="174" width="398" height="46" rx="6" fill="#ffffff" stroke="#dfe3ea"/>
+  <text x="842" y="193" fill="#5f6368" font-family="Arial Unicode MS" font-size="10" font-weight="700">SESSION</text>
+  <text x="842" y="210" fill="#202124" font-family="Arial Unicode MS" font-size="12">Launch review · active</text>
+
+  <rect x="886" y="246" width="324" height="68" rx="8" fill="#1769e0"/>
+  <text x="904" y="274" fill="#ffffff" font-family="Arial Unicode MS" font-size="14">总结当前页面，并列出需要</text>
+  <text x="904" y="296" fill="#ffffff" font-family="Arial Unicode MS" font-size="14">我确认的决策。</text>
+
+  <rect x="830" y="334" width="360" height="82" rx="8" fill="#eef5ff" stroke="#b8d4f4"/>
+  <text x="846" y="358" fill="#29415f" font-family="monospace" font-size="12" font-weight="700">tool: get_page_context</text>
+  <text x="846" y="380" fill="#29415f" font-family="monospace" font-size="11">{ "mode": "compact",</text>
+  <text x="846" y="399" fill="#29415f" font-family="monospace" font-size="11">  "maxChars": 4000 }</text>
+
+  <rect x="830" y="436" width="376" height="152" rx="8" fill="#ffffff" stroke="#dfe3ea"/>
+  <text x="848" y="463" fill="#202124" font-family="Arial Unicode MS" font-size="14" font-weight="700">页面摘要</text>
+  <text x="848" y="489" fill="#3c4043" font-family="Arial Unicode MS" font-size="13">发布准备度为 82%，当前有 4 项待决策：</text>
+  <text x="848" y="515" fill="#3c4043" font-family="Arial Unicode MS" font-size="13">1. 最终发布时间</text>
+  <text x="848" y="538" fill="#3c4043" font-family="Arial Unicode MS" font-size="13">2. 灰度范围与回滚阈值</text>
+  <text x="848" y="561" fill="#3c4043" font-family="Arial Unicode MS" font-size="13">3. 支持排班  4. 公告审核人</text>
+
+  <rect x="826" y="670" width="398" height="72" rx="6" fill="#ffffff" stroke="#c9ced8"/>
+  <text x="842" y="698" fill="#80868b" font-family="Arial Unicode MS" font-size="13">继续提问或让 WebClaw 操作当前页面</text>
+  <rect x="1114" y="706" width="48" height="24" rx="5" fill="#1769e0"/>
+  <text x="1125" y="723" fill="#ffffff" font-family="Arial Unicode MS" font-size="11">Send</text>
+  <rect x="1168" y="706" width="42" height="24" rx="5" fill="#e5e8ef"/>
+  <text x="1178" y="723" fill="#5f6368" font-family="Arial Unicode MS" font-size="11">Stop</text>
+</svg>

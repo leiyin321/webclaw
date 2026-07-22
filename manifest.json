@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "WebClaw",
-  "version": "0.3.0",
-  "description": "A browser-native AI agent that can inspect pages, call extension APIs, and execute controlled JavaScript.",
+  "version": "0.4.4",
+  "minimum_chrome_version": "135",
+  "description": "A user-controlled browser AI assistant for conversations, page actions, tools, and optional advanced automation.",
   "permissions": [
-    "activeTab",
     "alarms",
     "identity",
     "offscreen",
@@ -15,30 +15,28 @@
     "userScripts",
     "windows"
   ],
-  "host_permissions": [
+  "optional_host_permissions": [
     "http://*/*",
     "https://*/*"
   ],
+  "icons": {
+    "16": "assets/icons/icon-16.png",
+    "32": "assets/icons/icon-32.png",
+    "48": "assets/icons/icon-48.png",
+    "128": "assets/icons/icon-128.png"
+  },
   "background": {
     "service_worker": "src/background.js",
     "type": "module"
   },
   "action": {
-    "default_title": "Open WebClaw"
+    "default_title": "Open WebClaw",
+    "default_icon": {
+      "16": "assets/icons/icon-16.png",
+      "32": "assets/icons/icon-32.png"
+    }
   },
   "side_panel": {
     "default_path": "src/sidepanel.html"
-  },
-  "content_scripts": [
-    {
-      "matches": [
-        "http://*/*",
-        "https://*/*"
-      ],
-      "js": [
-        "src/content.js"
-      ],
-      "run_at": "document_idle"
-    }
-  ]
+  }
 }

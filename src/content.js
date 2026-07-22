@@ -17,8 +17,6 @@ async function handleContentMessage(message) {
       return clickElement(message.selector);
     case "WEBCLAW_CONTENT_TYPE_TEXT":
       return typeText(message.selector, message.text, message.clear);
-    case "WEBCLAW_CONTENT_RUN_JS":
-      return runJavaScript(message.code);
     case "WEBCLAW_CONTENT_COLLECT_TEXT_NODES":
       return collectTextNodes(message.maxItems, message.maxTotalChars);
     case "WEBCLAW_CONTENT_APPLY_TEXT_TRANSLATIONS":
@@ -110,15 +108,6 @@ function typeText(selector, text, clear = true) {
   element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
   element.dispatchEvent(new Event("change", { bubbles: true }));
   return { ok: true, selector, textLength: String(text).length };
-}
-
-async function runJavaScript(code) {
-  const fn = new Function(`"use strict"; return (async () => { ${code}\n })();`);
-  const value = await fn();
-  return {
-    ok: true,
-    result: serializeValue(value)
-  };
 }
 
 function collectTextNodes(maxItems = 320, maxTotalChars = 24000) {
@@ -256,12 +245,4 @@ function escapeCss(value) {
 
 function escapeAttribute(value) {
   return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-}
-
-function serializeValue(value) {
-  try {
-    return JSON.parse(JSON.stringify(value));
-  } catch {
-    return String(value);
-  }
 }

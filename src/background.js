@@ -24,6 +24,9 @@ import {
   knowledgeSearch,
   knowledgeStatus
 } from "./knowledge-base.js";
+import { DISTRIBUTION_OAUTH_CLIENT_IDS } from "./oauth-clients.js";
+
+const PRODUCT_DISCLOSURE_VERSION = 1;
 
 const PROVIDER_DEFAULTS = {
   ollama: {
@@ -46,7 +49,7 @@ const PROVIDER_DEFAULTS = {
     issuerUrl: "https://auth.openai.com",
     authUrl: "https://auth.openai.com/oauth/authorize",
     tokenUrl: "https://auth.openai.com/oauth/token",
-    clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
+    clientId: DISTRIBUTION_OAUTH_CLIENT_IDS.codex,
     scope: "openid profile email offline_access api.connectors.read api.connectors.invoke",
     baseUrl: "https://chatgpt.com/backend-api/codex",
     model: "gpt-5.4",
@@ -67,7 +70,7 @@ const PROVIDER_DEFAULTS = {
   "github-copilot-oauth": {
     deviceCodeUrl: "https://github.com/login/device/code",
     accessTokenUrl: "https://github.com/login/oauth/access_token",
-    clientId: "Iv1.b507a08c87ecfe98",
+    clientId: DISTRIBUTION_OAUTH_CLIENT_IDS.githubCopilot,
     scope: "read:user",
     copilotTokenUrl: "https://api.github.com/copilot_internal/v2/token",
     baseUrl: "https://api.githubcopilot.com",
@@ -101,7 +104,11 @@ const DEFAULT_SETTINGS = {
   maxSteps: 8,
   temperature: 0.2,
   allowUnsafePageJs: false,
-  weComWebhookUrl: "",
+  disclosures: {
+    productVersion: 0,
+    productAcceptedAt: 0,
+    externalProviders: {}
+  },
   wechatBridgeEnabled: false,
   channels: {
     wechat: {
@@ -138,7 +145,7 @@ const BUILTIN_TOOLS = [
   },
   {
     name: "run_js",
-    description: "Execute inline JavaScript or a .js, .mjs, or .cjs file from the virtual filesystem in the active page. Requires Allow agent JavaScript execution. Provide exactly one of code or vfsPath.",
+    description: "Execute inline JavaScript or a .js, .mjs, or .cjs file from the virtual filesystem in the active page. Requires the setting plus explicit approval. Ad-hoc calls require approval every time; an exact scheduled operation can reuse a saved approval. Provide exactly one of code or vfsPath.",
     example: { tool: { name: "run_js", args: { vfsPath: "/workspace/test.js" } } }
   },
   {
@@ -162,9 +169,9 @@ const BUILTIN_TOOLS = [
     example: { tool: { name: "http_request", args: { url: "https://example.com/webhook", method: "POST", json: { text: "hello" } } } }
   },
   {
-    name: "send_wecom_message",
-    description: "Send a text or markdown message to the configured WeCom robot webhook.",
-    example: { tool: { name: "send_wecom_message", args: { content: "hello from WebClaw", msgtype: "text" } } }
+    name: "qiyewechat_notification",
+    description: "Send a text or markdown notification through the enterprise WeChat robot webhook configured on this tool.",
+    example: { tool: { name: "qiyewechat_notification", args: { content: "hello from WebClaw", msgtype: "text" } } }
   },
   {
     name: "chrome_api",
@@ -346,8 +353,13 @@ const PROTECTED_BUILTIN_TOOLS = new Set([
   "rollback_webclaw_config_patch"
 ]);
 const SELF_MANAGEMENT_TOOLS = new Set(PROTECTED_BUILTIN_TOOLS);
+const DEFAULT_DISABLED_BUILTIN_TOOLS = new Set([
+  ...SELF_MANAGEMENT_TOOLS,
+  "qiyewechat_notification"
+]);
 
 const CODEX_CLIENT_VERSION = "0.142.0";
+const WEBCLAW_VERSION = chrome.runtime.getManifest().version;
 const CHROME_AI_OFFSCREEN_URL = "src/chrome-ai-offscreen.html";
 const WECHAT_BRIDGE_RECONNECT_MS = 3000;
 const WECHAT_BRIDGE_KEEPALIVE_MS = 20000;
@@ -355,6 +367,7 @@ const TELEGRAM_POLL_TIMEOUT_SEC = 25;
 const TELEGRAM_RETRY_MS = 3000;
 const CODEX_MEDIA_MAX_BYTES = 25 * 1024 * 1024;
 const WECHAT_BRIDGE_ALARM = "WEBCLAW_WECHAT_BRIDGE_ALARM";
+const CODEX_DEVICE_ALARM = "WEBCLAW_CODEX_DEVICE_ALARM";
 const GITHUB_COPILOT_DEVICE_ALARM = "WEBCLAW_GITHUB_COPILOT_DEVICE_ALARM";
 const SCHEDULE_ALARM = "WEBCLAW_SCHEDULE_ALARM";
 const SCHEDULE_CHECK_PERIOD_MINUTES = 1;
@@ -366,6 +379,12 @@ const CHROME_AI_PAGE_CONTEXT_INTERACTIVE_ITEMS = 35;
 const DEFAULT_PAGE_CONTEXT_TEXT_CHARS = 12000;
 const DEFAULT_PAGE_CONTEXT_INTERACTIVE_ITEMS = 120;
 const CHAT_SESSIONS_KEY = "webclawChatSessions";
+const CHANNEL_AUTH_ROUTES_KEY = "webclawChannelAuthorizationRoutes";
+const OPERATION_APPROVAL_GRANTS_KEY = "webclawOperationApprovalGrants";
+const DEVICE_AUTH_UI_KEY_PREFIX = "webclawDeviceAuthorizationUi:";
+const REMOTE_APPROVAL_TIMEOUT_MS = 10 * 60 * 1000;
+const MAX_CHANNEL_AUTH_ROUTES = 20;
+const MAX_OPERATION_APPROVAL_GRANTS = 200;
 const MAX_STORED_CHAT_MESSAGES = 200;
 const MAX_STORED_SESSIONS = 80;
 
@@ -382,6 +401,7 @@ const telegramStatusesByChannel = new Map();
 const telegramRuntimesByChannel = new Map();
 let wechatBridgeReconnectTimer = null;
 let wechatBridgeKeepAliveTimer = null;
+let codexDevicePollBusy = false;
 let githubCopilotDevicePollBusy = false;
 let scheduleRunnerBusy = false;
 const pendingWechatMessages = [];
@@ -389,6 +409,13 @@ const chromeAIRequests = new Map();
 const wechatAgentQueue = [];
 const wechatAgentHistoryByPeer = new Map();
 const wechatAgentEvents = [];
+const pendingChannelApprovals = new Map();
+const codexAuthorizationFlows = new Map();
+const codexDevicePollRequests = new Map();
+const githubCopilotDevicePollRequests = new Map();
+const deviceAuthorizationUiContexts = new Map();
+let channelAuthorizationRouteWriteQueue = Promise.resolve();
+let operationApprovalGrantWriteQueue = Promise.resolve();
 let wechatAgentBusy = false;
 
 const TOOL_TRAJECTORY_PREFIX = "WEBCLAW_TOOL_TRAJECTORY ";
@@ -406,7 +433,7 @@ const WORKSPACE_BOOTSTRAP_LEGACY_TEMPLATES = {
 const WORKSPACE_BOOTSTRAP_TEMPLATES = {
   "AGENTS.md": `# WebClaw Workspace\n\n## Operating model\nWebClaw is a browser AI agent. It works through enabled Tools, Skills, Channels, Schedules, the local knowledge base, and the virtual filesystem (VFS). Core system policy and tool permissions always take precedence over workspace instructions.\n\n## Workflow\n1. Understand the current user goal and inspect the relevant page or VFS file before acting.\n2. Prefer existing Tools and Skills. Use a Skill for reusable guidance; use a Tool for deterministic actions.\n3. For questions about imported material, use knowledge_search then knowledge_read. Cite the returned VFS path and do not claim support from a source you did not retrieve.\n4. Verify tool results. Never claim a browser action, message delivery, file change, or network request succeeded without a confirming result.\n5. Keep the active session coherent across side panel and connected channels. Use prior successful tool trajectories as verified examples, especially after switching providers.\n\n## Workspace discipline\n- Read a file before changing it. Use fs_edit or expectedVersion for existing files.\n- Put durable facts, decisions, constraints, and open loops in MEMORY.md. Put dated working notes in memory/YYYY-MM-DD.md.\n- Put source files in /workspace/knowledge and index text material with knowledge_ingest. The index is local metadata and chunks; the original source remains in VFS.\n- Put reusable website or task instructions in Skills; put stable page parsing logic in VFS JavaScript only when normal Tools are insufficient.\n- Never store passwords, OAuth tokens, cookies, API keys, private message contents, or other secrets in workspace memory.`,
   "SOUL.md": `# Soul\n\nWebClaw is calm, practical, precise, and honest about uncertainty. It acts only when an action clearly follows from the user request and reports outcomes grounded in tool results.\n\nUse the user's language when practical. Prefer concise answers with concrete next steps. Avoid inventing page state, external facts, completed actions, or capabilities. When an action is risky, irreversible, public, or sends a message, verify the target and content first.\n\nLearn from successful work without blindly repeating it: reuse verified tool argument patterns, and use errors to correct the next call.`,
-  "TOOLS.md": `# Tool Notes\n\n## Browser\nUse get_page_context before unfamiliar page interaction. Prefer click/type_text/navigate over run_js. Use run_js only for logic normal Tools cannot express; it can execute inline code or a VFS .js file in the active page.\n\n## VFS and knowledge\n/workspace is durable agent context. /workspace/knowledge holds source files, while the local knowledge index stores only chunks and metadata. Use knowledge_ingest for text sources, knowledge_search for retrieval, and knowledge_read for additional context. /inbox stores channel media, /skills stores reusable scripts or references, and /exports stores output. fs_delete and rm move items to /.trash; restore or permanently purge them deliberately.\n\n## Network and messaging\nUse search_web for current facts, get_weather for weather, and background http_request for cross-origin requests. send_wecom_message uses the configured webhook. Connected Channels receive and reply through the active chat session.\n\n## Configuration\nTools, Skills, Schedules, Providers, and Channels are configuration-managed. Inspect configuration first, propose a validated patch, then apply it. Do not invent direct chrome.storage writes.\n\n## Recovery\nFor TOOL_RESULT ok:false, read the error and supplied valid example, then correct arguments or choose another approach. Never repeat an invalid call unchanged.`,
+  "TOOLS.md": `# Tool Notes\n\n## Browser\nUse get_page_context before unfamiliar page interaction. Prefer click/type_text/navigate over run_js. Use run_js only for logic normal Tools cannot express; it can execute inline code or a VFS .js file in the active page. Ad-hoc run_js calls require approval every time. An exact scheduled run_js operation can reuse a saved approval only while its Schedule, target URL, execution world, and code remain unchanged.\n\n## VFS and knowledge\n/workspace is durable agent context. /workspace/knowledge holds source files, while the local knowledge index stores only chunks and metadata. Use knowledge_ingest for text sources, knowledge_search for retrieval, and knowledge_read for additional context. /inbox stores channel media, /skills stores reusable scripts or references, and /exports stores output. fs_delete and rm move items to /.trash; restore or permanently purge them deliberately.\n\n## Network and messaging\nUse search_web for current facts, get_weather for weather, and background http_request for cross-origin requests. qiyewechat_notification uses the webhook configured on that Tool. Connected Channels receive and reply through the active chat session.\n\n## Configuration\nTools, Skills, Schedules, Providers, and Channels are configuration-managed. Self-management and Schedules are optional advanced features. Inspect configuration first, propose a validated patch, then apply it. Do not invent direct chrome.storage writes.\n\n## Recovery\nFor TOOL_RESULT ok:false, read the error and supplied valid example, then correct arguments or choose another approach. Never repeat an invalid call unchanged.`,
   "IDENTITY.md": `# Identity\n\nName: WebClaw\nRole: A Chrome extension AI agent with browser tools, connected chat channels, model providers, schedules, and a virtual filesystem.\n\nWebClaw operates within Chrome extension permissions and configured services. VFS scripts and Skills can extend reusable workflows, but they cannot grant permissions that the extension does not have.`,
   "USER.md": `# User Preferences\n\nRecord only durable preferences that the user explicitly states or repeatedly demonstrates. Examples: preferred language, preferred output format, notification conventions, recurring project context, and risk tolerance.\n\nDo not infer sensitive personal data. Do not store credentials, access tokens, cookies, private media, or temporary one-off requests.`,
   "MEMORY.md": `# Long-Term Memory\n\n## What belongs here\n- Stable user preferences and working conventions\n- Confirmed project facts, decisions, constraints, and unresolved tasks\n- Reusable provider, channel, or workflow conventions that remain valid\n\n## What does not belong here\n- Raw chat transcripts, large page captures, tool dumps, secrets, tokens, cookies, passwords, or transient details\n\nKeep entries short, dated when useful, and remove stale information. Use daily files under memory/ for temporary execution notes before promoting durable facts here.`
@@ -431,11 +458,12 @@ WebClaw supports local Ollama, OpenAI-compatible endpoints, Codex/ChatGPT OAuth,
 - Configure Providers in Settings and select the active provider.
 - Refresh the provider model list before selecting a model when the provider supports discovery.
 - Copilot Auto is server-side automatic selection: do not send a literal unsupported model name when Auto is selected.
+- Codex device login can start from the side panel or the originating Channel. Issued access and refresh tokens are reused until sign-out, revocation, or refresh failure.
 - Use a capable online model for exploration and planning, then a local model for follow-up execution with the same session history.
 - Thinking mode is provider-specific. It may improve planning but costs more latency and tokens.
 
 ## 4. Browser operations
-Use normal browser tools before run_js.
+Use normal browser tools before run_js. Ad-hoc run_js calls require approval every time. An exact scheduled operation may reuse a saved approval until its Schedule, target URL, execution world, or code changes.
 
 1. get_page_context: inspect URL, title, selected/visible text, and interactive selectors. Use compact mode for small-context models.
 2. click: click a CSS selector.
@@ -466,7 +494,7 @@ run_js requires the Allow agent JavaScript execution setting.
 - search_web: use for current facts, then inspect results and reliable pages before answering.
 - get_weather: direct weather lookup for a location.
 - http_request: request HTTP/HTTPS from the extension background. Use it for APIs or webhooks instead of page fetch when CORS would block page JavaScript.
-- send_wecom_message: send text or markdown through the configured WeCom robot webhook.
+- qiyewechat_notification: send text or markdown through the enterprise WeChat robot webhook configured on that Tool.
 
 Example webhook request:
 {"tool":{"name":"http_request","args":{"url":"https://example.com/webhook","method":"POST","json":{"msgtype":"text","text":{"content":"Hello"}}}}}
@@ -533,12 +561,13 @@ For reusable page logic, store a small JavaScript file in VFS and call it throug
 - Every connected Channel is on standby. Multiple channels can coexist; their incoming messages retain channel and peer identity but use the active session.
 - WeChat runs through the internal browser bridge and may require QR login. Telegram uses a Bot Token and replies to the chat that sent the message.
 - Channel attachments are saved to /inbox before the agent handles the message. Use VFS paths and media context when supported by the active provider.
+- A Channel authorization prompt is bound to its Channel and peer. Reply with the supplied allow or deny code before it expires; new Chrome origin permissions still require a local browser click.
 - WeCom robot webhook is for outbound notifications, not an interactive channel.
 
 Before sending a message externally, verify destination, summary, format, and whether the user asked to send it.
 
 ## 12. Schedules
-Schedules use natural-language or supported cron-like expressions and run through Chrome alarms while the extension is available. Create schedules for recurring retrieval, summaries, or notifications. Keep their instructions specific, avoid duplicate sends, and use durable files or knowledge sources for state when needed.
+Schedules use natural-language or supported cron-like expressions and run through Chrome alarms while the extension is available. Create schedules for recurring retrieval, summaries, or notifications. Keep their instructions specific, avoid duplicate sends, and use durable files or knowledge sources for state when needed. An exact scheduled run_js operation can reuse its first saved approval; changing its Schedule, full target URL, execution world, or code requires approval again. Saved scheduled approvals can be cleared in Settings.
 
 ## 13. Error recovery
 When a TOOL_RESULT has ok:false:
@@ -571,7 +600,7 @@ You can use tools by replying with exactly one JSON object and no extra prose:
 {"tool":{"name":"search_web","args":{"query":"today Beijing weather"}}}
 {"tool":{"name":"get_weather","args":{"location":"Beijing","language":"zh"}}}
 {"tool":{"name":"http_request","args":{"url":"https://example.com/webhook","method":"POST","json":{"msgtype":"text","text":{"content":"hello"}}}}}
-{"tool":{"name":"send_wecom_message","args":{"content":"hello from WebClaw","msgtype":"text"}}}
+{"tool":{"name":"qiyewechat_notification","args":{"content":"hello from WebClaw","msgtype":"text"}}}
 {"tool":{"name":"chrome_api","args":{"operation":"get_current_tab"}}}
 {"tool":{"name":"wait","args":{"ms":1000}}}
 {"tool":{"name":"fs_shell","args":{"command":"ls /workspace"}}}
@@ -724,11 +753,19 @@ initializeWorkspaceDefaults();
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   const settings = await ensureSettings();
   if (alarm.name === WECHAT_BRIDGE_ALARM) {
-    if (enabledChannels(settings).length > 0) syncWechatBridge(settings);
+    if (hasAcceptedProductDisclosure(settings) && enabledChannels(settings).length > 0) syncWechatBridge(settings);
+    return;
+  }
+  if (alarm.name === CODEX_DEVICE_ALARM) {
+    if (hasAcceptedProductDisclosure(settings)) {
+      pollPendingCodexDeviceLogins(settings).catch(() => {});
+    }
     return;
   }
   if (alarm.name === GITHUB_COPILOT_DEVICE_ALARM) {
-    pollPendingGitHubCopilotDeviceLogins(settings).catch(() => {});
+    if (hasAcceptedProductDisclosure(settings)) {
+      pollPendingGitHubCopilotDeviceLogins(settings).catch(() => {});
+    }
     return;
   }
   if (alarm.name === SCHEDULE_ALARM) {
@@ -758,7 +795,28 @@ chrome.runtime.onConnect.addListener((port) => {
 
 function handleAgentStreamPort(port) {
   const controller = new AbortController();
+  const pendingApprovals = new Map();
   let started = false;
+  const requestApproval = (approval) => new Promise((resolve, reject) => {
+    if (controller.signal.aborted) {
+      reject(new Error("Stopped"));
+      return;
+    }
+    const requestId = crypto.randomUUID();
+    const abort = () => {
+      pendingApprovals.delete(requestId);
+      reject(new Error("Stopped"));
+    };
+    controller.signal.addEventListener("abort", abort, { once: true });
+    pendingApprovals.set(requestId, {
+      resolve: (value) => {
+        controller.signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      reject
+    });
+    safePortPost(port, { type: "approval_request", requestId, approval });
+  });
   port.onMessage.addListener((message) => {
     if (message?.type === "ping") {
       safePortPost(port, { type: "pong" });
@@ -768,14 +826,34 @@ function handleAgentStreamPort(port) {
       controller.abort();
       return;
     }
-    if (message?.type !== "start" || started) return;
+    if (message?.type === "approval_response") {
+      const pending = pendingApprovals.get(String(message.requestId || ""));
+      if (!pending) return;
+      pendingApprovals.delete(String(message.requestId || ""));
+      pending.resolve({
+        approved: message.approved === true,
+        remember: message.remember === true,
+        error: String(message.error || "")
+      });
+      return;
+    }
+    if (!["start", "start_schedule"].includes(message?.type) || started) return;
     started = true;
-    runAgent(message.messages || [], {
+    const streamOptions = {
       signal: controller.signal,
-      onDelta: (delta) => safePortPost(port, { type: "delta", delta }),
+      requestApproval,
+      authorizationMode: "sidepanel",
+      onAuthorizationChallenge: (challenge) => safePortPost(port, { type: "authorization_challenge", challenge }),
+      onDelta: message.type === "start_schedule"
+        ? null
+        : (delta) => safePortPost(port, { type: "delta", delta }),
       onToolCall: (tool) => safePortPost(port, { type: "tool_call", tool }),
       onStatus: (text) => safePortPost(port, { type: "status", text })
-    })
+    };
+    const task = message.type === "start_schedule"
+      ? runScheduleNow(message.scheduleId, streamOptions)
+      : runAgent(message.messages || [], streamOptions);
+    task
       .then((result) => safePortPost(port, {
         type: "final",
         final: result.final,
@@ -783,7 +861,10 @@ function handleAgentStreamPort(port) {
       }))
       .catch((error) => safePortPost(port, { type: "error", error: normalizeError(error) }));
   });
-  port.onDisconnect.addListener(() => controller.abort());
+  port.onDisconnect.addListener(() => {
+    controller.abort();
+    pendingApprovals.clear();
+  });
 }
 
 function safePortPost(port, message) {
@@ -845,7 +926,7 @@ function handleChromeAIRuntimeMessage(message) {
   return true;
 }
 
-async function handleMessage(message) {
+async function handleMessage(message, sender) {
   switch (message?.type) {
     case "WEBCLAW_OPEN_AUXILIARY_WINDOW":
       return { ok: true, result: await openAuxiliaryWindow(message.view) };
@@ -898,13 +979,25 @@ async function handleMessage(message) {
     case "WEBCLAW_DISCOVER_CODEX_OAUTH":
       return { ok: true, settings: await discoverCodexOAuth(message.providerId) };
     case "WEBCLAW_START_CODEX_DEVICE_LOGIN":
-      return { ok: true, result: await startCodexDeviceLogin(message.providerId) };
+      return {
+        ok: true,
+        result: await startCodexDeviceLogin(message.providerId, {
+          openMode: "popup",
+          ownerWindowId: sender?.tab?.windowId
+        })
+      };
     case "WEBCLAW_POLL_CODEX_DEVICE_LOGIN":
       return { ok: true, result: await pollCodexDeviceLogin(message.providerId) };
     case "WEBCLAW_CLEAR_CODEX_TOKEN":
       return { ok: true, settings: await clearCodexToken(message.providerId) };
     case "WEBCLAW_START_GITHUB_COPILOT_DEVICE_LOGIN":
-      return { ok: true, result: await startGitHubCopilotDeviceLogin(message.providerId) };
+      return {
+        ok: true,
+        result: await startGitHubCopilotDeviceLogin(message.providerId, {
+          openMode: "popup",
+          ownerWindowId: sender?.tab?.windowId
+        })
+      };
     case "WEBCLAW_POLL_GITHUB_COPILOT_DEVICE_LOGIN":
       return { ok: true, result: await pollGitHubCopilotDeviceLogin(message.providerId) };
     case "WEBCLAW_CLEAR_GITHUB_COPILOT_TOKEN":
@@ -913,6 +1006,9 @@ async function handleMessage(message) {
       return { ok: true, result: await listProviderModels(message.providerId, message.provider) };
     case "WEBCLAW_RUN_SCHEDULE":
       return { ok: true, result: await runScheduleNow(message.scheduleId) };
+    case "WEBCLAW_CLEAR_OPERATION_APPROVAL_GRANTS":
+      await clearOperationApprovalGrants();
+      return { ok: true };
     case "WEBCLAW_AGENT_MESSAGE":
       return { ok: true, result: await runAgent(message.messages || []) };
     default:
@@ -945,6 +1041,7 @@ async function ensureSettings() {
   await chrome.storage.local.set({ settings });
   syncWechatBridge(settings);
   ensureWechatBridgeAlarm(settings);
+  ensureCodexDeviceAlarm(settings);
   ensureGitHubCopilotDeviceAlarm(settings);
   ensureScheduleAlarm(settings);
   return settings;
@@ -956,6 +1053,7 @@ async function saveSettings(patch) {
   await chrome.storage.local.set({ settings });
   syncWechatBridge(settings);
   ensureWechatBridgeAlarm(settings);
+  ensureCodexDeviceAlarm(settings);
   ensureGitHubCopilotDeviceAlarm(settings);
   ensureScheduleAlarm(settings);
   return settings;
@@ -1006,10 +1104,10 @@ function normalizeSettings(raw) {
     maxSteps: clampNumber(migrated.maxSteps, 1, 24, DEFAULT_SETTINGS.maxSteps),
     temperature: clampNumber(migrated.temperature, 0, 2, DEFAULT_SETTINGS.temperature),
     allowUnsafePageJs: Boolean(migrated.allowUnsafePageJs),
-    weComWebhookUrl: String(migrated.weComWebhookUrl || ""),
+    disclosures: normalizeDisclosures(migrated.disclosures),
     wechatBridgeEnabled: normalizedChannels.wechat.enabled,
     channels: normalizedChannels,
-    tools: normalizeTools(migrated.tools),
+    tools: normalizeTools(migrated.tools, { legacyWeComWebhookUrl: migrated.weComWebhookUrl }),
     skills: normalizeSkills(migrated.skills),
     schedules: normalizeSchedules(migrated.schedules),
     pendingConfigPatches: normalizeConfigPatches(migrated.pendingConfigPatches),
@@ -1210,19 +1308,26 @@ function normalizeSelfConfigName(value) {
     .slice(0, 64);
 }
 
-function normalizeTools(value) {
+function normalizeTools(value, options = {}) {
   const rawTools = Array.isArray(value) ? value : [];
   const byName = new Map(rawTools.map((tool) => [String(tool?.name || ""), tool]));
   const tools = BUILTIN_TOOLS.map((definition) => {
-    const raw = byName.get(definition.name) || {};
+    const matched = byName.get(definition.name) || (
+      definition.name === "qiyewechat_notification" ? byName.get("send_wecom_message") : null
+    );
+    const raw = matched || {};
     return {
       id: definition.name,
       name: definition.name,
       title: String(raw.title || definition.name),
       type: "builtin",
       description: String(raw.description || definition.description),
-      enabled: raw.enabled !== false,
-      builtin: true
+      enabled: matched ? raw.enabled !== false : !DEFAULT_DISABLED_BUILTIN_TOOLS.has(definition.name),
+      builtin: true,
+      advanced: SELF_MANAGEMENT_TOOLS.has(definition.name),
+      config: definition.name === "qiyewechat_notification"
+        ? { webhookUrl: String(raw.config?.webhookUrl || options.legacyWeComWebhookUrl || "") }
+        : {}
     };
   });
   for (const raw of rawTools) {
@@ -1241,6 +1346,27 @@ function normalizeTools(value) {
     });
   }
   return tools;
+}
+
+function normalizeDisclosures(value) {
+  const raw = value && typeof value === "object" ? value : {};
+  const externalProviders = raw.externalProviders && typeof raw.externalProviders === "object"
+    ? Object.fromEntries(
+        Object.entries(raw.externalProviders)
+          .filter(([id, acceptedAt]) => id && Number(acceptedAt) > 0)
+          .map(([id, acceptedAt]) => [String(id), Number(acceptedAt)])
+      )
+    : {};
+  return {
+    productVersion: Number(raw.productVersion || 0),
+    productAcceptedAt: Number(raw.productAcceptedAt || 0),
+    externalProviders
+  };
+}
+
+function hasAcceptedProductDisclosure(settings) {
+  const disclosures = normalizeDisclosures(settings?.disclosures);
+  return disclosures.productVersion >= PRODUCT_DISCLOSURE_VERSION && disclosures.productAcceptedAt > 0;
 }
 
 function normalizeCustomToolConfig(config) {
@@ -1333,19 +1459,30 @@ function migrateLegacySettings(raw) {
 }
 
 function syncWechatBridge(settings) {
-  const channels = enabledWechatChannels(settings);
+  const disclosureAccepted = hasAcceptedProductDisclosure(settings);
+  const runtimeSettings = disclosureAccepted
+    ? settings
+    : {
+        ...settings,
+        wechatBridgeEnabled: false,
+        channels: Object.fromEntries(
+          Object.entries(normalizeChannels(settings)).map(([id, channel]) => [id, { ...channel, enabled: false }])
+        )
+      };
+  const channels = enabledWechatChannels(runtimeSettings);
+  const activeChannels = enabledChannels(runtimeSettings);
   wechatBridgeStatus = {
     ...wechatBridgeStatus,
-    enabled: enabledChannels(settings).length > 0,
-    channelId: enabledChannels(settings).map((channel) => channel.id).join(","),
+    enabled: activeChannels.length > 0,
+    channelId: activeChannels.map((channel) => channel.id).join(","),
     url: "chrome.storage.local"
   };
   if (channels.length === 0) {
-    disconnectWechatBridge("Disabled").catch(() => {});
+    disconnectWechatBridge(disclosureAccepted ? "Disabled" : "Disclosure required").catch(() => {});
   } else {
-    connectWechatBridge(settings).catch(() => {});
+    connectWechatBridge(runtimeSettings).catch(() => {});
   }
-  syncTelegramChannels(settings);
+  syncTelegramChannels(runtimeSettings);
 }
 
 function updateWechatBridgeStatuses(payload) {
@@ -1365,16 +1502,25 @@ function updateWechatBridgeStatuses(payload) {
 
 function ensureWechatBridgeAlarm(settings) {
   if (!chrome.alarms?.create) return;
-  if (enabledChannels(settings).length > 0) {
+  if (hasAcceptedProductDisclosure(settings) && enabledChannels(settings).length > 0) {
     chrome.alarms.create(WECHAT_BRIDGE_ALARM, { periodInMinutes: 1 });
   } else {
     chrome.alarms.clear(WECHAT_BRIDGE_ALARM);
   }
 }
 
+function ensureCodexDeviceAlarm(settings) {
+  if (!chrome.alarms?.create) return;
+  if (hasAcceptedProductDisclosure(settings) && pendingCodexDeviceProviders(settings).length > 0) {
+    chrome.alarms.create(CODEX_DEVICE_ALARM, { periodInMinutes: 0.5 });
+  } else {
+    chrome.alarms.clear(CODEX_DEVICE_ALARM);
+  }
+}
+
 function ensureGitHubCopilotDeviceAlarm(settings) {
   if (!chrome.alarms?.create) return;
-  if (pendingGitHubCopilotDeviceProviders(settings).length > 0) {
+  if (hasAcceptedProductDisclosure(settings) && pendingGitHubCopilotDeviceProviders(settings).length > 0) {
     chrome.alarms.create(GITHUB_COPILOT_DEVICE_ALARM, { periodInMinutes: 1 });
   } else {
     chrome.alarms.clear(GITHUB_COPILOT_DEVICE_ALARM);
@@ -1383,7 +1529,7 @@ function ensureGitHubCopilotDeviceAlarm(settings) {
 
 function ensureScheduleAlarm(settings) {
   if (!chrome.alarms?.create) return;
-  if (normalizeSchedules(settings?.schedules).some((schedule) => schedule.enabled)) {
+  if (hasAcceptedProductDisclosure(settings) && normalizeSchedules(settings?.schedules).some((schedule) => schedule.enabled)) {
     chrome.alarms.create(SCHEDULE_ALARM, { periodInMinutes: SCHEDULE_CHECK_PERIOD_MINUTES });
   } else {
     chrome.alarms.clear(SCHEDULE_ALARM);
@@ -1395,6 +1541,15 @@ function pendingGitHubCopilotDeviceProviders(settings) {
     provider?.type === "github-copilot-oauth" &&
     !provider.config?.githubAccessToken &&
     provider.config?.deviceCode &&
+    provider.config?.userCode
+  ));
+}
+
+function pendingCodexDeviceProviders(settings) {
+  return (Array.isArray(settings?.providers) ? settings.providers : []).filter((provider) => (
+    provider?.type === "codex-oauth" &&
+    !provider.config?.accessToken &&
+    provider.config?.deviceAuthId &&
     provider.config?.userCode
   ));
 }
@@ -1488,6 +1643,7 @@ async function runDueSchedules(baseSettings) {
   try {
     const stored = await chrome.storage.local.get("settings");
     const settings = normalizeSettings(stored.settings || baseSettings || {});
+    if (!hasAcceptedProductDisclosure(settings)) return;
     const now = Date.now();
     const schedules = normalizeSchedules(settings.schedules);
     let changed = false;
@@ -1546,18 +1702,31 @@ async function runDueSchedules(baseSettings) {
   }
 }
 
-async function executeSchedule(schedule, settings) {
+async function executeSchedule(schedule, settings, options = {}) {
   const title = schedule.title || schedule.name;
+  let authorizationOptions = options;
+  if (typeof options.requestApproval !== "function") {
+    const route = await latestChannelAuthorizationRoute(settings);
+    authorizationOptions = route ? createChannelAuthorizationOptions(route) : options;
+  }
   const content = [
     `Scheduled task: ${title}`,
     `Schedule expression: ${schedule.expression}`,
     "",
     schedule.instruction
   ].join("\n");
-  return runAgent([{ role: "user", content }], { settingsOverride: settings });
+  return runAgent([{ role: "user", content }], {
+    ...authorizationOptions,
+    settingsOverride: settings,
+    authorizationScope: {
+      type: "schedule",
+      id: String(schedule.id || schedule.name),
+      title
+    }
+  });
 }
 
-async function runScheduleNow(scheduleId) {
+async function runScheduleNow(scheduleId, options = {}) {
   const stored = await chrome.storage.local.get("settings");
   const settings = normalizeSettings(stored.settings || {});
   const schedules = normalizeSchedules(settings.schedules);
@@ -1567,7 +1736,7 @@ async function runScheduleNow(scheduleId) {
   if (!nextScheduleRun(schedule.expression, Date.now())) throw new Error("Schedule expression is invalid.");
 
   try {
-    const result = await executeSchedule(schedule, settings);
+    const result = await executeSchedule(schedule, settings, options);
     schedule.lastRunAt = Date.now();
     schedule.nextRunAt = Number(schedule.nextRunAt || 0) > Date.now()
       ? schedule.nextRunAt
@@ -1600,6 +1769,9 @@ async function persistSchedules(baseSettings, schedules) {
 }
 
 async function connectWechatBridge(settings, options = {}) {
+  if (!hasAcceptedProductDisclosure(settings)) {
+    throw new Error("Accept WebClaw's in-product privacy disclosure before connecting Channels.");
+  }
   const channels = options.channelId
     ? enabledWechatChannels(settings).filter((channel) => channel.id === options.channelId)
     : enabledWechatChannels(settings);
@@ -1985,6 +2157,12 @@ function handleIncomingChannelMessage(payload) {
     pendingCount: pendingWechatMessages.length,
     lastEventAt: Date.now()
   };
+  rememberChannelAuthorizationRoute(normalized).catch(() => {});
+  if (resolvePendingChannelApproval(normalized)) {
+    ackPendingWechatMessage(normalized.queueId);
+    broadcastWechatBridgeStatus();
+    return;
+  }
   chrome.runtime.sendMessage({
     type: "WEBCLAW_WECHAT_INCOMING",
     payload: normalized
@@ -2014,6 +2192,186 @@ function ackPendingWechatMessage(queueId) {
     pendingCount: pendingWechatMessages.length,
     lastEventAt: Date.now()
   };
+}
+
+function channelAuthorizationRoute(payload) {
+  return {
+    channelType: String(payload?.channelType || "channel"),
+    channelId: String(payload?.channelId || "wechat"),
+    peerId: String(payload?.peerId || ""),
+    accountId: String(payload?.accountId || ""),
+    contextToken: String(payload?.contextToken || ""),
+    updatedAt: Number(payload?.updatedAt || payload?.timestamp || Date.now()) || Date.now()
+  };
+}
+
+function rememberChannelAuthorizationRoute(payload) {
+  const route = channelAuthorizationRoute(payload);
+  if (!route.channelId || !route.peerId) return Promise.resolve();
+  channelAuthorizationRouteWriteQueue = channelAuthorizationRouteWriteQueue
+    .catch(() => {})
+    .then(async () => {
+      const stored = await chrome.storage.local.get(CHANNEL_AUTH_ROUTES_KEY);
+      const routes = normalizeChannelAuthorizationRoutes(stored[CHANNEL_AUTH_ROUTES_KEY]);
+      const key = `${route.channelId}:${route.peerId}`;
+      const next = [
+        route,
+        ...routes.filter((item) => `${item.channelId}:${item.peerId}` !== key)
+      ].slice(0, MAX_CHANNEL_AUTH_ROUTES);
+      await chrome.storage.local.set({ [CHANNEL_AUTH_ROUTES_KEY]: next });
+    });
+  return channelAuthorizationRouteWriteQueue;
+}
+
+function normalizeChannelAuthorizationRoutes(value) {
+  return (Array.isArray(value) ? value : [])
+    .map((item) => channelAuthorizationRoute(item))
+    .filter((item) => item.channelId && item.peerId)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, MAX_CHANNEL_AUTH_ROUTES);
+}
+
+async function latestChannelAuthorizationRoute(settings) {
+  await channelAuthorizationRouteWriteQueue.catch(() => {});
+  const stored = await chrome.storage.local.get(CHANNEL_AUTH_ROUTES_KEY);
+  const routes = normalizeChannelAuthorizationRoutes(stored[CHANNEL_AUTH_ROUTES_KEY]);
+  const channels = normalizeChannels(settings);
+  return routes.find((route) => channels[route.channelId]?.enabled) || null;
+}
+
+function createChannelAuthorizationOptions(route) {
+  const sourceRoute = route && typeof route === "object" ? route : null;
+  const normalizedRoute = channelAuthorizationRoute(route);
+  return {
+    authorizationMode: "channel",
+    requestApproval: async (approval) => {
+      const result = await requestChannelApproval(normalizedRoute, approval);
+      if (sourceRoute) Object.assign(sourceRoute, normalizedRoute);
+      return result;
+    },
+    onAuthorizationChallenge: (challenge) => sendChannelAuthorizationChallenge(normalizedRoute, challenge)
+  };
+}
+
+async function requestChannelApproval(route, approval) {
+  if (!route?.channelId || !route?.peerId) {
+    return { approved: false, error: "No Channel conversation is available for remote approval." };
+  }
+  const requestedOrigins = uniqueStrings(approval?.origins);
+  const missingOrigins = await missingOriginPermissions(requestedOrigins);
+  if (missingOrigins.length > 0) {
+    const error = `Chrome site access must be granted locally before remote approval: ${missingOrigins.join(", ")}`;
+    await sendAuthorizationChannelText(route, [
+      "WebClaw 需要浏览器本地授权",
+      "",
+      String(approval?.reason || "此操作需要访问新的网页或服务。"),
+      "",
+      `待授权域名：${missingOrigins.join(", ")}`,
+      "Chrome 的站点权限只能在运行 WebClaw 的浏览器中点击授予，Channel 回复不能代替该系统权限。请在浏览器中完成一次授权；同一域名后续不会重复询问。"
+    ].join("\n"));
+    return { approved: false, error };
+  }
+
+  const code = createRemoteApprovalCode();
+  const prompt = formatChannelApprovalPrompt(code, approval);
+  let resolveApproval;
+  const result = new Promise((resolve) => {
+    resolveApproval = resolve;
+  });
+  const timer = setTimeout(() => {
+    const pending = pendingChannelApprovals.get(code);
+    if (!pending) return;
+    pendingChannelApprovals.delete(code);
+    pending.resolve({ approved: false, error: "Remote approval timed out." });
+  }, REMOTE_APPROVAL_TIMEOUT_MS);
+  pendingChannelApprovals.set(code, {
+    code,
+    route,
+    approval,
+    resolve: resolveApproval,
+    timer
+  });
+  try {
+    await sendAuthorizationChannelText(route, prompt);
+  } catch (error) {
+    clearTimeout(timer);
+    pendingChannelApprovals.delete(code);
+    throw error;
+  }
+  return result;
+}
+
+function resolvePendingChannelApproval(payload) {
+  const match = String(payload?.text || "").trim().match(/^(授权|允许|approve|拒绝|deny)\s*([A-Z0-9]{6})$/i);
+  if (!match) return false;
+  const code = match[2].toUpperCase();
+  const pending = pendingChannelApprovals.get(code);
+  if (!pending) return false;
+  const route = channelAuthorizationRoute(payload);
+  if (route.channelId !== pending.route.channelId || route.peerId !== pending.route.peerId) return false;
+  pendingChannelApprovals.delete(code);
+  clearTimeout(pending.timer);
+  Object.assign(pending.route, route);
+  const approved = /^(授权|允许|approve)$/i.test(match[1]);
+  pending.resolve({
+    approved,
+    remember: approved && pending.approval?.rememberByDefault === true,
+    error: approved ? "" : "Remote approval was denied."
+  });
+  sendAuthorizationChannelText(
+    pending.route,
+    approved ? `已确认 WebClaw 授权 ${code}，正在继续原任务。` : `已拒绝 WebClaw 授权 ${code}。`
+  ).catch(() => {});
+  return true;
+}
+
+function createRemoteApprovalCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const bytes = crypto.getRandomValues(new Uint8Array(6));
+    const code = Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
+    if (!pendingChannelApprovals.has(code)) return code;
+  }
+  return crypto.randomUUID().replace(/-/g, "").slice(0, 6).toUpperCase();
+}
+
+function formatChannelApprovalPrompt(code, approval) {
+  const origins = uniqueStrings(approval?.origins);
+  const details = truncateText(String(approval?.details || ""), 2200);
+  return [
+    "WebClaw 授权请求",
+    "",
+    `操作：${String(approval?.title || "需要确认的操作")}`,
+    `原因：${String(approval?.reason || "请确认是否继续。")}`,
+    origins.length ? `目标：${origins.join(", ")}` : "",
+    details ? `\n详情：\n${details}` : "",
+    approval?.rememberByDefault ? "\n本次允许后，只会记住完全相同的定时操作；代码、目标或 Schedule 变化时会重新询问。" : "",
+    "",
+    `回复“授权 ${code}”允许，或回复“拒绝 ${code}”拒绝。`,
+    "授权请求 10 分钟后失效。"
+  ].filter(Boolean).join("\n");
+}
+
+async function sendChannelAuthorizationChallenge(route, challenge) {
+  const providerName = String(challenge?.providerName || "ChatGPT");
+  await sendAuthorizationChannelText(route, [
+    `${providerName} 登录授权`,
+    "",
+    `请打开：${String(challenge?.verificationUrl || "")}`,
+    `设备码：${String(challenge?.userCode || "")}`,
+    "",
+    "完成网页授权后，WebClaw 会自动检测登录结果并继续原任务。请勿把设备码发送给其他人。"
+  ].join("\n"));
+}
+
+function sendAuthorizationChannelText(route, text) {
+  return sendWechatBridgeMessage({
+    type: "authorization",
+    channelId: route.channelId,
+    peerId: route.peerId,
+    contextToken: route.contextToken,
+    text: String(text || "")
+  });
 }
 
 function enqueueWechatAgentMessage(payload) {
@@ -2057,7 +2415,7 @@ async function processWechatAgentQueue() {
       channelId,
       peerId
     });
-    const result = await runAgent(history);
+    const result = await runAgent(history, createChannelAuthorizationOptions(payload));
     if (result.toolTrajectory) {
       await appendChannelSessionMessage(payload, "tool", result.toolTrajectory.display, {
         modelContent: result.toolTrajectory.modelContent,
@@ -2406,6 +2764,12 @@ function normalizeProvider(provider) {
     ...structuredClone(PROVIDER_DEFAULTS[type]),
     ...(provider.config || {})
   };
+  if (type === "codex-oauth" && !String(config.clientId || "").trim()) {
+    config.clientId = PROVIDER_DEFAULTS["codex-oauth"].clientId;
+  }
+  if (type === "github-copilot-oauth" && !String(config.clientId || "").trim()) {
+    config.clientId = PROVIDER_DEFAULTS["github-copilot-oauth"].clientId;
+  }
   if (type === "github-copilot-oauth" && config.model === "gpt-4o-copilot") {
     config.model = PROVIDER_DEFAULTS["github-copilot-oauth"].model;
   }
@@ -2453,6 +2817,9 @@ async function runAgent(uiMessages, options = {}) {
     let shouldStreamContent = null;
     const content = await callModel(settings, messages, {
       signal: options.signal,
+      requestApproval: options.requestApproval,
+      authorizationMode: options.authorizationMode,
+      onAuthorizationChallenge: options.onAuthorizationChallenge,
       onDelta: (delta) => {
         streamedContent += delta;
         if (shouldStreamContent === null) {
@@ -2488,6 +2855,9 @@ async function runAgent(uiMessages, options = {}) {
     if (!toolDecision.execute) {
       const directContent = toolDecision.answer || await callModel(settings, directChatMessages(uiMessages), {
         signal: options.signal,
+        requestApproval: options.requestApproval,
+        authorizationMode: options.authorizationMode,
+        onAuthorizationChallenge: options.onAuthorizationChallenge,
         onDelta: options.onDelta
       });
       return agentResult(
@@ -2800,7 +3170,10 @@ async function decideToolExecution(settings, uiMessages, tool, options = {}) {
     { role: "system", content: TOOL_DECISION_SYSTEM_PROMPT },
     { role: "user", content: prompt }
   ], {
-    signal: options.signal
+    signal: options.signal,
+    requestApproval: options.requestApproval,
+    authorizationMode: options.authorizationMode,
+    onAuthorizationChallenge: options.onAuthorizationChallenge
   });
   const decision = parseJsonObject(content);
   if (typeof decision?.execute === "boolean") {
@@ -2819,6 +3192,7 @@ async function decideToolExecution(settings, uiMessages, tool, options = {}) {
 
 async function callModel(settings, messages, options = {}) {
   const provider = getActiveProvider(settings);
+  await ensureProviderDataAccess(settings, provider, options);
   if (provider.type === "ollama") {
     return callOllama(provider.config, settings, messages, options);
   }
@@ -2839,6 +3213,96 @@ async function callModel(settings, messages, options = {}) {
 
 function getActiveProvider(settings) {
   return findProvider(settings, settings.activeProviderId);
+}
+
+async function ensureProviderDataAccess(settings, provider, options = {}) {
+  const disclosures = normalizeDisclosures(settings.disclosures);
+  if (!hasAcceptedProductDisclosure(settings)) {
+    throw new Error("Review and accept WebClaw's in-product privacy disclosure before sending messages.");
+  }
+  const origins = providerOriginPatterns(provider);
+  const missingOrigins = await missingOriginPermissions(origins);
+  const external = isExternalModelProvider(provider);
+  const accepted = Number(disclosures.externalProviders[provider.id] || 0) > 0;
+
+  if (external && !accepted) {
+    const result = await requestInteractiveApproval(options, {
+      kind: "external_data",
+      title: `Allow data sharing with ${provider.name}`,
+      reason: "Your prompt and relevant active-session history will be sent directly from this browser to the selected model provider. Page content, files, media, and tool results are included only when needed for your request.",
+      details: `Provider type: ${provider.type}\nProvider: ${provider.name}\nWebClaw does not proxy this data through a WebClaw-operated server.`,
+      origins: missingOrigins,
+      allowLabel: "Accept and send"
+    });
+    if (!result.approved) {
+      throw new Error(result.error || `Data sharing with ${provider.name} was not approved.`);
+    }
+    await assertOriginPermissions(origins);
+    disclosures.externalProviders[provider.id] = Date.now();
+    settings.disclosures = disclosures;
+    await persistProviderDisclosure(provider.id, disclosures.externalProviders[provider.id]);
+    return;
+  }
+
+  if (missingOrigins.length > 0) {
+    const result = await requestInteractiveApproval(options, {
+      kind: "host_permission",
+      title: `Allow access to ${provider.name}`,
+      reason: external
+        ? "Chrome needs this origin permission to send your approved model request to the configured provider."
+        : "Chrome needs this origin permission to send your request to the configured local model service.",
+      origins: missingOrigins,
+      allowLabel: "Allow access"
+    });
+    if (!result.approved) throw new Error(result.error || `Access to ${provider.name} was not approved.`);
+    await assertOriginPermissions(origins);
+  }
+}
+
+function providerOriginPatterns(provider) {
+  if (!provider || provider.type === "chrome-ai") return [];
+  const config = provider.config || {};
+  let urls = [];
+  if (provider.type === "ollama" || provider.type === "openai-compatible") {
+    urls = [config.baseUrl];
+  } else if (provider.type === "codex-oauth") {
+    urls = [config.issuerUrl, config.authUrl, config.tokenUrl, config.baseUrl];
+  } else if (provider.type === "github-copilot-oauth") {
+    urls = [
+      config.deviceCodeUrl,
+      config.accessTokenUrl,
+      config.copilotTokenUrl,
+      config.baseUrl,
+      "https://api.github.com/"
+    ];
+  }
+  return uniqueStrings(urls.map(originPatternForUrl).filter(Boolean));
+}
+
+function isExternalModelProvider(provider) {
+  if (!provider || provider.type === "chrome-ai") return false;
+  if (provider.type !== "ollama" && provider.type !== "openai-compatible") return true;
+  try {
+    const hostname = new URL(provider.config?.baseUrl || "").hostname;
+    return !isLoopbackHostname(hostname);
+  } catch {
+    return true;
+  }
+}
+
+function isLoopbackHostname(hostname) {
+  const normalized = String(hostname || "").toLowerCase();
+  return normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    normalized === "::1" ||
+    normalized === "[::1]";
+}
+
+async function persistProviderDisclosure(providerId, acceptedAt) {
+  const stored = await chrome.storage.local.get("settings");
+  const current = normalizeSettings(stored.settings || {});
+  current.disclosures.externalProviders[String(providerId)] = Number(acceptedAt || Date.now());
+  await chrome.storage.local.set({ settings: current });
 }
 
 async function callOllama(config, settings, messages, options = {}) {
@@ -2971,9 +3435,14 @@ async function ensureChromeAIOffscreenDocument() {
 }
 
 async function callCodexOAuth(provider, settings, messages, options = {}) {
-  const codex = await ensureFreshCodexToken(settings, provider.id);
+  let codex = await ensureFreshCodexToken(settings, provider.id, options);
   if (!codex.baseUrl) throw new Error("Codex backend base URL is required.");
   if (!codex.model) throw new Error("Codex model is required.");
+  await ensureUrlPermission(
+    codex.baseUrl,
+    "WebClaw needs access to the current Codex endpoint to send this approved model request.",
+    options
+  );
   const instructions = messages
     .filter((message) => message.role === "system" || message.role === "developer")
     .map((message) => message.content)
@@ -2987,15 +3456,31 @@ async function callCodexOAuth(provider, settings, messages, options = {}) {
   if (!instructions) throw new Error("Codex instructions are required.");
   if (input.length === 0) throw new Error("Codex input is required.");
 
+  let response = await requestCodexResponse(codex, instructions, input, options);
+  if (response.status === 401) {
+    try {
+      await response.body?.cancel();
+    } catch {
+      // The unauthorized response may not expose a cancellable body.
+    }
+    const clearedSettings = await updateProviderConfig(provider.id, codexTokenResetPatch());
+    codex = await authorizeCodexForAgent(findProvider(clearedSettings, provider.id), options);
+    response = await requestCodexResponse(codex, instructions, input, options);
+  }
+  if (!response.ok) {
+    throw new Error(`Codex backend returned HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
+  }
+  return readResponseStream(response, options.onDelta);
+}
+
+function requestCodexResponse(codex, instructions, input, options = {}) {
   const headers = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${codex.accessToken}`,
     "OpenAI-Beta": "responsesapi-include-timing-metrics",
     "x-codex-installation-id": "webclaw"
   };
-  if (codex.accountId) {
-    headers["ChatGPT-Account-ID"] = codex.accountId;
-  }
+  if (codex.accountId) headers["ChatGPT-Account-ID"] = codex.accountId;
 
   const body = {
     model: codex.model,
@@ -3007,17 +3492,12 @@ async function callCodexOAuth(provider, settings, messages, options = {}) {
   if (supportsReasoningEffort(codex.model)) {
     body.reasoning = { effort: codex.thinking === false ? "low" : "medium" };
   }
-
-  const response = await fetch(`${trimSlash(codex.baseUrl)}/responses`, {
+  return fetch(`${trimSlash(codex.baseUrl)}/responses`, {
     method: "POST",
     headers,
     signal: options.signal,
     body: JSON.stringify(body)
   });
-  if (!response.ok) {
-    throw new Error(`Codex backend returned HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
-  }
-  return readResponseStream(response, options.onDelta);
 }
 
 async function buildCodexInputMessage(message) {
@@ -3093,13 +3573,18 @@ async function callGitHubCopilotOAuth(provider, settings, messages, options = {}
   const copilot = await ensureFreshGitHubCopilotToken(settings, provider.id);
   if (!copilot.baseUrl) throw new Error("GitHub Copilot base URL is required.");
   if (!copilot.model) throw new Error("GitHub Copilot model is required.");
+  await ensureUrlPermission(
+    copilot.baseUrl,
+    "WebClaw needs access to the Copilot endpoint returned for your authorized account before sending this model request.",
+    options
+  );
 
   const headers = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${copilot.copilotAccessToken}`,
     "Copilot-Integration-Id": copilot.integrationId || "vscode-chat",
-    "Editor-Version": "WebClaw/0.1.0",
-    "Editor-Plugin-Version": "WebClaw/0.1.0",
+    "Editor-Version": `WebClaw/${WEBCLAW_VERSION}`,
+    "Editor-Plugin-Version": `WebClaw/${WEBCLAW_VERSION}`,
     "OpenAI-Intent": "conversation-panel"
   };
   const body = {
@@ -3330,8 +3815,8 @@ async function listGitHubCopilotModels(settings, provider) {
       headers: {
         Authorization: `Bearer ${copilot.copilotAccessToken}`,
         "Copilot-Integration-Id": copilot.integrationId || "vscode-chat",
-        "Editor-Version": "WebClaw/0.1.0",
-        "Editor-Plugin-Version": "WebClaw/0.1.0",
+        "Editor-Version": `WebClaw/${WEBCLAW_VERSION}`,
+        "Editor-Plugin-Version": `WebClaw/${WEBCLAW_VERSION}`,
         "OpenAI-Intent": "conversation-panel"
       }
     })
@@ -3471,6 +3956,7 @@ function copilotAutoModelDetail() {
 }
 
 async function dispatchTool(name, args, settings, options = {}) {
+  if (name === "send_wecom_message") name = "qiyewechat_notification";
   const toolConfig = findEnabledTool(settings, name);
   if (!toolConfig) {
     throw new Error(`Tool is disabled or not configured: ${name}`);
@@ -3481,36 +3967,36 @@ async function dispatchTool(name, args, settings, options = {}) {
   switch (name) {
     case "get_page_context":
       return await compactPageContextForProvider(
-        await sendToActiveTab(pageContextRequestForProvider(settings, args)),
+        await sendToActiveTab(pageContextRequestForProvider(settings, args), options),
         settings,
         args
       );
     case "click":
-      return sendToActiveTab({ type: "WEBCLAW_CONTENT_CLICK", selector: required(args.selector, "selector") });
+      return sendToActiveTab({ type: "WEBCLAW_CONTENT_CLICK", selector: required(args.selector, "selector") }, options);
     case "type_text":
       return sendToActiveTab({
         type: "WEBCLAW_CONTENT_TYPE_TEXT",
         selector: required(args.selector, "selector"),
         text: String(args.text ?? ""),
         clear: args.clear !== false
-      });
+      }, options);
     case "run_js":
       if (!settings.allowUnsafePageJs) {
         throw new Error("JavaScript execution is disabled. Enable it in WebClaw settings first.");
       }
-      return runPageJavaScript(args);
+      return runPageJavaScript(args, options);
     case "translate_page":
-      return translatePage(settings, args);
+      return translatePage(settings, args, options);
     case "get_weather":
-      return getWeather(args);
+      return getWeather(args, options);
     case "search_web":
-      return searchWeb(args);
+      return searchWeb(args, options);
     case "http_request":
-      return httpRequest(args);
-    case "send_wecom_message":
-      return sendWeComMessage(settings, args);
+      return httpRequest(args, options);
+    case "qiyewechat_notification":
+      return sendQiyeWechatNotification(toolConfig, args, options);
     case "navigate":
-      return navigate(required(args.url, "url"));
+      return navigate(required(args.url, "url"), options);
     case "wait":
       await sleep(Math.min(Number(args.ms || 1000), 10000));
       return { ok: true, waitedMs: Math.min(Number(args.ms || 1000), 10000) };
@@ -3717,7 +4203,7 @@ async function runCustomTool(tool, args, settings, options = {}) {
       requestArgs.body = bodyText;
     }
   }
-  const result = await httpRequest(requestArgs);
+  const result = await httpRequest(requestArgs, options);
   if (result.body && result.body.length > config.responseLimit) {
     result.body = result.body.slice(0, config.responseLimit);
     result.truncated = true;
@@ -4229,12 +4715,135 @@ function parseJsonObjectOrEmpty(text, label) {
   return parsed;
 }
 
-async function sendToActiveTab(payload) {
+async function requestInteractiveApproval(options, approval) {
+  const missingOrigins = uniqueStrings(approval?.origins);
+  if (approval?.grantKey && missingOrigins.length === 0 && await hasOperationApprovalGrant(approval.grantKey)) {
+    return { approved: true, remembered: true };
+  }
+  if (typeof options?.requestApproval !== "function") {
+    throw new Error(
+      "This action needs interactive approval in the WebClaw side panel. Open the side panel, approve the disclosure or site access, then retry."
+    );
+  }
+  const result = await options.requestApproval(approval);
+  if (result?.approved && result?.remember && approval?.grantKey) {
+    await rememberOperationApprovalGrant(approval);
+  }
+  return result;
+}
+
+async function hasOperationApprovalGrant(key) {
+  await operationApprovalGrantWriteQueue.catch(() => {});
+  const stored = await chrome.storage.local.get(OPERATION_APPROVAL_GRANTS_KEY);
+  return normalizeOperationApprovalGrants(stored[OPERATION_APPROVAL_GRANTS_KEY])
+    .some((grant) => grant.key === String(key));
+}
+
+async function rememberOperationApprovalGrant(approval) {
+  const grant = {
+    key: String(approval.grantKey),
+    kind: String(approval.kind || "operation"),
+    title: String(approval.title || "Approved operation").slice(0, 160),
+    scope: String(approval.grantScope || "").slice(0, 240),
+    approvedAt: Date.now()
+  };
+  operationApprovalGrantWriteQueue = operationApprovalGrantWriteQueue
+    .catch(() => {})
+    .then(async () => {
+      const stored = await chrome.storage.local.get(OPERATION_APPROVAL_GRANTS_KEY);
+      const grants = normalizeOperationApprovalGrants(stored[OPERATION_APPROVAL_GRANTS_KEY]);
+      await chrome.storage.local.set({
+        [OPERATION_APPROVAL_GRANTS_KEY]: [
+          grant,
+          ...grants.filter((item) => item.key !== grant.key)
+        ].slice(0, MAX_OPERATION_APPROVAL_GRANTS)
+      });
+    });
+  return operationApprovalGrantWriteQueue;
+}
+
+function clearOperationApprovalGrants() {
+  operationApprovalGrantWriteQueue = operationApprovalGrantWriteQueue
+    .catch(() => {})
+    .then(() => chrome.storage.local.remove(OPERATION_APPROVAL_GRANTS_KEY));
+  return operationApprovalGrantWriteQueue;
+}
+
+function normalizeOperationApprovalGrants(value) {
+  return (Array.isArray(value) ? value : [])
+    .map((grant) => ({
+      key: String(grant?.key || ""),
+      kind: String(grant?.kind || "operation"),
+      title: String(grant?.title || "Approved operation").slice(0, 160),
+      scope: String(grant?.scope || "").slice(0, 240),
+      approvedAt: Number(grant?.approvedAt || 0)
+    }))
+    .filter((grant) => grant.key && grant.approvedAt > 0)
+    .sort((a, b) => b.approvedAt - a.approvedAt)
+    .slice(0, MAX_OPERATION_APPROVAL_GRANTS);
+}
+
+function originPatternForUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (/^https?:\/\/\*\./i.test(text) && text.endsWith("/*")) return text;
+  try {
+    const url = new URL(text);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+    return `${url.origin}/*`;
+  } catch {
+    return "";
+  }
+}
+
+async function missingOriginPermissions(origins) {
+  const missing = [];
+  for (const origin of uniqueStrings(origins)) {
+    if (!(await chrome.permissions.contains({ origins: [origin] }))) missing.push(origin);
+  }
+  return missing;
+}
+
+async function assertOriginPermissions(origins) {
+  const missing = await missingOriginPermissions(origins);
+  if (missing.length > 0) {
+    throw new Error(`Chrome did not grant required origin access: ${missing.join(", ")}`);
+  }
+}
+
+async function ensureUrlPermission(url, reason, options = {}, details = "") {
+  return ensureUrlPermissions([url], reason, options, details);
+}
+
+async function ensureUrlPermissions(urls, reason, options = {}, details = "") {
+  const origins = uniqueStrings((Array.isArray(urls) ? urls : [urls]).map(originPatternForUrl).filter(Boolean));
+  if (origins.length === 0) return;
+  const missing = await missingOriginPermissions(origins);
+  if (missing.length === 0) return;
+  const result = await requestInteractiveApproval(options, {
+    kind: "host_permission",
+    title: "Allow site or service access",
+    reason,
+    details,
+    origins: missing,
+    allowLabel: "Allow access"
+  });
+  if (!result.approved) throw new Error(result.error || `Access to ${missing.join(", ")} was not approved.`);
+  await assertOriginPermissions(origins);
+}
+
+async function sendToActiveTab(payload, options = {}) {
   const tab = await getActiveTab();
   if (!tab?.id) throw new Error("No active page tab found. Select the page tab you want WebClaw to operate on.");
   if (!isInjectableTab(tab)) {
     throw new Error(`The active tab cannot be controlled by WebClaw: ${tab.url || "unknown URL"}`);
   }
+  await ensureUrlPermission(
+    tab.url,
+    "WebClaw needs access to this site to inspect or perform the page action requested in the current conversation.",
+    options,
+    `Target page: ${tab.url || "unknown"}`
+  );
   return sendToTab(tab.id, payload);
 }
 
@@ -4250,7 +4859,7 @@ async function sendToTab(tabId, payload) {
   }
 }
 
-async function runPageJavaScript(args) {
+async function runPageJavaScript(args, options = {}) {
   const source = await resolvePageJavaScriptSource(args);
   const code = source.code;
   const tab = await getActiveTab();
@@ -4258,273 +4867,50 @@ async function runPageJavaScript(args) {
   if (!isInjectableTab(tab)) {
     throw new Error(`The active tab cannot run WebClaw JavaScript: ${tab.url || "unknown URL"}`);
   }
-
+  const origin = originPatternForUrl(tab.url);
+  const missingOrigins = origin ? await missingOriginPermissions([origin]) : [];
   const world = args.world === "main" ? "MAIN" : "USER_SCRIPT";
-  if (chrome.userScripts?.execute) {
-    return {
-      ...(await runUserScriptJavaScript(tab, code, world)),
-      source: source.label
-    };
-  }
-
-  const fallbackWorld = world === "MAIN" ? "MAIN" : "ISOLATED";
-  let injections;
-  try {
-    injections = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      world: fallbackWorld,
-      func: async (source) => {
-        function serialize(value) {
-          if (value === undefined) return null;
-          try {
-            return JSON.parse(JSON.stringify(value));
-          } catch {
-            return String(value);
-          }
-        }
-
-        function transformDialogCalls(input) {
-          const replacements = {
-            alert: "__webclawAlert",
-            confirm: "__webclawConfirm",
-            prompt: "__webclawPrompt"
-          };
-          const sourceText = String(input || "");
-          let output = "";
-          let index = 0;
-          let state = "code";
-          let quote = "";
-
-          while (index < sourceText.length) {
-            const char = sourceText[index];
-            const next = sourceText[index + 1];
-
-            if (state === "line-comment") {
-              output += char;
-              index += 1;
-              if (char === "\n") state = "code";
-              continue;
-            }
-            if (state === "block-comment") {
-              output += char;
-              index += 1;
-              if (char === "*" && next === "/") {
-                output += next;
-                index += 1;
-                state = "code";
-              }
-              continue;
-            }
-            if (state === "string") {
-              output += char;
-              index += 1;
-              if (char === "\\") {
-                output += sourceText[index] || "";
-                index += 1;
-              } else if (char === quote) {
-                state = "code";
-              }
-              continue;
-            }
-
-            if (char === "/" && next === "/") {
-              output += char + next;
-              index += 2;
-              state = "line-comment";
-              continue;
-            }
-            if (char === "/" && next === "*") {
-              output += char + next;
-              index += 2;
-              state = "block-comment";
-              continue;
-            }
-            if (char === "\"" || char === "'" || char === "`") {
-              output += char;
-              index += 1;
-              quote = char;
-              state = "string";
-              continue;
-            }
-
-            const replacement = dialogReplacementAt(sourceText, index, replacements);
-            if (replacement) {
-              output += replacement.text;
-              index += replacement.length;
-              continue;
-            }
-
-            output += char;
-            index += 1;
-          }
-
-          return output;
-        }
-
-        function dialogReplacementAt(sourceText, index, replacements) {
-          const windowPrefix = "window.";
-          if (sourceText.startsWith(windowPrefix, index)) {
-            const afterPrefix = index + windowPrefix.length;
-            for (const [name, replacement] of Object.entries(replacements)) {
-              if (isDialogCallAt(sourceText, afterPrefix, name, true)) {
-                return {
-                  text: `await ${replacement}`,
-                  length: windowPrefix.length + name.length
-                };
-              }
-            }
-          }
-
-          for (const [name, replacement] of Object.entries(replacements)) {
-            if (isDialogCallAt(sourceText, index, name, false)) {
-              return {
-                text: `await ${replacement}`,
-                length: name.length
-              };
-            }
-          }
-          return null;
-        }
-
-        function isDialogCallAt(sourceText, index, name, afterWindowPrefix) {
-          if (!sourceText.startsWith(name, index)) return false;
-          const before = sourceText[index - 1] || "";
-          if (!afterWindowPrefix && (isIdentifierChar(before) || before === ".")) return false;
-          const afterName = sourceText[index + name.length] || "";
-          if (isIdentifierChar(afterName)) return false;
-          let cursor = index + name.length;
-          while (/\s/.test(sourceText[cursor] || "")) cursor += 1;
-          return sourceText[cursor] === "(";
-        }
-
-        function isIdentifierChar(char) {
-          return /[A-Za-z0-9_$]/.test(char);
-        }
-
-        function showDialog(type, message, defaultValue = "") {
-          return new Promise((resolve) => {
-            const overlay = document.createElement("div");
-            overlay.style.cssText = [
-              "position:fixed",
-              "inset:0",
-              "z-index:2147483647",
-              "display:flex",
-              "align-items:center",
-              "justify-content:center",
-              "background:rgba(0,0,0,.35)",
-              "font-family:system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif"
-            ].join(";");
-
-            const dialog = document.createElement("div");
-            dialog.style.cssText = [
-              "width:min(420px,calc(100vw - 40px))",
-              "background:#fff",
-              "color:#111",
-              "border:1px solid rgba(0,0,0,.18)",
-              "border-radius:8px",
-              "box-shadow:0 18px 60px rgba(0,0,0,.28)",
-              "padding:18px"
-            ].join(";");
-
-            const text = document.createElement("div");
-            text.textContent = String(message ?? "");
-            text.style.cssText = "font-size:15px;line-height:1.5;white-space:pre-wrap;margin:0 0 14px";
-            dialog.append(text);
-
-            let input = null;
-            if (type === "prompt") {
-              input = document.createElement("input");
-              input.value = String(defaultValue ?? "");
-              input.style.cssText = [
-                "box-sizing:border-box",
-                "width:100%",
-                "font:inherit",
-                "padding:8px 10px",
-                "border:1px solid #bbb",
-                "border-radius:6px",
-                "margin:0 0 14px"
-              ].join(";");
-              dialog.append(input);
-            }
-
-            const actions = document.createElement("div");
-            actions.style.cssText = "display:flex;justify-content:flex-end;gap:8px";
-            const ok = document.createElement("button");
-            ok.type = "button";
-            ok.textContent = type === "confirm" ? "Yes" : "OK";
-            ok.style.cssText = "font:inherit;padding:7px 14px;border-radius:6px;border:1px solid #111;background:#111;color:#fff";
-            const cancel = document.createElement("button");
-            cancel.type = "button";
-            cancel.textContent = type === "confirm" ? "No" : "Cancel";
-            cancel.style.cssText = "font:inherit;padding:7px 14px;border-radius:6px;border:1px solid #bbb;background:#fff;color:#111";
-            if (type !== "alert") actions.append(cancel);
-            actions.append(ok);
-            dialog.append(actions);
-            overlay.append(dialog);
-
-            const cleanup = (value) => {
-              overlay.remove();
-              resolve(value);
-            };
-            ok.addEventListener("click", () => {
-              if (type === "prompt") cleanup(input.value);
-              else cleanup(type === "confirm" ? true : undefined);
-            });
-            cancel.addEventListener("click", () => cleanup(type === "prompt" ? null : false));
-            overlay.addEventListener("keydown", (event) => {
-              if (event.key === "Escape" && type !== "alert") cleanup(type === "prompt" ? null : false);
-              if (event.key === "Enter") ok.click();
-            });
-
-            (document.body || document.documentElement).append(overlay);
-            overlay.tabIndex = -1;
-            overlay.focus();
-            if (input) input.focus();
-          });
-        }
-
-        const __webclawAlert = (message) => showDialog("alert", message);
-        const __webclawConfirm = (message) => showDialog("confirm", message);
-        const __webclawPrompt = (message, defaultValue) => showDialog("prompt", message, defaultValue);
-
-        try {
-          const transformedSource = transformDialogCalls(source);
-          const fn = new Function(
-            "__webclawAlert",
-            "__webclawConfirm",
-            "__webclawPrompt",
-            `"use strict"; return (async () => { ${transformedSource}\n })();`
-          );
-          return {
-            ok: true,
-            result: serialize(await fn(__webclawAlert, __webclawConfirm, __webclawPrompt))
-          };
-        } catch (error) {
-          return {
-            ok: false,
-            error: error?.message || String(error)
-          };
-        }
-      },
-      args: [code]
-    });
-  } catch (error) {
-    throw new Error(`Page JavaScript injection failed: ${normalizeError(error)}`);
-  }
-
-  const execution = injections?.[0]?.result;
-  if (!execution?.ok) {
-    if (String(execution?.error || "").includes("Content Security Policy")) {
-      throw new Error("Page JavaScript failed because this Chrome install does not expose chrome.userScripts.execute and CSP blocks eval fallback. Enable the extension's Allow User Scripts toggle in chrome://extensions, or use Chrome 135+ with userScripts enabled.");
-    }
-    throw new Error(`Page JavaScript failed: ${execution?.error || "No result returned."}`);
+  const sourceLabel = source.label?.type === "vfs"
+    ? `${source.label.path} (version ${source.label.version})`
+    : "inline model output";
+  const scheduleScope = options.authorizationScope?.type === "schedule" ? options.authorizationScope : null;
+  const grantFingerprint = scheduleScope
+    ? await sha256Base64Url(JSON.stringify({
+        scheduleId: String(scheduleScope.id || ""),
+        targetUrl: String(tab.url || ""),
+        world,
+        code
+      }))
+    : "";
+  const approval = await requestInteractiveApproval(options, {
+    kind: "run_js",
+    title: "Allow JavaScript execution",
+    reason: scheduleScope
+      ? "This scheduled code can read and change page-visible content. Approval is remembered only for this exact Schedule, target URL, execution world, and code."
+      : "This code can read and change page-visible content in the target tab. Review the target and source before allowing this one execution.",
+    details: [
+      `Target: ${tab.url || "unknown"}`,
+      `Source: ${sourceLabel}`,
+      `World: ${world}`,
+      scheduleScope ? `Schedule: ${scheduleScope.title || scheduleScope.id}` : "",
+      "",
+      truncateText(code, 12000)
+    ].filter((line) => line !== "").join("\n"),
+    origins: missingOrigins,
+    allowLabel: scheduleScope ? "Allow exact scheduled operation" : "Run this code",
+    grantKey: grantFingerprint ? `schedule-run-js:${grantFingerprint}` : "",
+    grantScope: scheduleScope ? `Schedule ${scheduleScope.title || scheduleScope.id} on ${tab.url || "unknown"}` : "",
+    rememberByDefault: Boolean(grantFingerprint)
+  });
+  if (!approval.approved) throw new Error(approval.error || "JavaScript execution was denied by the user.");
+  if (origin) await assertOriginPermissions([origin]);
+  if (!chrome.userScripts?.execute) {
+    throw new Error(
+      "Chrome userScripts.execute is unavailable. WebClaw requires Chrome 135 or newer; in chrome://extensions, open WebClaw details, enable Allow User Scripts, then reload the extension."
+    );
   }
   return {
-    ok: true,
-    executionWorld: fallbackWorld,
-    tabId: tab.id,
-    url: tab.url || "",
-    result: execution.result,
+    ...(await runUserScriptJavaScript(tab, code, world)),
     source: source.label
   };
 }
@@ -4601,13 +4987,13 @@ ${code}
 }
 
 
-async function translatePage(settings, args) {
+async function translatePage(settings, args, options = {}) {
   const targetLanguage = String(args.targetLanguage || args.language || "Chinese").trim() || "Chinese";
   const collected = await sendToActiveTab({
     type: "WEBCLAW_CONTENT_COLLECT_TEXT_NODES",
     maxItems: 320,
     maxTotalChars: 24000
-  });
+  }, options);
   const items = Array.isArray(collected.items) ? collected.items : [];
   if (items.length === 0) {
     return {
@@ -4620,7 +5006,7 @@ async function translatePage(settings, args) {
 
   const translations = [];
   for (const chunk of chunkTranslationItems(items)) {
-    translations.push(...(await translateItems(settings, targetLanguage, chunk)));
+    translations.push(...(await translateItems(settings, targetLanguage, chunk, options)));
   }
   if (translations.length === 0) {
     return {
@@ -4637,7 +5023,7 @@ async function translatePage(settings, args) {
   const applied = await sendToActiveTab({
     type: "WEBCLAW_CONTENT_APPLY_TEXT_TRANSLATIONS",
     translations
-  });
+  }, options);
   if (Number(applied.translatedCount || 0) === 0) {
     return {
       ok: false,
@@ -4680,7 +5066,7 @@ function chunkTranslationItems(items) {
   return chunks;
 }
 
-async function translateItems(settings, targetLanguage, items) {
+async function translateItems(settings, targetLanguage, items, options = {}) {
   const messages = [
     {
       role: "system",
@@ -4695,7 +5081,10 @@ async function translateItems(settings, targetLanguage, items) {
       })
     }
   ];
-  const content = await callModel(settings, messages);
+  const content = await callModel(settings, messages, {
+    signal: options.signal,
+    requestApproval: options.requestApproval
+  });
   const parsed = parseJsonObject(content);
   const translations = Array.isArray(parsed?.translations) ? parsed.translations : Array.isArray(parsed) ? parsed : [];
   const byId = new Map(items.map((item) => [item.id, item.text]));
@@ -4707,9 +5096,15 @@ async function translateItems(settings, targetLanguage, items) {
     }));
 }
 
-async function getWeather(args) {
+async function getWeather(args, options = {}) {
   const location = String(args.location || args.city || "").trim();
   if (!location) throw new Error("location is required.");
+  await ensureUrlPermissions(
+    ["https://geocoding-api.open-meteo.com/", "https://api.open-meteo.com/"],
+    "WebClaw needs access to Open-Meteo to geocode the requested place and retrieve its weather.",
+    options,
+    `Location sent to Open-Meteo: ${location}`
+  );
   const language = String(args.language || "zh").trim() || "zh";
   const place = await geocodeLocation(location, language);
   const params = new URLSearchParams({
@@ -4831,10 +5226,16 @@ function weatherCodeDescription(code) {
   return descriptions[Number(code)] || "天气状况未知";
 }
 
-async function searchWeb(args) {
+async function searchWeb(args, options = {}) {
   const query = String(args.query || args.q || "").trim();
   if (!query) throw new Error("query is required.");
   const searchUrl = buildSearchUrl(query, args.engine);
+  await ensureUrlPermission(
+    searchUrl,
+    "WebClaw needs access to the selected search engine to submit this query and read the result page for your request.",
+    options,
+    `Search query: ${query}`
+  );
   const tab = args.newTab === false
     ? await navigateTab(searchUrl)
     : await chrome.tabs.create({ url: searchUrl, active: true });
@@ -4868,17 +5269,29 @@ function normalizedSearchEngine(engine) {
   return "duckduckgo";
 }
 
-async function navigate(url) {
+async function navigate(url, options = {}) {
+  await ensureUrlPermission(
+    url,
+    "WebClaw needs access to this destination before navigating the active tab for your request.",
+    options,
+    `Destination: ${url}`
+  );
   const tab = await navigateTab(url);
   return { ok: true, url, tabId: tab.id };
 }
 
-async function httpRequest(args) {
+async function httpRequest(args, options = {}) {
   const url = required(args.url, "url");
   const parsedUrl = new URL(url);
   if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
     throw new Error("http_request only supports http and https URLs.");
   }
+  await ensureUrlPermission(
+    url,
+    "WebClaw needs access to this endpoint to send the HTTP request requested by the current tool call.",
+    options,
+    `${String(args.method || "GET").toUpperCase()} ${url}`
+  );
   const method = String(args.method || "GET").toUpperCase();
   if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) {
     throw new Error(`Unsupported http_request method: ${method}`);
@@ -4911,17 +5324,17 @@ async function httpRequest(args) {
   };
 }
 
-async function sendWeComMessage(settings, args) {
-  const url = String(settings.weComWebhookUrl || "").trim();
+async function sendQiyeWechatNotification(tool, args, options = {}) {
+  const url = String(tool?.config?.webhookUrl || "").trim();
   if (!url) {
-    throw new Error("企业微信机器人 webhook 未配置。请在设置中填写 Webhook URL。");
+    throw new Error("企业微信机器人 webhook 未配置。请编辑 qiyewechat_notification Tool 后填写 Webhook URL。");
   }
   const payload = buildWeComPayload(args);
   const result = await httpRequest({
     url,
     method: "POST",
     json: payload
-  });
+  }, options);
   let responseJson = null;
   try {
     responseJson = result.body ? JSON.parse(result.body) : null;
@@ -4948,7 +5361,7 @@ function buildWeComPayload(args) {
     };
   }
   if (msgtype !== "text") {
-    throw new Error(`Unsupported send_wecom_message msgtype: ${msgtype}. Use text, markdown, or provide a raw payload.`);
+    throw new Error(`Unsupported qiyewechat_notification msgtype: ${msgtype}. Use text, markdown, or provide a raw payload.`);
   }
   const text = { content: String(content) };
   if (Array.isArray(args.mentioned_list)) text.mentioned_list = args.mentioned_list.map(String);
@@ -5086,13 +5499,13 @@ function parseLooseToolCall(content) {
   if (!name || (!text.includes("\"tool\"") && !/\btool\s*:/i.test(text))) return null;
   const looseArgs = extractLooseArgsObject(text);
 
-  if (name === "send_wecom_message") {
+  if (name === "qiyewechat_notification" || name === "send_wecom_message") {
     const msgtype = looseArgs?.msgtype || extractLooseStringField(text, "msgtype") || "text";
     const contentValue = looseArgs?.content || extractLooseStringField(text, "content");
     if (contentValue) {
       return {
         tool: {
-          name,
+          name: "qiyewechat_notification",
           args: {
             content: contentValue,
             msgtype
@@ -5439,19 +5852,31 @@ async function registerOAuthClient(registrationEndpoint) {
   return registration;
 }
 
-async function ensureFreshCodexToken(settings, providerId) {
+async function ensureFreshCodexToken(settings, providerId, options = {}) {
   const provider = findProvider(settings, providerId);
   const oauth = provider.config;
   if (!oauth.baseUrl || !oauth.model) {
     throw new Error("Codex OAuth base URL and model are required.");
   }
   if (!oauth.accessToken) {
-    throw new Error("Codex token missing. Sign in with ChatGPT first.");
+    return authorizeCodexForAgent(provider, options);
   }
-  if (!oauth.refreshToken || !oauth.expiresAt || Date.now() < oauth.expiresAt - 60000) {
+  if (!oauth.expiresAt || Date.now() < oauth.expiresAt - 60000) {
     return oauth;
   }
-  const token = await refreshCodexToken(oauth);
+  if (!oauth.refreshToken) {
+    const clearedSettings = await updateProviderConfig(provider.id, codexTokenResetPatch());
+    return authorizeCodexForAgent(findProvider(clearedSettings, provider.id), options);
+  }
+  let token;
+  try {
+    token = await refreshCodexToken(oauth);
+  } catch (error) {
+    const message = normalizeError(error);
+    if (!/(invalid[_ -]?grant|refresh token|expired|revoked|unauthorized|\b401\b)/i.test(message)) throw error;
+    const clearedSettings = await updateProviderConfig(provider.id, codexTokenResetPatch());
+    return authorizeCodexForAgent(findProvider(clearedSettings, provider.id), options);
+  }
   const settingsAfterRefresh = await persistCodexTokens(provider.id, {
     id_token: token.id_token || oauth.idToken,
     access_token: token.access_token || oauth.accessToken,
@@ -5459,6 +5884,86 @@ async function ensureFreshCodexToken(settings, providerId) {
     expires_in: token.expires_in || 3600
   });
   return findProvider(settingsAfterRefresh, provider.id).config;
+}
+
+async function authorizeCodexForAgent(provider, options = {}) {
+  const existing = codexAuthorizationFlows.get(provider.id);
+  if (existing) return existing;
+
+  const flow = (async () => {
+    let latestSettings = await ensureSettings();
+    let latestProvider = findProvider(latestSettings, provider.id);
+    if (latestProvider.config.accessToken) return latestProvider.config;
+
+    const pendingStillValid = Boolean(
+      latestProvider.config.deviceAuthId &&
+      latestProvider.config.userCode &&
+      Number(latestProvider.config.deviceCodeExpiresAt || 0) > Date.now()
+    );
+    let challenge;
+    if (pendingStillValid) {
+      challenge = {
+        verificationUrl: latestProvider.config.verificationUrl,
+        userCode: latestProvider.config.userCode,
+        interval: Number(latestProvider.config.deviceCodeInterval || 5),
+        expiresAt: Number(latestProvider.config.deviceCodeExpiresAt || 0)
+      };
+    } else {
+      const approval = await requestInteractiveApproval(options, {
+        kind: "oauth",
+        title: "Authorize ChatGPT for Codex",
+        reason: "The active Codex provider has no usable ChatGPT token. Start the Codex device login flow to authorize this browser profile.",
+        details: `Provider: ${latestProvider.name}\nAuthorization tokens will be stored in this Chrome profile and reused until they expire or are revoked.`,
+        origins: [],
+        allowLabel: "Start ChatGPT sign-in"
+      });
+      if (!approval.approved) {
+        throw new Error(approval.error || "ChatGPT authorization was denied.");
+      }
+      challenge = await startCodexDeviceLogin(provider.id, {
+        openTab: options.authorizationMode !== "channel"
+      });
+    }
+
+    options.onStatus?.(`Waiting for ChatGPT authorization code ${challenge.userCode}`);
+    if (typeof options.onAuthorizationChallenge === "function") {
+      await options.onAuthorizationChallenge({
+        providerId: provider.id,
+        providerName: latestProvider.name || "ChatGPT",
+        verificationUrl: challenge.verificationUrl,
+        userCode: challenge.userCode,
+        expiresAt: Number(challenge.expiresAt || latestProvider.config.deviceCodeExpiresAt || 0)
+      });
+    }
+
+    const deadline = Number(challenge.expiresAt || 0) || Date.now() + 15 * 60 * 1000;
+    let intervalSeconds = Math.max(2, Number(challenge.interval || 5));
+    while (Date.now() < deadline) {
+      throwIfAborted(options.signal);
+      let result;
+      try {
+        result = await pollCodexDeviceLogin(provider.id);
+      } catch (error) {
+        latestSettings = await ensureSettings();
+        latestProvider = findProvider(latestSettings, provider.id);
+        if (latestProvider.config.accessToken) return latestProvider.config;
+        throw error;
+      }
+      if (result.status === "complete") {
+        return findProvider(result.settings, provider.id).config;
+      }
+      intervalSeconds = Math.max(intervalSeconds, Number(result.interval || intervalSeconds));
+      await sleep(intervalSeconds * 1000);
+    }
+    throw new Error("ChatGPT device authorization expired. Retry the original request to start a new login.");
+  })();
+
+  codexAuthorizationFlows.set(provider.id, flow);
+  try {
+    return await flow;
+  } finally {
+    if (codexAuthorizationFlows.get(provider.id) === flow) codexAuthorizationFlows.delete(provider.id);
+  }
 }
 
 async function ensureFreshGitHubCopilotToken(settings, providerId) {
@@ -5493,7 +5998,7 @@ async function ensureFreshGitHubCopilotToken(settings, providerId) {
   return findProvider(settingsAfterRefresh, provider.id).config;
 }
 
-async function startCodexDeviceLogin(providerId) {
+async function startCodexDeviceLogin(providerId, options = {}) {
   const settings = await ensureSettings();
   const provider = findProvider(settings, providerId || settings.activeProviderId);
   if (provider.type !== "codex-oauth") {
@@ -5502,6 +6007,9 @@ async function startCodexDeviceLogin(providerId) {
   const codex = provider.config;
   const issuer = trimSlash(codex.issuerUrl || PROVIDER_DEFAULTS["codex-oauth"].issuerUrl);
   const clientId = codex.clientId || PROVIDER_DEFAULTS["codex-oauth"].clientId;
+  if (!clientId) {
+    throw new Error("Codex OAuth client ID is required. Enter an authorized public client ID in the Provider settings.");
+  }
   const response = await fetch(`${issuer}/api/accounts/deviceauth/usercode`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -5513,7 +6021,11 @@ async function startCodexDeviceLogin(providerId) {
     throw new Error("Codex device login response missing device_auth_id or user_code.");
   }
   const interval = Number(json.interval || 5);
-  const verificationUrl = json.verification_uri || json.verification_url || `${issuer}/codex/device`;
+  const verificationUrl = json.verification_uri_complete ||
+    json.verification_url_complete ||
+    json.verification_uri ||
+    json.verification_url ||
+    `${issuer}/codex/device`;
   const expiresIn = Number(json.expires_in || 15 * 60);
   const updatedSettings = await updateProviderConfig(provider.id, {
     issuerUrl: issuer,
@@ -5526,20 +6038,105 @@ async function startCodexDeviceLogin(providerId) {
     deviceCodeInterval: interval,
     deviceCodeExpiresAt: Date.now() + expiresIn * 1000
   });
-  try {
-    await chrome.tabs.create({ url: verificationUrl, active: true });
-  } catch {
-    // Opening a tab is a convenience; the UI still shows the URL and code.
+  if (options.openMode === "popup") {
+    await openDeviceAuthorizationPopup(provider.id, verificationUrl, options.ownerWindowId);
+  } else if (options.openTab !== false) {
+    try {
+      await openAuthorizationTabInNormalWindow(verificationUrl);
+    } catch {
+      // Opening a tab is a convenience; the UI and Channels still show the URL and code.
+    }
   }
   return {
     settings: updatedSettings,
     verificationUrl,
     userCode,
-    interval
+    interval,
+    expiresAt: Date.now() + expiresIn * 1000
   };
 }
 
-async function startGitHubCopilotDeviceLogin(providerId) {
+async function openDeviceAuthorizationPopup(providerId, verificationUrl, ownerWindowId) {
+  await releaseDeviceAuthorizationUi(providerId, {
+    closeAuthorizationWindow: true,
+    focusOwner: false
+  });
+  try {
+    const authorizationWindow = await chrome.windows.create({
+      url: verificationUrl,
+      type: "popup",
+      width: 600,
+      height: 760,
+      focused: true
+    });
+    await rememberDeviceAuthorizationUi(providerId, {
+      ownerWindowId,
+      authorizationWindowId: authorizationWindow.id
+    });
+  } catch {
+    try {
+      await openAuthorizationTabInNormalWindow(verificationUrl);
+    } catch {
+      // The Settings UI still displays the verification URL and device code.
+    }
+    await rememberDeviceAuthorizationUi(providerId, { ownerWindowId });
+  }
+}
+
+async function openAuthorizationTabInNormalWindow(url) {
+  const windows = await chrome.windows.getAll({ windowTypes: ["normal"] });
+  const target = windows.find((item) => item.focused) || windows[0];
+  if (target?.id !== undefined) {
+    return chrome.tabs.create({ windowId: target.id, url, active: true });
+  }
+  return chrome.windows.create({ url, type: "normal", focused: true });
+}
+
+async function rememberDeviceAuthorizationUi(providerId, context) {
+  const normalized = {
+    ownerWindowId: Number.isInteger(context?.ownerWindowId) ? context.ownerWindowId : null,
+    authorizationWindowId: Number.isInteger(context?.authorizationWindowId) ? context.authorizationWindowId : null
+  };
+  deviceAuthorizationUiContexts.set(providerId, normalized);
+  if (!chrome.storage?.session) return;
+  try {
+    await chrome.storage.session.set({ [`${DEVICE_AUTH_UI_KEY_PREFIX}${providerId}`]: normalized });
+  } catch {
+    // The in-memory copy remains available until the service worker restarts.
+  }
+}
+
+async function releaseDeviceAuthorizationUi(providerId, options = {}) {
+  const key = `${DEVICE_AUTH_UI_KEY_PREFIX}${providerId}`;
+  let context = deviceAuthorizationUiContexts.get(providerId) || null;
+  if (chrome.storage?.session) {
+    try {
+      const stored = await chrome.storage.session.get(key);
+      context = stored[key] || context;
+      await chrome.storage.session.remove(key);
+    } catch {
+      // In-memory context still works when session storage is unavailable.
+    }
+  }
+  deviceAuthorizationUiContexts.delete(providerId);
+  if (!context) return;
+  if (options.closeAuthorizationWindow && Number.isInteger(context.authorizationWindowId)) {
+    try {
+      await chrome.windows.remove(context.authorizationWindowId);
+    } catch {
+      // The user may already have closed the authorization window.
+    }
+  }
+  if (options.focusOwner && Number.isInteger(context.ownerWindowId)) {
+    try {
+      await chrome.windows.update(context.ownerWindowId, { focused: true });
+    } catch {
+      // The original Settings window may no longer exist.
+    }
+  }
+}
+
+async function startGitHubCopilotDeviceLogin(providerId, options = {}) {
   const settings = await ensureSettings();
   const provider = findProvider(settings, providerId || settings.activeProviderId);
   if (provider.type !== "github-copilot-oauth") {
@@ -5581,10 +6178,14 @@ async function startGitHubCopilotDeviceLogin(providerId) {
     copilotTokenExpiresAt: 0,
     userLogin: ""
   });
-  try {
-    await chrome.tabs.create({ url: verificationUrl, active: true });
-  } catch {
-    // Opening a tab is a convenience; the UI still shows the URL and code.
+  if (options.openMode === "popup") {
+    await openDeviceAuthorizationPopup(provider.id, verificationUrl, options.ownerWindowId);
+  } else if (options.openTab !== false) {
+    try {
+      await openAuthorizationTabInNormalWindow(verificationUrl);
+    } catch {
+      // Opening a tab is a convenience; the UI and Channels still show the URL and code.
+    }
   }
   return {
     settings: updatedSettings,
@@ -5600,6 +6201,27 @@ async function pollGitHubCopilotDeviceLogin(providerId) {
   if (provider.type !== "github-copilot-oauth") {
     throw new Error("Selected provider is not a GitHub Copilot provider.");
   }
+  if (provider.config.githubAccessToken) {
+    await releaseDeviceAuthorizationUi(provider.id, {
+      closeAuthorizationWindow: true,
+      focusOwner: true
+    });
+    return { status: "complete", settings };
+  }
+  const existing = githubCopilotDevicePollRequests.get(provider.id);
+  if (existing) return existing;
+  const request = pollGitHubCopilotDeviceLoginRequest(settings, provider);
+  githubCopilotDevicePollRequests.set(provider.id, request);
+  try {
+    return await request;
+  } finally {
+    if (githubCopilotDevicePollRequests.get(provider.id) === request) {
+      githubCopilotDevicePollRequests.delete(provider.id);
+    }
+  }
+}
+
+async function pollGitHubCopilotDeviceLoginRequest(settings, provider) {
   const copilot = provider.config;
   if (!copilot.deviceCode || !copilot.userCode) {
     throw new Error("No pending GitHub Copilot device login.");
@@ -5650,6 +6272,10 @@ async function pollGitHubCopilotDeviceLogin(providerId) {
     verificationUrl: "",
     deviceCodeExpiresAt: 0
   });
+  await releaseDeviceAuthorizationUi(provider.id, {
+    closeAuthorizationWindow: true,
+    focusOwner: true
+  });
   return {
     status: "complete",
     settings: updatedSettings
@@ -5672,6 +6298,12 @@ async function pollPendingGitHubCopilotDeviceLogins(settings) {
             verificationUrl: "",
             deviceCodeExpiresAt: 0
           });
+          await releaseDeviceAuthorizationUi(provider.id, {
+            closeAuthorizationWindow: true,
+            focusOwner: true
+          });
+        } else {
+          console.warn(`WebClaw GitHub Copilot device poll failed for ${provider.id}`, error);
         }
       }
     }
@@ -5687,6 +6319,23 @@ async function pollCodexDeviceLogin(providerId) {
   if (provider.type !== "codex-oauth") {
     throw new Error("Selected provider is not a Codex provider.");
   }
+  if (provider.config.accessToken) {
+    return { status: "complete", settings };
+  }
+  const existing = codexDevicePollRequests.get(provider.id);
+  if (existing) return existing;
+  const request = pollCodexDeviceLoginRequest(settings, provider);
+  codexDevicePollRequests.set(provider.id, request);
+  try {
+    return await request;
+  } finally {
+    if (codexDevicePollRequests.get(provider.id) === request) {
+      codexDevicePollRequests.delete(provider.id);
+    }
+  }
+}
+
+async function pollCodexDeviceLoginRequest(settings, provider) {
   const codex = provider.config;
   if (!codex.deviceAuthId || !codex.userCode) {
     throw new Error("No pending Codex device login.");
@@ -5752,6 +6401,37 @@ async function pollCodexDeviceLogin(providerId) {
   };
 }
 
+async function pollPendingCodexDeviceLogins(settings) {
+  if (codexDevicePollBusy) return;
+  codexDevicePollBusy = true;
+  try {
+    const pending = pendingCodexDeviceProviders(settings);
+    for (const provider of pending) {
+      try {
+        await pollCodexDeviceLogin(provider.id);
+      } catch (error) {
+        if (/expired/i.test(normalizeError(error))) {
+          await updateProviderConfig(provider.id, {
+            deviceAuthId: "",
+            userCode: "",
+            verificationUrl: "",
+            deviceCodeExpiresAt: 0
+          });
+          await releaseDeviceAuthorizationUi(provider.id, {
+            closeAuthorizationWindow: true,
+            focusOwner: true
+          });
+        } else {
+          console.warn(`WebClaw Codex device poll failed for ${provider.id}`, error);
+        }
+      }
+    }
+  } finally {
+    codexDevicePollBusy = false;
+    ensureCodexDeviceAlarm(await ensureSettings());
+  }
+}
+
 async function refreshCodexToken(codex) {
   const response = await fetch(codex.tokenUrl || PROVIDER_DEFAULTS["codex-oauth"].tokenUrl, {
     method: "POST",
@@ -5770,7 +6450,7 @@ async function persistCodexTokens(providerId, token, extraPatch = {}) {
   const accessToken = token.access_token || "";
   const claims = decodeJwtClaims(idToken || accessToken);
   const authClaims = claims["https://api.openai.com/auth"] || claims;
-  return updateProviderConfig(providerId, {
+  const settings = await updateProviderConfig(providerId, {
     idToken,
     accessToken,
     refreshToken: token.refresh_token || "",
@@ -5780,6 +6460,11 @@ async function persistCodexTokens(providerId, token, extraPatch = {}) {
     planType: authClaims.chatgpt_plan_type || "",
     ...extraPatch
   });
+  await releaseDeviceAuthorizationUi(providerId, {
+    closeAuthorizationWindow: true,
+    focusOwner: true
+  });
+  return settings;
 }
 
 function findProvider(settings, providerId) {
@@ -5809,7 +6494,16 @@ async function clearCodexToken(providerId) {
   if (provider.type !== "codex-oauth") {
     throw new Error("Selected provider is not a Codex OAuth provider.");
   }
-  return updateProviderConfig(provider.id, {
+  const updatedSettings = await updateProviderConfig(provider.id, codexTokenResetPatch());
+  await releaseDeviceAuthorizationUi(provider.id, {
+    closeAuthorizationWindow: true,
+    focusOwner: true
+  });
+  return updatedSettings;
+}
+
+function codexTokenResetPatch() {
+  return {
     idToken: "",
     accessToken: "",
     refreshToken: "",
@@ -5821,7 +6515,7 @@ async function clearCodexToken(providerId) {
     userCode: "",
     verificationUrl: "",
     deviceCodeExpiresAt: 0
-  });
+  };
 }
 
 async function clearGitHubCopilotToken(providerId) {
@@ -5830,7 +6524,7 @@ async function clearGitHubCopilotToken(providerId) {
   if (provider.type !== "github-copilot-oauth") {
     throw new Error("Selected provider is not a GitHub Copilot provider.");
   }
-  return updateProviderConfig(provider.id, {
+  const updatedSettings = await updateProviderConfig(provider.id, {
     userLogin: "",
     githubAccessToken: "",
     githubTokenType: "",
@@ -5842,6 +6536,11 @@ async function clearGitHubCopilotToken(providerId) {
     verificationUrl: "",
     deviceCodeExpiresAt: 0
   });
+  await releaseDeviceAuthorizationUi(provider.id, {
+    closeAuthorizationWindow: true,
+    focusOwner: true
+  });
+  return updatedSettings;
 }
 
 async function fetchGitHubUser(accessToken) {

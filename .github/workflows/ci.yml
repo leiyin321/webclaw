@@ -13,15 +13,17 @@ jobs:
         with:
           node-version: "22"
       - name: Check JavaScript syntax
-        run: |
-          node --check src/background.js
-          node --check src/content.js
-          node --check src/sidepanel.js
-          node --check src/chrome-ai-offscreen.js
-          node --check src/wechat-offscreen.js
-          node --check src/wechat-api.js
-          node --check src/wechat-media.js
-          node --check src/wechat-message.js
-          node --check src/wechat-storage.js
-      - name: Check manifest JSON
-        run: node -e "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')); console.log('manifest ok')"
+        run: ./scripts/check-syntax.sh
+      - name: Validate release configuration
+        run: node scripts/validate-release.mjs
+      - name: Build extension package
+        run: ./scripts/package-extension.sh
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webclaw-${{ github.sha }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14

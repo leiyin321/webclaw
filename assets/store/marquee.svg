@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="560" viewBox="0 0 1400 560">
+  <rect width="1400" height="560" fill="#f8f9fa"/>
+  <rect x="80" y="82" width="108" height="108" rx="20" fill="#202124"/>
+  <path d="M100 122L114 166L131 135L150 166L176 112L184 121L150 184L131 151L112 185Z" fill="#1769e0"/>
+  <circle cx="100" cy="122" r="7" fill="#19a974"/>
+  <circle cx="176" cy="112" r="7" fill="#f9ab00"/>
+  <text x="80" y="258" fill="#202124" font-family="Arial Unicode MS" font-size="64" font-weight="700">WebClaw</text>
+  <text x="80" y="310" fill="#3c4043" font-family="Arial Unicode MS" font-size="28">用户控制的浏览器 AI 助手</text>
+  <text x="80" y="362" fill="#5f6368" font-family="Arial Unicode MS" font-size="19">选择自己的模型。按域名授权。高风险操作逐次确认。</text>
+  <rect x="80" y="408" width="158" height="42" rx="6" fill="#1769e0"/>
+  <text x="107" y="436" fill="#ffffff" font-family="Arial Unicode MS" font-size="16" font-weight="700">Browser AI agent</text>
+
+  <rect x="650" y="54" width="660" height="452" rx="8" fill="#ffffff" stroke="#c9ced8" stroke-width="2"/>
+  <rect x="650" y="54" width="660" height="56" rx="8" fill="#202124"/>
+  <circle cx="680" cy="82" r="7" fill="#d93025"/>
+  <circle cx="704" cy="82" r="7" fill="#f9ab00"/>
+  <circle cx="728" cy="82" r="7" fill="#188038"/>
+  <rect x="650" y="110" width="360" height="396" fill="#eef1f6"/>
+  <rect x="690" y="154" width="248" height="18" rx="5" fill="#c9ced8"/>
+  <rect x="690" y="196" width="280" height="10" rx="5" fill="#dfe3ea"/>
+  <rect x="690" y="222" width="250" height="10" rx="5" fill="#dfe3ea"/>
+  <rect x="690" y="274" width="122" height="110" rx="6" fill="#ffffff"/>
+  <rect x="830" y="274" width="122" height="110" rx="6" fill="#ffffff"/>
+  <rect x="1010" y="110" width="300" height="396" fill="#f8f9fa"/>
+  <text x="1034" y="144" fill="#202124" font-family="Arial Unicode MS" font-size="16" font-weight="700">WebClaw</text>
+  <rect x="1064" y="182" width="218" height="56" rx="7" fill="#1769e0"/>
+  <text x="1080" y="215" fill="#ffffff" font-family="Arial Unicode MS" font-size="12">总结当前页面</text>
+  <rect x="1030" y="258" width="240" height="58" rx="7" fill="#eef5ff" stroke="#b8d4f4"/>
+  <text x="1044" y="291" fill="#29415f" font-family="monospace" font-size="11">tool: get_page_context</text>
+  <rect x="1030" y="336" width="252" height="102" rx="7" fill="#ffffff" stroke="#dfe3ea"/>
+  <text x="1046" y="366" fill="#202124" font-family="Arial Unicode MS" font-size="12" font-weight="700">页面摘要</text>
+  <rect x="1046" y="388" width="208" height="8" rx="4" fill="#dfe3ea"/>
+  <rect x="1046" y="408" width="182" height="8" rx="4" fill="#dfe3ea"/>
+</svg>

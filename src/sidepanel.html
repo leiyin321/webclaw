@@ -52,6 +52,25 @@
           <input id="allowUnsafePageJs" type="checkbox">
           <span>Allow agent JavaScript execution</span>
         </label>
+
+        <p class="settings-note">JavaScript execution is off by default. Ad-hoc <code>run_js</code> calls require approval with the target and source shown. An exact scheduled operation can be remembered after its first approval and is rechecked if its Schedule, URL, world, or code changes.</p>
+        <button id="saveSettings" type="button">Save settings</button>
+      </div>
+
+      <div class="settings-group disclosure-summary">
+        <div class="section-title">
+          <h2>Privacy &amp; control</h2>
+          <span id="disclosureState">Not accepted</span>
+        </div>
+        <p class="settings-note">WebClaw acts only from your requests and enabled advanced features. It stores configuration and conversations in this browser. Prompts, selected page content, files, media, and tool results are sent only to the provider or channel needed for the action after disclosure and permission checks.</p>
+        <div class="row">
+          <button id="reviewDisclosure" type="button" class="secondary">Review disclosure</button>
+          <a class="link-button" href="https://github.com/leiyin321/webclaw/blob/main/PRIVACY.md" target="_blank" rel="noreferrer">Privacy policy</a>
+        </div>
+        <div class="row approval-grant-controls">
+          <span id="approvalGrantState">No saved scheduled approvals</span>
+          <button id="clearApprovalGrants" type="button" class="secondary">Clear saved approvals</button>
+        </div>
       </div>
 
       <div class="settings-group">
@@ -98,7 +117,7 @@
 
       <div class="settings-group">
         <div class="section-title">
-          <h2>Schedules</h2>
+          <h2>Schedules <small class="advanced-label">Advanced</small></h2>
           <span id="scheduleCount">0 enabled</span>
         </div>
 
@@ -110,18 +129,6 @@
         </div>
       </div>
 
-      <div class="settings-group">
-        <div class="section-title">
-          <h2>Notifications</h2>
-        </div>
-
-        <label>
-          企业微信机器人 webhook
-          <input id="weComWebhookUrl" type="text" spellcheck="false" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...">
-        </label>
-
-        <button id="saveSettings" type="button">Save settings</button>
-      </div>
     </section>
 
     <section id="workspacePanel" class="workspace-panel hidden" aria-label="Files">
@@ -194,7 +201,7 @@
             <label>
               Provider type
               <select id="providerType">
-                <option value="codex-oauth">Codex / ChatGPT OAuth</option>
+                <option value="codex-oauth">Codex / ChatGPT OAuth (experimental)</option>
                 <option value="github-copilot-oauth">GitHub Copilot OAuth</option>
                 <option value="chrome-ai">Chrome AI</option>
                 <option value="ollama">Local Ollama</option>
@@ -296,6 +303,7 @@
               OAuth client ID
               <input id="codexClientId" spellcheck="false">
             </label>
+            <p class="channel-help">Experimental OAuth integration. This build temporarily defaults to the public Codex CLI Client ID because OpenAI does not currently document third-party Chrome extension registration. It is not a secret, may stop working, and can be replaced here with an authorized public Client ID. ChatGPT sign-in opens in a separate window and completes in the background even if Settings is hidden or closed. Missing credentials can also be authorized from chat; WeChat and Telegram receive a reply code followed by the ChatGPT URL and device code.</p>
             <label>
               OAuth scope
               <input id="codexScope" spellcheck="false">
@@ -344,6 +352,7 @@
               GitHub OAuth client ID
               <input id="githubCopilotClientId" spellcheck="false">
             </label>
+            <p class="channel-help">This build temporarily defaults to the public GitHub Copilot Client ID used by earlier WebClaw builds. It is not a secret or a supported third-party integration contract, may stop working, and should be replaced with an app controlled by the distributor. Device Flow does not require a client secret. GitHub sign-in opens in a separate window and completes in the background even if Settings is hidden or closed.</p>
             <label>
               GitHub OAuth scope
               <input id="githubCopilotScope" spellcheck="false">
@@ -469,6 +478,14 @@
               <input id="toolWorkflowMaxSteps" type="number" min="1" max="12">
             </label>
           </div>
+
+          <div data-tool-section="qiyewechat_notification" class="tool-section">
+            <label>
+              企业微信机器人 webhook
+              <input id="toolQiyeWechatWebhookUrl" type="text" spellcheck="false" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...">
+            </label>
+            <p class="channel-help">The webhook stays in extension storage and is used only when the enabled <code>qiyewechat_notification</code> tool sends a text or markdown notification.</p>
+          </div>
         </div>
       </section>
     </div>
@@ -555,6 +572,7 @@
 
           <div data-channel-section="wechat" class="channel-section">
             <p id="wechatBridgeState" class="token-state" aria-live="polite"></p>
+            <p class="channel-help">When enabled, incoming WeChat messages and media are passed to the active WebClaw session and its selected model provider; replies are sent back to the originating conversation.</p>
 
             <div id="wechatQrPanel" class="wechat-qr hidden">
               <canvas id="wechatQrCanvas" width="240" height="240" aria-label="WeChat QR code"></canvas>
@@ -575,6 +593,7 @@
             <p class="channel-help">
               Telegram bot token 获取指引：在 Telegram 搜索并打开 BotFather，发送 /newbot，按提示设置 bot 名称和 username，创建完成后复制 BotFather 返回的 token 填到这里。随后给你的 bot 发送一条消息，WebClaw 才能收到该会话的后续消息。
             </p>
+            <p class="channel-help">When enabled, bot messages are passed to the active WebClaw session and its selected model provider; replies are returned only to the chat that sent the message.</p>
           </div>
         </div>
       </section>
@@ -618,6 +637,53 @@
               <span>Enabled</span>
             </label>
             <p id="scheduleNextRun" class="token-state"></p>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div id="approvalModal" class="provider-modal hidden" aria-hidden="true">
+      <div class="provider-modal-backdrop"></div>
+      <section class="provider-modal-dialog approval-dialog" role="dialog" aria-modal="true" aria-labelledby="approvalTitle">
+        <header class="provider-modal-header">
+          <div>
+            <h2 id="approvalTitle">Approval required</h2>
+            <p id="approvalKind">WebClaw is waiting for your decision.</p>
+          </div>
+        </header>
+        <div class="provider-modal-body">
+          <p id="approvalReason" class="approval-reason"></p>
+          <div id="approvalOrigins" class="approval-origins hidden"></div>
+          <pre id="approvalDetails" class="approval-details hidden"></pre>
+          <div class="row approval-actions">
+            <button id="denyApproval" type="button" class="secondary">Deny</button>
+            <button id="allowApproval" type="button">Allow once</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div id="productDisclosureModal" class="provider-modal hidden" aria-hidden="true">
+      <div class="provider-modal-backdrop"></div>
+      <section class="provider-modal-dialog disclosure-dialog" role="dialog" aria-modal="true" aria-labelledby="productDisclosureTitle">
+        <header class="provider-modal-header">
+          <div>
+            <h2 id="productDisclosureTitle">Before using WebClaw</h2>
+            <p>User-controlled browser AI assistant</p>
+          </div>
+        </header>
+        <div class="provider-modal-body disclosure-body">
+          <p>WebClaw stores settings, conversations, credentials, and virtual files in this browser. It does not send them to a WebClaw-operated server.</p>
+          <ul>
+            <li>Your prompt and relevant history are sent to the model provider you select. Page content, files, media, and tool results are included only when needed for your request.</li>
+            <li>Site and external service access is requested per origin before first use. You can deny a request or revoke access in Chrome extension settings.</li>
+            <li><code>run_js</code> is disabled by default. Ad-hoc execution requires approval each time; an exact scheduled operation may reuse a saved approval until its Schedule, URL, world, or code changes.</li>
+            <li>Channels, Schedules, and self-configuration are optional advanced features. Enabled automations may run while Chrome is open.</li>
+          </ul>
+          <p>Review the <a href="https://github.com/leiyin321/webclaw/blob/main/PRIVACY.md" target="_blank" rel="noreferrer">privacy policy</a> for retention, deletion, and provider details.</p>
+          <div class="row approval-actions">
+            <button id="declineProductDisclosure" type="button" class="secondary">Decline</button>
+            <button id="acceptProductDisclosure" type="button">I understand and continue</button>
           </div>
         </div>
       </section>
