@@ -393,6 +393,7 @@ async function activateStandaloneView(view) {
   elements.appTitle.textContent = "WebClaw Files";
   elements.settingsPanel.classList.add("hidden");
   elements.workspacePanel.classList.remove("hidden");
+  await runtimeMessage({ type: "WEBCLAW_ENSURE_WORKSPACE_DEFAULTS" });
   await renderWorkspace({ preserveEditor: false });
 }
 
@@ -653,6 +654,13 @@ async function submitUserMessage(content, source) {
 
   try {
     const result = await streamAgentMessage(chat);
+    if (result.toolTrajectory) {
+      appendMessage("tool", result.toolTrajectory.display, {
+        modelContent: result.toolTrajectory.modelContent,
+        hidden: true
+      });
+      chat.push({ role: "user", content: result.toolTrajectory.modelContent });
+    }
     if (activeAssistantNode) {
       updateMessage(activeAssistantNode, result.final);
     } else {
@@ -739,11 +747,14 @@ function streamAgentMessage(messages) {
         return;
       }
       if (message.type === "tool_call") {
-        appendMessage("tool", formatToolCall(message.tool));
+        appendMessage("tool", formatToolCall(message.tool), { persist: false });
         return;
       }
       if (message.type === "final") {
-        finish(resolve, { final: message.final || "" });
+        finish(resolve, {
+          final: message.final || "",
+          toolTrajectory: normalizeToolTrajectory(message.toolTrajectory)
+        });
         return;
       }
       if (message.type === "error") {
@@ -896,6 +907,7 @@ function normalizeStoredChatMessages(value) {
       role: normalizeMessageRole(message?.role),
       content: String(message?.content || ""),
       modelContent: String(message?.modelContent || message?.content || ""),
+      hidden: Boolean(message?.hidden),
       media: Array.isArray(message?.media) ? message.media : [],
       time: Number(message?.time || Date.now())
     }))
@@ -939,8 +951,9 @@ function renderActiveSession() {
   elements.messages.replaceChildren();
   renderedWechatEventIds.clear();
   for (const message of storedChatMessages) {
-    appendMessage(message.role, message.content, { persist: false });
-    if (message.role === "user" || message.role === "assistant" || message.role === "wechat" || message.role === "telegram" || message.role === "channel") {
+    const isToolTrajectory = message.role === "tool" && isToolTrajectoryContent(message.modelContent);
+    if (!message.hidden && !isToolTrajectory) appendMessage(message.role, message.content, { persist: false });
+    if (message.role === "user" || message.role === "assistant" || message.role === "wechat" || message.role === "telegram" || message.role === "channel" || isToolTrajectory) {
       chat.push({
         role: message.role === "assistant" ? "assistant" : "user",
         content: message.modelContent || message.content,
@@ -3755,7 +3768,34 @@ function safeJsonPreview(value) {
   }
 }
 
+function normalizeToolTrajectory(value) {
+  if (!value || typeof value !== "object") return null;
+  const modelContent = String(value.modelContent || "");
+  const display = String(value.display || "");
+  return isToolTrajectoryContent(modelContent) && display ? { modelContent, display } : null;
+}
+
+function isToolTrajectoryContent(content) {
+  return String(content || "").startsWith("WEBCLAW_TOOL_TRAJECTORY ");
+}
+
 function appendMessage(role, content, options = {}) {
+  if (options.hidden) {
+    if (options.persist !== false) {
+      storedChatMessages.push({
+        id: crypto.randomUUID(),
+        role: normalizeMessageRole(role),
+        content: String(content || ""),
+        modelContent: String(options.modelContent || content || ""),
+        hidden: true,
+        media: Array.isArray(options.media) ? options.media : [],
+        time: Date.now()
+      });
+      while (storedChatMessages.length > MAX_STORED_CHAT_MESSAGES) storedChatMessages.shift();
+      persistChatHistory();
+    }
+    return null;
+  }
   const node = document.createElement("div");
   node.className = `message ${role}`;
   node.textContent = content;
@@ -3767,6 +3807,7 @@ function appendMessage(role, content, options = {}) {
       role: normalizeMessageRole(role),
       content: String(content || ""),
       modelContent: String(options.modelContent || content || ""),
+      hidden: false,
       media: Array.isArray(options.media) ? options.media : [],
       time: Date.now()
     });

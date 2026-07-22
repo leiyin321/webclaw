@@ -17,6 +17,9 @@ WebClaw 目前是实验性的浏览器原生 Agent 框架，适合本地开发�
 - 模型列表刷新、模型下拉选择、Thinking mode 配置。
 - 浏览器工具：页面上下文、点击、输入、跳转、等待、页面翻译、天气查询、搜索网页、后台 HTTP 请求、企业微信推送、有限 Chrome API、可选页面 JavaScript 执行。
 - 虚拟文件系统：文件管理器与 Agent Tool 共享 IndexedDB 文件系统；支持目录浏览、文本编辑、上传、下载、重命名、回收站、恢复、彻底删除，以及 `fs_list`、`fs_read`、`fs_write`、`fs_edit`、`fs_search`、`fs_apply_patch` 等结构化 Tool。
+- 本地知识库：将 VFS 文本文件索引到浏览器本地 IndexedDB，支持 `knowledge_ingest`、`knowledge_search`、`knowledge_read`、`knowledge_forget`、`knowledge_status`；首次启动会创建并索引 WebClaw 操作手册。
+- 工作区记忆：自动初始化 `AGENTS.md`、`SOUL.md`、`TOOLS.md`、`IDENTITY.md`、`USER.md`、`MEMORY.md` 及每日记忆文件，并在每次 Agent 运行前按上下文预算注入。
+- 受控 Tool 轨迹：保留受限长度的工具结果和失败原因，用于后续会话与 Provider 切换时的自我纠错。
 - 受限 `fs_shell`：可在该虚拟文件系统中执行 `pwd`、`ls`、`stat`、`mkdir`、`touch`、`cat`、`cp`、`mv`、`rm`，不执行真实系统 Shell。
 - 自定义 Tool、Skill、Schedule。
 - 微信、Telegram、企业微信机器人通道。
@@ -184,6 +187,7 @@ WebClaw 支持把外部消息通道接入当前活跃会话：
 
 - JavaScript 执行默认关闭。只有在你信任当前任务和页面时才应开启。
 - `run_js` 使用 Chrome `userScripts` API，能绕过页面 CSP 对动态脚本的限制，但不能突破浏览器同源策略、HttpOnly Cookie、扩展权限或系统权限。
+- `run_js` 可直接接收 `code`，或通过 `vfsPath` 执行 VFS 内的 `.js`、`.mjs`、`.cjs` 文件；两者只能提供一个。
 - `http_request` 在扩展 background 中执行，用于调用页面 JS 因 CORS 无法调用的接口或 webhook。
 - `fs_shell` 仅操作扩展 IndexedDB 中的虚拟文件系统；不访问本机文件。它拒绝管道、重定向、命令替换和多命令输入，`rm` 会移动到 `/.trash`。
 - 回收站会保存原路径和删除时间。`fs_restore` 默认拒绝同名覆盖，可选择 `onConflict: "rename"` 自动改名，或在 `confirmOverwrite: true` 时把现有目标移入回收站后恢复；`fs_purge` 与 `fs_empty_trash` 只能永久删除 `/.trash` 中的内容，并要求 `confirm: true`。

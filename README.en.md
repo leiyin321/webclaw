@@ -22,6 +22,9 @@ or message channels.
 - Browser tools: page snapshot, click, type, navigate, wait, page translation, current weather lookup, background HTTP requests, limited tab APIs, and JavaScript execution.
 - Virtual filesystem: the file manager and agent tools share an IndexedDB-backed filesystem with directory browsing, text editing, upload, download, rename, trash, restore, permanent deletion, and structured tools including `fs_list`, `fs_read`, `fs_write`, `fs_edit`, `fs_search`, and `fs_apply_patch`.
 - Restricted `fs_shell`: provides `pwd`, `ls`, `stat`, `mkdir`, `touch`, `cat`, `cp`, `mv`, and `rm` in that extension-private filesystem without running a real system shell.
+- Local knowledge base: indexes VFS text files in browser-local IndexedDB with `knowledge_ingest`, `knowledge_search`, `knowledge_read`, `knowledge_forget`, and `knowledge_status`; a WebClaw operation manual is created and indexed on first startup.
+- Workspace memory: initializes `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, and daily memory files, then injects bounded workspace context before each agent run.
+- Bounded structured tool trajectories: preserves tool outcomes and failure reasons for later turns and cross-provider continuation.
 
 ## Repository Guide
 
@@ -195,6 +198,7 @@ The direct weather tool geocodes the location with Open-Meteo, fetches current c
 
 - JavaScript execution is disabled by default. Enable it only when you trust the task and page.
 - `run_js` uses Chrome's `userScripts` API so model-provided JavaScript can run without page CSP or extension `unsafe-eval` blocking it. In Chrome 138+, enable `Allow User Scripts` for WebClaw on the extension details page if Chrome reports that `userScripts` is unavailable.
+- `run_js` accepts inline `code` or `vfsPath` for a VFS `.js`, `.mjs`, or `.cjs` file; provide exactly one.
 - Use `http_request` for cross-origin webhooks or APIs that pages cannot call because of CORS. It runs in the extension background service worker and uses the extension host permissions.
 - `fs_shell` only operates on the IndexedDB-backed virtual filesystem and cannot access local machine files. It rejects pipes, redirection, command substitution, and multi-command input; `rm` moves entries into `/.trash`.
 - Trash records retain the original path and deletion time. `fs_restore` rejects a conflicting destination by default, supports `onConflict: "rename"`, and can move the existing destination to trash when `confirmOverwrite: true`; `fs_purge` and `fs_empty_trash` permanently delete only trash entries and require `confirm: true`.
