@@ -2,6 +2,16 @@
 
 All notable changes to WebClaw will be documented in this file.
 
+## 0.4.6
+
+- Generate the matching default Provider name when the Provider type changes.
+- Preserve a manually entered Provider name instead of replacing it during a
+  later type change.
+- Allow the controlled configuration-patch tools to switch the active Provider
+  with `set_active_provider` and an existing Provider ID.
+- Include active Provider changes in validation, previews, change history, and
+  rollback without exposing or modifying Provider credentials.
+
 ## 0.4.5
 
 - Replace mixed letter-and-number Channel approval codes with six-digit numeric

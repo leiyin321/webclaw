@@ -25,6 +25,7 @@ or message channels.
 - Local knowledge base: indexes VFS text files in browser-local IndexedDB with `knowledge_ingest`, `knowledge_search`, `knowledge_read`, `knowledge_forget`, and `knowledge_status`; a WebClaw operation manual is created and indexed on first startup.
 - Workspace memory: initializes `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, and daily memory files, then injects bounded workspace context before each agent run.
 - Bounded structured tool trajectories: preserves tool outcomes and failure reasons for later turns and cross-provider continuation.
+- Controlled self-management patches can add tools, skills, and schedules or switch the active Provider to an existing Provider ID. They cannot read or modify Provider credentials.
 
 ## Repository Guide
 
@@ -57,6 +58,8 @@ node scripts/validate-release.mjs
 ## Provider setup
 
 Open Settings in the side panel to manage providers. You can add multiple providers, give each one a custom name, choose its type, and switch the active provider from the Provider dropdown.
+
+When the optional self-management tools are enabled, the agent can also switch the default Provider through the validated patch flow. It first reads redacted IDs with `list_webclaw_config`, proposes `{"op":"set_active_provider","providerId":"..."}`, and applies the returned patch ID. The operation cannot create or edit Providers and cannot access OAuth tokens or API keys. The latest switch can be restored with `rollback_webclaw_config_patch` while the previous Provider still exists. A switch takes effect on the next agent request or Channel/Schedule task; the request applying the patch finishes with its original Provider.
 
 For a `Codex / ChatGPT OAuth` provider, open Edit provider and click `Sign in with ChatGPT` after entering an authorized public Client ID.
 

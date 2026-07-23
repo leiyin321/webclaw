@@ -285,19 +285,15 @@ const BUILTIN_TOOLS = [
   },
   {
     name: "propose_webclaw_config_patch",
-    description: "Propose validated changes to WebClaw tools, skills, or schedules. This returns a patchId and preview diff but does not write the final config.",
+    description: "Propose validated changes to WebClaw tools, skills, schedules, or the active Provider. Use set_active_provider with a providerId returned by list_webclaw_config. This returns a patchId and preview diff but does not write the final config.",
     example: {
       tool: {
         name: "propose_webclaw_config_patch",
         args: {
           operations: [
             {
-              op: "upsert_schedule",
-              name: "daily_summary",
-              title: "Daily Summary",
-              expression: "每天 09:00",
-              instruction: "Summarize today's important updates and send them through configured notification tools.",
-              enabled: true
+              op: "set_active_provider",
+              providerId: "provider_id_from_list_webclaw_config"
             }
           ]
         }
@@ -306,7 +302,7 @@ const BUILTIN_TOOLS = [
   },
   {
     name: "apply_webclaw_config_patch",
-    description: "Apply a patch previously returned by propose_webclaw_config_patch.",
+    description: "Apply a patch previously returned by propose_webclaw_config_patch. An active Provider switch takes effect on the next agent run.",
     example: { tool: { name: "apply_webclaw_config_patch", args: { patchId: "patch_id_from_propose" } } }
   },
   {
@@ -344,7 +340,8 @@ const CONFIG_PATCH_OPERATIONS = new Set([
   "upsert_schedule",
   "delete_schedule",
   "enable_schedule",
-  "disable_schedule"
+  "disable_schedule",
+  "set_active_provider"
 ]);
 const PROTECTED_BUILTIN_TOOLS = new Set([
   "list_webclaw_config",
@@ -553,7 +550,7 @@ knowledge_forget removes only the index; it does not delete the source file. kno
 - A Skill is reusable guidance for choosing and combining capabilities.
 - A Schedule is a recurring instruction.
 - Prefer a Skill when existing Tools can complete the task. Add a new Tool only for a reusable deterministic capability that normal Tools cannot express.
-- Use list_webclaw_config before changing configuration. Use propose_webclaw_config_patch for a validated preview, then apply_webclaw_config_patch. Use rollback_webclaw_config_patch to undo an applied change when supported.
+- Use list_webclaw_config before changing configuration. Use propose_webclaw_config_patch for a validated preview, then apply_webclaw_config_patch. Use rollback_webclaw_config_patch to undo an applied change when supported. To change the default model Provider, use set_active_provider with an existing providerId; Provider credentials and endpoint configuration cannot be changed by self-management tools.
 
 For reusable page logic, store a small JavaScript file in VFS and call it through run_js after testing. This can extend workflows without granting new Chrome permissions.
 
@@ -657,7 +654,7 @@ function buildAgentSystemPrompt(settings) {
     hasTool("get_page_context") ? "Use get_page_context before interacting with an unfamiliar page for non-translation tasks." : "",
     hasTool("run_js") ? "Prefer selectors and normal tools for page operations. Use run_js only when normal tools are insufficient. run_js accepts exactly one of inline code or vfsPath for a virtual .js file." : "",
     hasTool("propose_webclaw_config_patch")
-      ? "You can improve WebClaw by first calling list_webclaw_config, then propose_webclaw_config_patch, then apply_webclaw_config_patch after the proposal is validated. Never invent raw chrome.storage writes. Prefer a skill for reusable knowledge, a tool for executable capability, and a schedule for recurring work."
+      ? "You can improve WebClaw by first calling list_webclaw_config, then propose_webclaw_config_patch, then apply_webclaw_config_patch after the proposal is validated. Use set_active_provider with an existing providerId to change the default Provider; never attempt to read or write Provider credentials. Never invent raw chrome.storage writes. Prefer a skill for reusable knowledge, a tool for executable capability, and a schedule for recurring work."
       : ""
   ].filter(Boolean).join(" ");
   const runJsNote = hasTool("run_js")
@@ -1272,6 +1269,7 @@ function normalizeConfigChangeLog(value) {
 
 function normalizeConfigSnapshot(value) {
   return {
+    activeProviderId: String(value.activeProviderId || ""),
     tools: normalizeTools(value.tools),
     skills: normalizeSkills(value.skills),
     schedules: normalizeSchedules(value.schedules)
@@ -1289,6 +1287,15 @@ function normalizeConfigPatchOperation(operation) {
   if (!operation || typeof operation !== "object") return null;
   const op = String(operation.op || "").trim();
   if (!CONFIG_PATCH_OPERATIONS.has(op)) return null;
+  if (op === "set_active_provider") {
+    const providerId = String(operation.providerId || "").trim();
+    if (!providerId) return null;
+    return {
+      ...operation,
+      op,
+      providerId
+    };
+  }
   const name = normalizeSelfConfigName(operation.name);
   if (!name) return null;
   return {
@@ -4332,7 +4339,11 @@ function listWebClawConfig(settings) {
       appliedAt: change.appliedAt,
       rolledBackAt: change.rolledBackAt,
       status: change.status,
-      operations: change.operations.map((operation) => ({ op: operation.op, name: operation.name }))
+      operations: change.operations.map((operation) => ({
+        op: operation.op,
+        ...(operation.name ? { name: operation.name } : {}),
+        ...(operation.providerId ? { providerId: operation.providerId } : {})
+      }))
     }))
   };
 }
@@ -4344,7 +4355,7 @@ async function proposeWebClawConfigPatch(args) {
   const afterSettings = applyConfigPatchOperations(settings, operations);
   const after = selfConfigSnapshot(afterSettings);
   const diff = describeConfigDiff(before, after, operations);
-  const risk = operations.some((operation) => operation.target === "tool") ? "medium" : "low";
+  const risk = operations.some((operation) => ["tool", "provider"].includes(operation.target)) ? "medium" : "low";
   const patch = {
     id: crypto.randomUUID(),
     createdAt: Date.now(),
@@ -4392,7 +4403,9 @@ async function applyWebClawConfigPatch(args) {
   };
   const updatedPending = pending.filter((item) => item.id !== patch.id);
   const changeLog = [...normalizeConfigChangeLog(settings.configChangeLog), change].slice(-50);
+  const changesActiveProvider = operations.some((operation) => operation.op === "set_active_provider");
   const updated = await saveSettings({
+    ...(changesActiveProvider ? { activeProviderId: nextSettings.activeProviderId } : {}),
     tools: nextSettings.tools,
     skills: nextSettings.skills,
     schedules: nextSettings.schedules,
@@ -4402,7 +4415,9 @@ async function applyWebClawConfigPatch(args) {
   return {
     ok: true,
     changeId: change.id,
-    diff: describeConfigDiff(before, selfConfigSnapshot(updated), operations)
+    diff: describeConfigDiff(before, selfConfigSnapshot(updated), operations),
+    activeProviderId: updated.activeProviderId,
+    ...(changesActiveProvider ? { providerSwitchTakesEffect: "next_agent_run" } : {})
   };
 }
 
@@ -4420,8 +4435,17 @@ async function rollbackWebClawConfigPatch(args) {
     status: "rolled_back",
     rolledBackAt: Date.now()
   };
+  const changesActiveProvider = latestApplied.operations.some((operation) => operation.op === "set_active_provider");
+  const previousProviderId = latestApplied.before.activeProviderId;
+  if (
+    changesActiveProvider &&
+    !settings.providers.some((provider) => provider.id === previousProviderId)
+  ) {
+    throw new Error(`Cannot restore missing Provider: ${previousProviderId || "unknown"}`);
+  }
   const nextChanges = changes.map((change) => (change.id === rolledBack.id ? rolledBack : change));
   const updated = await saveSettings({
+    ...(changesActiveProvider ? { activeProviderId: previousProviderId } : {}),
     tools: latestApplied.before.tools,
     skills: latestApplied.before.skills,
     schedules: latestApplied.before.schedules,
@@ -4438,12 +4462,27 @@ function validateConfigPatchOperations(value, settings) {
   const rawOperations = Array.isArray(value) ? value : [];
   if (rawOperations.length === 0) throw new Error("operations must contain at least one config patch operation.");
   if (rawOperations.length > 20) throw new Error("A config patch can contain at most 20 operations.");
-  return rawOperations.map((operation) => validateConfigPatchOperation(operation, settings));
+  const operations = rawOperations.map((operation) => validateConfigPatchOperation(operation, settings));
+  if (operations.filter((operation) => operation.op === "set_active_provider").length > 1) {
+    throw new Error("A config patch can switch the active Provider at most once.");
+  }
+  return operations;
 }
 
 function validateConfigPatchOperation(operation, settings) {
   const normalized = normalizeConfigPatchOperation(operation);
   if (!normalized) throw new Error(`Unsupported or invalid config patch operation: ${JSON.stringify(operation)}`);
+  if (normalized.op === "set_active_provider") {
+    const provider = settings.providers.find((item) => item.id === normalized.providerId);
+    if (!provider) throw new Error(`Provider does not exist: ${normalized.providerId}`);
+    return {
+      op: normalized.op,
+      target: "provider",
+      action: "set_active",
+      providerId: provider.id,
+      providerName: provider.name
+    };
+  }
   const [action, target] = normalized.op.split("_");
   if (!["tool", "skill", "schedule"].includes(target)) {
     throw new Error(`Config patch target is not allowed: ${target}`);
@@ -4559,6 +4598,7 @@ function validateSelfManagedHttpTool(name, config) {
 function applyConfigPatchOperations(settings, operations) {
   const next = normalizeSettings(settings);
   for (const operation of operations) {
+    if (operation.target === "provider") next.activeProviderId = operation.providerId;
     if (operation.target === "skill") applySkillOperation(next, operation);
     if (operation.target === "schedule") applyScheduleOperation(next, operation);
     if (operation.target === "tool") applyToolOperation(next, operation);
@@ -4648,6 +4688,7 @@ function applyToolOperation(settings, operation) {
 
 function selfConfigSnapshot(settings) {
   return {
+    activeProviderId: String(settings.activeProviderId || ""),
     tools: normalizeTools(settings.tools),
     skills: normalizeSkills(settings.skills),
     schedules: normalizeSchedules(settings.schedules)
@@ -4655,7 +4696,11 @@ function selfConfigSnapshot(settings) {
 }
 
 function describeConfigDiff(before, after, operations) {
-  const lines = operations.map((operation) => `${operation.op}: ${operation.name}`);
+  const lines = operations.map((operation) => (
+    operation.op === "set_active_provider"
+      ? `${operation.op}: ${before.activeProviderId} -> ${after.activeProviderId} (${operation.providerName})`
+      : `${operation.op}: ${operation.name}`
+  ));
   const counts = {
     tools: [before.tools.length, after.tools.length],
     skills: [before.skills.length, after.skills.length],

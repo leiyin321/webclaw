@@ -110,7 +110,7 @@ const BUILTIN_TOOLS = [
   ["knowledge_forget", "Remove a document from the local knowledge index."],
   ["knowledge_status", "Read local knowledge index status."],
   ["list_webclaw_config", "Read a redacted summary of WebClaw configuration."],
-  ["propose_webclaw_config_patch", "Propose validated changes to tools, skills, or schedules."],
+  ["propose_webclaw_config_patch", "Propose validated changes to tools, skills, schedules, or the active Provider."],
   ["apply_webclaw_config_patch", "Apply a previously validated WebClaw config patch."],
   ["rollback_webclaw_config_patch", "Rollback the latest applied WebClaw config patch."]
 ].map(([name, description]) => ({
@@ -1631,14 +1631,16 @@ function closeProviderModal() {
 
 function changeProviderType() {
   if (!providerDraft) return;
+  const previousType = providerDraft.type;
+  const previousName = elements.providerName.value.trim();
+  const nextType = elements.providerType.value;
+  const shouldGenerateName = !previousName || previousName === defaultProviderName(previousType);
   providerDraft = {
     ...providerDraft,
-    type: elements.providerType.value,
-    config: structuredClone(PROVIDER_DEFAULTS[elements.providerType.value])
+    name: shouldGenerateName ? defaultProviderName(nextType) : previousName,
+    type: nextType,
+    config: structuredClone(PROVIDER_DEFAULTS[nextType])
   };
-  if (!providerDraft.name || providerDraft.name === defaultProviderName(providerDraft.type)) {
-    providerDraft.name = defaultProviderName(providerDraft.type);
-  }
   providerDirty = true;
   renderProviderModal();
 }

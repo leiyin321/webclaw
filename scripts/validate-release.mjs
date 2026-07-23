@@ -127,6 +127,18 @@ requireCondition(
     source.includes('openMode: "popup"'),
   "background GitHub Copilot device authorization completion is missing"
 );
+requireCondition(
+  source.includes("previousName === defaultProviderName(previousType)") &&
+    source.includes("name: shouldGenerateName ? defaultProviderName(nextType) : previousName"),
+  "Provider type changes must generate a matching default name without overwriting custom names"
+);
+requireCondition(
+  source.includes('"set_active_provider"') &&
+    source.includes('target: "provider"') &&
+    source.includes("activeProviderId: String(settings.activeProviderId") &&
+    source.includes("Cannot restore missing Provider"),
+  "controlled active Provider switching and rollback are missing"
+);
 const sidepanelHtml = readText("src/sidepanel.html");
 requireCondition(!sidepanelHtml.includes("<h2>Notifications</h2>"), "global Notifications settings are still present");
 

@@ -31,6 +31,7 @@ Load the unpacked extension in a clean Chrome profile and verify:
 - Settings starts Codex login in a separate window; hide or close Settings, complete authorization, then confirm the background poll stores the token and reopening Settings shows connected without another login;
 - Settings starts GitHub Copilot login in a separate window; hide or close Settings, complete authorization, then confirm the background poll stores the token and reopening Settings shows connected without another login;
 - a Codex request from both WeChat and Telegram receives a six-digit numeric approval code, accepts that code alone, rejects with `0`, then sends a verification URL and device code and continues after login; wrong-peer, denied, and expired replies do not authorize it;
+- `list_webclaw_config` returns redacted Provider IDs, `set_active_provider` switches only to an existing ID through propose/apply, and rollback restores the previous Provider without exposing credentials;
 - Provider sign-in, model refresh, Channels, and enabled Schedules work only after their origins and disclosures are granted;
 - settings, sessions, VFS, knowledge, and credentials persist across extension reloads;
 - revoking a site permission in Chrome causes a new permission request rather than a silent failure, even when a Schedule operation approval is saved.

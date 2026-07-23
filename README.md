@@ -24,7 +24,7 @@ WebClaw 目前是实验性的浏览器原生 Agent 框架，适合本地开发�
 - 自定义 Tool、Skill，以及可选的高级 Schedule 和自我配置 Tool。
 - 微信和 Telegram Channel；企业微信机器人通知由独立的 `qiyewechat_notification` Tool 提供。
 - Chrome 内置 Prompt API 和 Summarizer API 支持。
-- Agent 自管理能力：可通过受控 patch 增加 tool、skill、schedule。
+- Agent 自管理能力：可通过受控 patch 增加 tool、skill、schedule，或切换现有默认 Provider。
 
 ## 仓库文档
 
@@ -154,7 +154,11 @@ WebClaw 不依赖模型原生 function calling，而是提示模型每一步输�
 - Skill：长期规则、领域知识或操作流程，例如“分析币安公告时重点关注合约、杠杆、保证金调整”。
 - Schedule：可选高级功能，定时触发自然语言任务，例如“每天 09:00 检查币安公告并推送摘要”。
 
-WebClaw 支持通过配置管理工具受控地增加 tool、skill 和 schedule。模型只能提出结构化 patch，真正写入前会经过校验。
+WebClaw 支持通过配置管理工具受控地增加 tool、skill 和 schedule，也可以把默认 Provider 切换到一个已经存在的 Provider。模型应先调用 `list_webclaw_config` 获取 Provider ID，再通过 `propose_webclaw_config_patch` 提交 `set_active_provider` 操作，最后使用返回的 patch ID 调用 `apply_webclaw_config_patch`。该能力只能切换 Provider，不能读取或修改 OAuth token、API Key、端点及其他 Provider 配置，并可以用 `rollback_webclaw_config_patch` 回滚最近一次变更。切换从下一次 Agent 请求或 Channel/Schedule 任务开始生效，当前正在执行的请求仍由原 Provider 完成。
+
+```json
+{"tool":{"name":"propose_webclaw_config_patch","args":{"operations":[{"op":"set_active_provider","providerId":"现有 Provider ID"}]}}}
+```
 
 ## 页面翻译
 
