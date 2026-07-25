@@ -21,11 +21,23 @@ or message channels.
 - Multiple custom providers. Each provider is one of `Codex / ChatGPT OAuth`, `GitHub Copilot OAuth`, `Chrome AI`, `Local Ollama`, or `OpenAI-compatible API`.
 - Browser tools: page snapshot, click, type, navigate, wait, page translation, current weather lookup, background HTTP requests, limited tab APIs, and JavaScript execution.
 - Virtual filesystem: the file manager and agent tools share an IndexedDB-backed filesystem with directory browsing, text editing, upload, download, rename, trash, restore, permanent deletion, and structured tools including `fs_list`, `fs_read`, `fs_write`, `fs_edit`, `fs_search`, and `fs_apply_patch`.
-- Restricted `fs_shell`: provides `pwd`, `ls`, `stat`, `mkdir`, `touch`, `cat`, `cp`, `mv`, and `rm` in that extension-private filesystem without running a real system shell.
+- VFS static site preview: HTML/HTM/XHTML/SVG files in the file manager can open in a separate Chrome tab; the preview runtime loads relative CSS, JavaScript, images, fonts, and JSON resources from VFS.
+- Preview pages run in an isolated Extension Sandbox. They receive a project-scoped `localStorage` compatibility layer persisted in this browser, without access to extension credentials. This compatibility layer is not the real website-origin `localStorage`.
+- Restricted `fs_shell`: provides `pwd`, `cd`, `ls`, `stat`, `mkdir`, `touch`, `cat`, `cp`, `mv`, and `rm` in that extension-private filesystem without running a real system shell. `cd` updates the current session's working directory.
 - Local knowledge base: indexes VFS text files in browser-local IndexedDB with `knowledge_ingest`, `knowledge_search`, `knowledge_read`, `knowledge_forget`, and `knowledge_status`; a WebClaw operation manual is created and indexed on first startup.
 - Workspace memory: initializes `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, and daily memory files, then injects bounded workspace context before each agent run.
 - Bounded structured tool trajectories: preserves tool outcomes and failure reasons for later turns and cross-provider continuation.
+- Structured agent responses: Chrome AI uses Prompt API `responseConstraint`, Ollama uses a JSON Schema in `format`, OpenAI-compatible endpoints use `response_format`, Copilot uses the compatible JSON Tool protocol, and Codex uses native function calling.
+- Unified Agent Runtime: every Provider, Side Panel conversation, Channel, and Schedule shares the same Turn, Item, Tool, Plan, approval, stop, and context-compaction lifecycle.
 - Controlled self-management patches can add tools, skills, and schedules or switch the active Provider to an existing Provider ID. They cannot read or modify Provider credentials.
+
+## Agent Architecture
+
+WebClaw maintains one outer Agent Runtime. A request is represented as a `Turn`; model output, Tool calls, Tool results, and plans are stateful `Item` records. Streaming, interruption, approvals, error feedback, history persistence, and context compaction are handled once for the Side Panel, WeChat, Telegram, and Schedules.
+
+Model-specific behavior is isolated in Provider Adapters. An adapter owns authentication, message and media encoding, endpoints, stream parsing, context capabilities, and conversion of native function calling or JSON Tool transport into the same assistant/tool-call response. Switching Providers therefore does not switch the Agent workflow. Codex currently uses native function calling; Providers without a usable native Tool response use the adapter-level JSON transport fallback.
+
+For substantial work, the model can call `update_plan` to publish and update a plan. When a conversation exceeds the active adapter's context budget, the runtime compacts older history while retaining recent messages, goals, constraints, verified Tool results, relevant errors, and unfinished work. The resulting summary is WebClaw-generated execution state, not a user instruction.
 
 ## Repository Guide
 
@@ -52,6 +64,7 @@ Run the same syntax checks used by CI:
 
 ```bash
 ./scripts/check-syntax.sh
+node scripts/test-agent-runtime.mjs
 node scripts/validate-release.mjs
 ```
 
@@ -156,7 +169,7 @@ When you choose `auto` in WebClaw, WebClaw omits the `model` field from the Copi
 
 ## Agent protocol
 
-The model is prompted to emit a single JSON object per step:
+All Providers share one Agent Runtime. Provider Adapters own authentication, wire format, streaming, media encoding, context capabilities, and native function calling versus JSON Tool transport. Switching Providers therefore does not change session, Tool, Plan, approval, stop, or persistence behavior. A model step commonly emits one JSON Tool object:
 
 ```json
 {"tool":{"name":"get_page_context","args":{}}}
@@ -167,6 +180,13 @@ or:
 ```json
 {"final":"Done"}
 ```
+
+Providers with structured-output support use their JSON Schema or native Tool
+calling; others use the compatible JSON transport. The Runtime normalizes all
+of them into the same Tool-call and final-result lifecycle.
+
+The global `Max steps` setting accepts any positive integer and has no artificial
+upper bound. It limits one Agent run, not a Provider's context or server quota.
 
 This keeps the agent provider-neutral and works with local models that do not support native function calling.
 
@@ -208,7 +228,7 @@ The direct weather tool geocodes the location with Open-Meteo, fetches current c
 - `userScripts` injection is not blocked by page CSP dynamic-evaluation rules, but it cannot bypass the same-origin policy, HttpOnly cookies, extension permissions, or operating-system permissions.
 - `run_js` accepts inline `code` or `vfsPath` for a VFS `.js`, `.mjs`, or `.cjs` file; provide exactly one.
 - Use `http_request` for cross-origin webhooks or APIs that pages cannot call because of CORS. HTTP(S) access uses optional host permissions requested per origin with a reason before first use.
-- `fs_shell` only operates on the IndexedDB-backed virtual filesystem and cannot access local machine files. It rejects pipes, redirection, command substitution, and multi-command input; `rm` moves entries into `/.trash`.
+- `fs_shell` only operates on the IndexedDB-backed virtual filesystem and cannot access local machine files. It supports `pwd`, `cd`, `ls`, `stat`, `mkdir`, `touch`, `cat`, `cp`, `mv`, and `rm`; `cd` validates the target directory, updates the current session working directory, and makes later relative paths resolve from it. It rejects pipes, redirection, command substitution, and multi-command input; `rm` moves entries into `/.trash`.
 - Trash records retain the original path and deletion time. `fs_restore` rejects a conflicting destination by default, supports `onConflict: "rename"`, and can move the existing destination to trash when `confirmOverwrite: true`; `fs_purge` and `fs_empty_trash` permanently delete only trash entries and require `confirm: true`.
 - Successfully downloaded WeChat channel media is also archived under `/inbox/<channel>/`. Its content is still sent to the active provider according to that provider's media capabilities.
 - Edit and enable the `qiyewechat_notification` Tool to configure an enterprise WeChat robot webhook. Its Tool name and Display name are both fixed to `qiyewechat_notification`; use only this canonical identifier. It supports text and markdown payloads without putting the webhook into model prompts.

@@ -18,7 +18,7 @@ WebClaw lets a user converse with a model they select and explicitly authorize t
 
 WebClaw 是一个用户控制的 Chrome 浏览器 AI 助手。用户可以连接 Local Ollama、OpenAI-compatible API、Chrome AI，以及实验性的 OAuth Provider。Codex 和 GitHub Copilot 集成暂时使用公开 Client ID 作为兼容默认值，相关来源边界、替换方式和失效风险在产品及 `OAUTH.md` 中披露。
 
-在会话中，WebClaw 可以根据用户请求读取当前页面上下文、点击或输入、翻译页面、搜索网页、调用受控 HTTP Tool，以及管理扩展本地的虚拟文件和知识库。网页和外部服务采用按域名申请的 optional host permissions；向外部模型首次发送数据前会披露数据范围；JavaScript 执行默认关闭，临时调用逐次批准，Schedule 只有在用户首次检查并允许后才能复用完全相同操作的授权。
+在会话中，WebClaw 可以根据用户请求读取当前页面上下文、点击或输入、翻译页面、搜索网页、调用受控 HTTP Tool，以及管理扩展本地的虚拟文件和知识库。文件管理器还可以在隔离的 Chrome 标签页中预览 VFS 内的静态 HTML 网站及其相对资源。网页和外部服务采用按域名申请的 optional host permissions；向外部模型首次发送数据前会披露数据范围；JavaScript 执行默认关闭，临时调用逐次批准，Schedule 只有在用户首次检查并允许后才能复用完全相同操作的授权。
 
 Channels、Schedules 和自我配置 Tool 是可选高级功能。只有用户显式配置并启用后才工作。WebClaw 仓库版本不运营用于转发提示词、页面内容或模型响应的后端服务。
 

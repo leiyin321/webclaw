@@ -27,6 +27,14 @@ export async function runVirtualFileSystemShell(command, { cwd = "/workspace" } 
     case "pwd":
       requireArgCount(name, args, 0, 0);
       return { command: name, cwd: currentDirectory, output: currentDirectory };
+    case "cd": {
+      requireArgCount(name, args, 0, 1);
+      const target = resolvePath(args[0] || ".", currentDirectory);
+      const entry = await getEntry(target);
+      if (!entry) throw new VirtualFileSystemError(`No such file or directory: ${target}`);
+      if (entry.type !== "directory") throw new VirtualFileSystemError(`Not a directory: ${target}`);
+      return { command: name, cwd: target, output: target };
+    }
     case "ls":
       return listCommand(args, currentDirectory);
     case "stat":
@@ -44,7 +52,7 @@ export async function runVirtualFileSystemShell(command, { cwd = "/workspace" } 
     case "rm":
       return removeCommand(args, currentDirectory);
     default:
-      throw new VirtualFileSystemError(`Unsupported virtual filesystem command: ${name}. Allowed commands: pwd, ls, stat, mkdir, touch, cat, cp, mv, rm.`);
+      throw new VirtualFileSystemError(`Unsupported virtual filesystem command: ${name}. Allowed commands: pwd, cd, ls, stat, mkdir, touch, cat, cp, mv, rm.`);
   }
 }
 

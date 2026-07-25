@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "WebClaw",
-  "version": "0.4.7",
+  "version": "0.5.0",
   "minimum_chrome_version": "135",
   "description": "A user-controlled browser AI assistant for conversations, page actions, tools, and optional advanced automation.",
   "permissions": [
@@ -38,5 +38,11 @@
   },
   "side_panel": {
     "default_path": "src/sidepanel.html"
+  },
+  "content_security_policy": {
+    "sandbox": "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:; style-src 'self' 'unsafe-inline' data: blob:"
+  },
+  "sandbox": {
+    "pages": ["src/preview-sandbox.html"]
   }
 }

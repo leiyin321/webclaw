@@ -30,6 +30,7 @@ requireCondition(!Array.isArray(manifest.content_scripts), "global content_scrip
 const runtimeFiles = [
   manifest.background?.service_worker,
   manifest.side_panel?.default_path,
+  ...(manifest.sandbox?.pages || []),
   ...Object.values(manifest.icons || {}),
   ...Object.values(manifest.action?.default_icon || {})
 ].filter(Boolean);
@@ -153,11 +154,49 @@ requireCondition(
   "controlled active Provider switching and rollback are missing"
 );
 requireCondition(
-  source.includes("webclaw-default-manual: 0.4.7-r1") &&
+  source.includes("webclaw-default-manual: 0.5.0-r1") &&
     source.includes("REPLACEABLE_DEFAULT_KNOWLEDGE_MANUAL_HASHES") &&
+    source.includes("qxBFf1iNGSrbPVRGoSSOQUH8Mu9b6rgnrTBznpwsH1s") &&
     source.includes("expectedVersion: existing.entry.version") &&
-    source.includes('"webclaw", "manual", "operations", "0.4.7"'),
+    source.includes('"webclaw", "manual", "operations", "0.5.0"'),
   "versioned default knowledge manual migration is missing"
+);
+const backgroundSource = readText("src/background.js");
+const agentRuntimeSource = readText("src/agent-runtime.js");
+const runAgentSource = backgroundSource.match(
+  /async function runAgent\([\s\S]*?\n}\n\nfunction emitAgentEvent/
+)?.[0] || "";
+requireCondition(
+  backgroundSource.includes('from "./agent-runtime.js"') &&
+    agentRuntimeSource.includes("planHistoryCompaction") &&
+    agentRuntimeSource.includes("normalizeAgentPlan"),
+  "the shared Agent Runtime module is missing"
+);
+requireCondition(
+  backgroundSource.includes("const PROVIDER_ADAPTER_DEFINITIONS = Object.freeze") &&
+    backgroundSource.includes("providerAdapterFor(provider).generateAgent") &&
+    backgroundSource.includes("providerAdapterFor(provider).generateText") &&
+    !/provider(?:\?|\.)?\.type/.test(runAgentSource),
+  "Provider-specific behavior must stay behind the Provider Adapter boundary"
+);
+requireCondition(
+  backgroundSource.includes('name: "update_plan"') &&
+    backgroundSource.includes('case "update_plan"') &&
+    backgroundSource.includes('"plan_updated"') &&
+    readText("src/sidepanel.js").includes('["update_plan",'),
+  "unified Agent planning support is incomplete"
+);
+requireCondition(
+  backgroundSource.includes('"context_compacted"') &&
+    backgroundSource.includes("planHistoryCompaction(messages") &&
+    readText("src/sidepanel.js").includes('event.type === "context_compacted"'),
+  "context compaction is not wired through the unified Agent event stream"
+);
+requireCondition(
+  !backgroundSource.includes("TOOL_DECISION_SYSTEM_PROMPT") &&
+    !backgroundSource.includes("decideToolExecution") &&
+    !backgroundSource.includes("DIRECT_CHAT_SYSTEM_PROMPT"),
+  "the removed alternate Tool-decision runtime must not be restored"
 );
 const sidepanelHtml = readText("src/sidepanel.html");
 requireCondition(!sidepanelHtml.includes("<h2>Notifications</h2>"), "global Notifications settings are still present");
@@ -170,7 +209,7 @@ const missingSelectors = [...new Set(sidepanelSelectors.filter((id) => !htmlIds.
 requireCondition(missingSelectors.length === 0, `side panel selectors are missing from HTML: ${missingSelectors.join(", ")}`);
 
 const backgroundToolBlock = readText("src/background.js").match(
-  /const BUILTIN_TOOLS = \[([\s\S]*?)\n\];\n\nconst FALLBACK_MODEL_OPTIONS/
+  /const BUILTIN_TOOLS = \[([\s\S]*?)\n\];\n\nconst BUILTIN_TOOL_REQUIRED_ARGS/
 )?.[1] || "";
 const panelToolBlock = readText("src/sidepanel.js").match(/const BUILTIN_TOOLS = \[([\s\S]*?)\n\]\.map/)?.[1] || "";
 const backgroundTools = new Set([...backgroundToolBlock.matchAll(/^    name:\s*"([^"]+)"/gm)].map((match) => match[1]));

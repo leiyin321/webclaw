@@ -2,6 +2,32 @@
 
 All notable changes to WebClaw will be documented in this file.
 
+## 0.5.0
+
+- Introduce one provider-independent Agent Runtime shared by the Side Panel,
+  Channels, and Schedules, with typed Turn and Item lifecycle events.
+- Isolate authentication, wire formats, streaming, context capabilities, and
+  native versus JSON Tool transport in registered Provider Adapters.
+- Add the `update_plan` Tool and persistent plan display for substantial tasks.
+- Compact oversized conversation history against the active adapter's context
+  budget while preserving recent messages and a bounded factual summary.
+- Persist structured Tool calls, results, turn status, and compaction state so a
+  session can continue across reloads and Provider switches.
+- Add structured-output support at each Provider Adapter boundary: Chrome AI
+  Prompt API constraints, Ollama JSON Schema, OpenAI-compatible response
+  formats, and native Codex function calls where available.
+- Add `fs_shell cd`, per-session working directories, and file-manager/session
+  linkage. Remove the artificial upper bound from the global Max steps setting.
+- Add VFS static preview for HTML, HTM, XHTML, and SVG files in a top-level
+  Chrome tab using the Extension Sandbox, including relative CSS, JavaScript,
+  image, font, and JSON resources.
+- Add a project-scoped `localStorage` compatibility layer for VFS previews,
+  folder selection with single-click versus double-click navigation, and
+  preview controls in the file manager.
+- Add release tests for the shared runtime and package validation, and update
+  the bilingual documentation, privacy disclosure, and built-in knowledge
+  manual for the 0.5.0 runtime.
+
 ## 0.4.7
 
 - Standardize the enterprise WeChat notification Tool name and display name as

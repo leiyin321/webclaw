@@ -188,11 +188,10 @@ h1 {
 
 .workspace-item {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   width: 100%;
-  padding: 8px 9px;
+  padding: 0;
   border: 0;
   border-bottom: 1px solid #edf0f5;
   border-radius: 0;
@@ -209,6 +208,43 @@ h1 {
 .workspace-item.selected {
   color: #202124;
   background: #edf4ff;
+}
+
+.workspace-entry-main {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  width: 100%;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+}
+
+.workspace-entry-main:hover {
+  color: inherit;
+  background: transparent;
+}
+
+.workspace-preview-button {
+  width: 28px;
+  height: 28px;
+  margin-right: 5px;
+  padding: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  color: #245ea8;
+  background: #fff;
+  font-size: 11px;
+}
+
+.workspace-preview-button:hover {
+  color: #174a87;
+  background: #eaf2ff;
 }
 
 .workspace-item .workspace-name {
@@ -264,6 +300,32 @@ h1 {
   padding: 8px 12px;
   background: #f9fafc;
   border-bottom: 1px solid #dfe3ea;
+}
+
+.session-workdir {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  padding: 0 5px;
+  color: #5f6368;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.session-workdir code {
+  min-width: 0;
+  overflow: hidden;
+  color: #3c4043;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
 }
 
 .session-picker {
@@ -775,6 +837,14 @@ textarea {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+.message.plan {
+  color: #25352b;
+  background: #f3f7f4;
+  border-color: #b9cbbd;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 .composer {
   display: grid;
   grid-template-columns: 1fr auto auto;
@@ -810,6 +880,10 @@ textarea {
 
   .session-picker span {
     color: #bdc1c6;
+  }
+
+  .session-workdir code {
+    color: #e8eaed;
   }
 
   input,
@@ -935,6 +1009,12 @@ textarea {
     border-color: #28476a;
   }
 
+  .message.plan {
+    color: #d9eadc;
+    background: #18271d;
+    border-color: #395540;
+  }
+
   .message.wechat {
     color: #d6f5e4;
     background: #123121;
@@ -949,7 +1029,8 @@ textarea {
 
   .workspace-header h2,
   .workspace-editor-header strong,
-  .workspace-item {
+  .workspace-item,
+  .workspace-entry-main {
     color: #f1f3f4;
   }
 
@@ -966,6 +1047,12 @@ textarea {
   .workspace-item.selected {
     color: #f1f3f4;
     background: #29384a;
+  }
+
+  .workspace-preview-button {
+    border-color: #56616f;
+    color: #b9d5ff;
+    background: #20252b;
   }
 
   .workspace-editor {

@@ -14,6 +14,8 @@ jobs:
           node-version: "22"
       - name: Check JavaScript syntax
         run: ./scripts/check-syntax.sh
+      - name: Test Agent Runtime
+        run: node scripts/test-agent-runtime.mjs
       - name: Validate release configuration
         run: node scripts/validate-release.mjs
       - name: Build extension package

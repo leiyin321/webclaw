@@ -17,14 +17,26 @@ WebClaw 目前是实验性的浏览器原生 Agent 框架，适合本地开发�
 - 模型列表刷新、模型下拉选择、Thinking mode 配置。
 - 浏览器工具：页面上下文、点击、输入、跳转、等待、页面翻译、天气查询、搜索网页、后台 HTTP 请求、企业微信推送、有限 Chrome API、可选页面 JavaScript 执行。
 - 虚拟文件系统：文件管理器与 Agent Tool 共享 IndexedDB 文件系统；支持目录浏览、文本编辑、上传、下载、重命名、回收站、恢复、彻底删除，以及 `fs_list`、`fs_read`、`fs_write`、`fs_edit`、`fs_search`、`fs_apply_patch` 等结构化 Tool。
+- VFS 静态网页预览：文件管理器中的 HTML/HTM/XHTML/SVG 文件可直接打开到独立 Chrome 标签页，预览运行时会从 VFS 加载同目录的 CSS、JS、图片、字体和 JSON 资源。
+- 预览页面运行在隔离的 Extension Sandbox 中；网页可使用由 WebClaw 提供的项目级 `localStorage` 兼容层，数据保存在浏览器本地，不访问扩展凭证。该兼容层不是网站真实 origin 的 `localStorage`。
 - 本地知识库：将 VFS 文本文件索引到浏览器本地 IndexedDB，支持 `knowledge_ingest`、`knowledge_search`、`knowledge_read`、`knowledge_forget`、`knowledge_status`；首次启动会创建并索引 WebClaw 操作手册。
 - 工作区记忆：自动初始化 `AGENTS.md`、`SOUL.md`、`TOOLS.md`、`IDENTITY.md`、`USER.md`、`MEMORY.md` 及每日记忆文件，并在每次 Agent 运行前按上下文预算注入。
 - 受控 Tool 轨迹：保留受限长度的工具结果和失败原因，用于后续会话与 Provider 切换时的自我纠错。
-- 受限 `fs_shell`：可在该虚拟文件系统中执行 `pwd`、`ls`、`stat`、`mkdir`、`touch`、`cat`、`cp`、`mv`、`rm`，不执行真实系统 Shell。
+- 统一 Agent Runtime：所有 Provider、Side Panel、Channel 和 Schedule 共用 Turn、Item、Tool、Plan、审批、停止和上下文压缩机制。
+- 结构化 Agent 响应：Chrome AI 使用 Prompt API `responseConstraint`，Ollama 使用 `format` JSON Schema，OpenAI-compatible 使用 `response_format`，Copilot 使用兼容的 JSON Tool 协议，Codex 使用原生函数调用。
+- 受限 `fs_shell`：可在该虚拟文件系统中执行 `pwd`、`cd`、`ls`、`stat`、`mkdir`、`touch`、`cat`、`cp`、`mv`、`rm`，`cd` 会更新当前会话的工作目录，不执行真实系统 Shell。
 - 自定义 Tool、Skill，以及可选的高级 Schedule 和自我配置 Tool。
 - 微信和 Telegram Channel；企业微信机器人通知由独立的 `qiyewechat_notification` Tool 提供。
 - Chrome 内置 Prompt API 和 Summarizer API 支持。
 - Agent 自管理能力：可通过受控 patch 增加 tool、skill、schedule，或切换现有默认 Provider。
+
+## Agent 架构
+
+WebClaw 只维护一套外层 Agent Runtime。它把一次请求表示为 `Turn`，把模型输出、Tool 调用、Tool 结果和计划表示为有状态的 `Item`，并统一处理流式输出、停止、审批、错误反馈、历史持久化和上下文压缩。Side Panel、微信、Telegram 和 Schedule 都调用同一运行时。
+
+模型差异限制在 Provider Adapter 内。每种 Provider 只负责认证、消息与媒体编码、请求端点、流解析、上下文能力，以及原生 function calling 或 JSON Tool transport 的转换。适配器最终都返回统一的 assistant 或 tool-call 响应，因此切换 Provider 不会切换 Agent 工作流。Codex 当前使用原生 function calling；未提供可用原生 Tool 响应的 Provider 使用适配器内的 JSON transport fallback。
+
+复杂任务可调用 `update_plan` 发布或更新计划。长会话超过当前模型的适配器预算时，运行时会压缩较早历史，保留近期消息、目标、约束、已验证 Tool 结果、错误和未完成事项。压缩摘要属于 WebClaw 生成的执行状态，不作为用户指令。
 
 ## 仓库文档
 
@@ -134,7 +146,7 @@ WebClaw 使用 GitHub OAuth device flow 登录 Copilot：
 
 ## Agent 协议
 
-WebClaw 不依赖模型原生 function calling，而是提示模型每一步输出一个 JSON 对象：
+所有 Provider 共用同一个 Agent Runtime。Provider Adapter 负责认证、消息格式、流式响应、媒体编码、上下文能力，以及原生 function calling 或 JSON Tool transport；因此切换 Provider 不会改变会话、Tool、Plan、审批、停止和持久化机制。模型每一步通常输出一个 JSON Tool 对象：
 
 ```json
 {"tool":{"name":"get_page_context","args":{}}}
@@ -146,7 +158,9 @@ WebClaw 不依赖模型原生 function calling，而是提示模型每一步输�
 {"final":"Done"}
 ```
 
-这种协议可以兼容本地模型、OpenAI-compatible 模型、Chrome AI、Codex 和 Copilot。
+支持结构化输出的 Provider 会使用对应的 JSON Schema 或原生 Tool calling；不支持时使用兼容的 JSON transport。运行时将它们统一成相同的 Tool 调用和最终结果格式。
+
+全局 `Max steps` 只要求填写正整数，不设置人为的最大值；它限制单次 Agent 运行的步数，不等同于 Provider 的上下文或服务端限额。
 
 ## Tool、Skill 和 Schedule
 
@@ -211,7 +225,7 @@ WebClaw 支持把外部消息通道接入当前活跃会话：
 - `userScripts` 注入不受页面 CSP 的动态求值限制，但不能突破浏览器同源策略、HttpOnly Cookie、扩展权限或系统权限。
 - `run_js` 可直接接收 `code`，或通过 `vfsPath` 执行 VFS 内的 `.js`、`.mjs`、`.cjs` 文件；两者只能提供一个。
 - `http_request` 在扩展 background 中执行，用于调用页面 JS 因 CORS 无法调用的接口或 webhook。
-- `fs_shell` 仅操作扩展 IndexedDB 中的虚拟文件系统；不访问本机文件。它拒绝管道、重定向、命令替换和多命令输入，`rm` 会移动到 `/.trash`。
+- `fs_shell` 仅操作扩展 IndexedDB 中的虚拟文件系统；支持 `pwd`、`cd`、`ls`、`stat`、`mkdir`、`touch`、`cat`、`cp`、`mv`、`rm`。`cd` 会校验目标目录并更新当前会话的工作目录，后续相对路径从该目录解析；它不访问本机文件，也拒绝管道、重定向、命令替换和多命令输入，`rm` 会移动到 `/.trash`。
 - 回收站会保存原路径和删除时间。`fs_restore` 默认拒绝同名覆盖，可选择 `onConflict: "rename"` 自动改名，或在 `confirmOverwrite: true` 时把现有目标移入回收站后恢复；`fs_purge` 与 `fs_empty_trash` 只能永久删除 `/.trash` 中的内容，并要求 `confirm: true`。
 - 通过微信通道收到且已下载成功的媒体会归档到 `/inbox/<channel>/`；文件内容仍按当前 Provider 的媒体能力发送给模型。
 - API key、OAuth token、Webhook、会话和通道状态存储在 `chrome.storage.local`。
@@ -225,6 +239,7 @@ WebClaw 支持把外部消息通道接入当前活跃会话：
 
 ```bash
 ./scripts/check-syntax.sh
+node scripts/test-agent-runtime.mjs
 node scripts/validate-release.mjs
 ```
 

@@ -12,7 +12,9 @@ import {
   vfsRestore,
   vfsWriteFile
 } from "./virtual-file-system.js";
+import { CONTEXT_SUMMARY_PREFIX } from "./agent-runtime.js";
 import { DISTRIBUTION_OAUTH_CLIENT_IDS } from "./oauth-clients.js";
+import { buildVfsPreviewDocument } from "./vfs-preview.js";
 
 const PROVIDER_DEFAULTS = {
   ollama: {
@@ -93,7 +95,8 @@ const BUILTIN_TOOLS = [
   ["qiyewechat_notification", "Send text or markdown through a configured WeCom robot webhook."],
   ["chrome_api", "Use limited Chrome tab APIs."],
   ["wait", "Wait for a short period."],
-  ["fs_shell", "Run safe commands in the virtual filesystem."],
+  ["update_plan", "Create or update the current turn plan for substantial work."],
+  ["fs_shell", "Run safe virtual filesystem commands including pwd and cd; cd changes the current session directory."],
   ["fs_list", "List virtual filesystem directories."],
   ["fs_read", "Read virtual filesystem files."],
   ["fs_write", "Create or replace virtual text files."],
@@ -143,6 +146,7 @@ const CHAT_SESSIONS_KEY = "webclawChatSessions";
 const OPERATION_APPROVAL_GRANTS_KEY = "webclawOperationApprovalGrants";
 const MAX_STORED_CHAT_MESSAGES = 200;
 const MAX_STORED_SESSIONS = 80;
+const MAX_STORED_TURNS = 100;
 const standaloneView = new URLSearchParams(window.location.search).get("view");
 
 const elements = {
@@ -336,6 +340,7 @@ const elements = {
   checkGitHubCopilot: document.querySelector("#checkGitHubCopilot"),
   clearGitHubCopilot: document.querySelector("#clearGitHubCopilot"),
   sessionSelect: document.querySelector("#sessionSelect"),
+  sessionWorkingDirectory: document.querySelector("#sessionWorkingDirectory"),
   newSession: document.querySelector("#newSession"),
   clearSession: document.querySelector("#clearSession"),
   deleteSession: document.querySelector("#deleteSession"),
@@ -351,7 +356,12 @@ let codexPollTimer = null;
 let githubCopilotPollTimer = null;
 let activeAgentPort = null;
 let activeAssistantNode = null;
+let activeTurnId = "";
+let activePlanNode = null;
+const activeAgentItemNodes = new Map();
 let pendingAgentApproval = null;
+let chatSessionWriteQueue = Promise.resolve();
+let contextCompactionWriteQueue = Promise.resolve();
 let wechatDrainTimer = null;
 let wechatAutoConnectStarted = false;
 let providerDirty = false;
@@ -377,6 +387,7 @@ let scheduleDirty = false;
 let wechatBridgeLatestStatus = {};
 let renderingSettings = false;
 let workspacePath = "/workspace";
+let workspaceSyncInProgress = false;
 let workspaceSelection = null;
 let workspaceEditorState = null;
 const incomingWechatQueue = [];
@@ -396,11 +407,11 @@ async function init() {
     settings = normalizePanelSettings((await runtimeMessage({ type: "WEBCLAW_GET_SETTINGS" })).settings);
     renderSettings();
     showProductDisclosureIfNeeded();
+    await restoreChatHistory();
     if (standaloneView === "settings" || standaloneView === "workspace") {
       await activateStandaloneView(standaloneView);
       return;
     }
-    await restoreChatHistory();
     ensureWechatBridgeConnection();
     drainWechatAgentEvents();
     startWechatDrainTimer();
@@ -433,6 +444,7 @@ async function activateStandaloneView(view) {
   elements.settingsPanel.classList.add("hidden");
   elements.workspacePanel.classList.remove("hidden");
   await runtimeMessage({ type: "WEBCLAW_ENSURE_WORKSPACE_DEFAULTS" });
+  workspacePath = activeSession().workingDirectory;
   await renderWorkspace({ preserveEditor: false });
 }
 
@@ -440,6 +452,7 @@ function bindEvents() {
   elements.settingsToggle.addEventListener("click", () => openAuxiliaryWindow("settings"));
   elements.workspaceToggle.addEventListener("click", () => openAuxiliaryWindow("workspace"));
   elements.closeWindow.addEventListener("click", () => window.close());
+  window.addEventListener("message", handlePreviewMessage);
   elements.workspaceGo.addEventListener("click", () => openWorkspacePath(elements.workspacePath.value));
   elements.workspacePath.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
@@ -714,12 +727,11 @@ function handleStorageChanged(changes, areaName) {
   if (areaName !== "local") return;
   if (changes[OPERATION_APPROVAL_GRANTS_KEY]) refreshOperationApprovalGrantState();
   if (changes[CHAT_SESSIONS_KEY]?.newValue && !activeAgentPort) {
-    const currentActive = chatSessions.activeSessionId;
     chatSessions = normalizeChatSessions(changes[CHAT_SESSIONS_KEY].newValue);
-    if (chatSessions.sessions.some((session) => session.id === currentActive)) {
-      chatSessions.activeSessionId = currentActive;
-    }
     renderActiveSession();
+    if (standaloneView === "workspace") {
+      syncWorkspaceToActiveSession();
+    }
   }
   if (!changes.settings?.newValue) return;
   if (providerModalOpen && providerDirty) return;
@@ -743,7 +755,7 @@ async function submitUserMessage(content, source) {
   syncGeneralFormToSettings();
   await persistSettings({ silent: true, authorizeCodex: false, authorizeGitHubCopilot: false });
 
-  appendMessage(
+  const userNode = appendMessage(
     source?.type === "channel" ? source.channelType || "channel" : "user",
     source?.type === "channel" ? `${formatChannelPeerLabel(source)}\n${content}` : content,
     {
@@ -751,12 +763,21 @@ async function submitUserMessage(content, source) {
       media: source?.media || []
     }
   );
-  chat.push({ role: "user", content, media: source?.media || [] });
+  chat.push({
+    id: String(userNode?.dataset.historyId || ""),
+    role: "user",
+    content,
+    media: source?.media || []
+  });
   setBusy(true, "Thinking");
   activeAssistantNode = null;
+  activePlanNode = null;
+  activeAgentItemNodes.clear();
 
   try {
-    const result = await streamAgentMessage(chat);
+    const result = await streamAgentMessage(chat, activeSession().workingDirectory);
+    await applyContextCompaction(result.contextCompaction);
+    await persistActiveSessionWorkingDirectory(result.workingDirectory);
     if (result.toolTrajectory) {
       appendMessage("tool", result.toolTrajectory.display, {
         modelContent: result.toolTrajectory.modelContent,
@@ -793,6 +814,9 @@ async function submitUserMessage(content, source) {
   } finally {
     activeAgentPort = null;
     activeAssistantNode = null;
+    activeTurnId = "";
+    activePlanNode = null;
+    activeAgentItemNodes.clear();
     setBusy(false);
     processNextWechatMessage();
   }
@@ -810,12 +834,22 @@ function stopActiveAgent() {
   activeAgentPort.postMessage({ type: "stop" });
 }
 
-function streamAgentMessage(messages) {
-  return streamAgentRequest({ type: "start", messages });
+function streamAgentMessage(messages, workingDirectory) {
+  return streamAgentRequest({
+    type: "start",
+    messages,
+    workingDirectory,
+    sessionId: activeSession().id
+  });
 }
 
 function streamScheduleRun(scheduleId) {
-  return streamAgentRequest({ type: "start_schedule", scheduleId });
+  return streamAgentRequest({
+    type: "start_schedule",
+    scheduleId,
+    workingDirectory: activeSession().workingDirectory,
+    sessionId: activeSession().id
+  });
 }
 
 function streamAgentRequest(startMessage) {
@@ -868,6 +902,10 @@ function streamAgentRequest(startMessage) {
       if (message.type === "pong") {
         return;
       }
+      if (message.type === "agent_event") {
+        handleAgentEvent(message.event);
+        return;
+      }
       if (message.type === "delta") {
         if (!activeAssistantNode) activeAssistantNode = appendMessage("assistant", "");
         updateMessage(activeAssistantNode, `${activeAssistantNode.textContent}${message.delta || ""}`);
@@ -880,7 +918,11 @@ function streamAgentRequest(startMessage) {
       if (message.type === "final") {
         finish(resolve, {
           final: message.final || "",
-          toolTrajectory: normalizeToolTrajectory(message.toolTrajectory)
+          toolTrajectory: normalizeToolTrajectory(message.toolTrajectory),
+          contextCompaction: normalizeContextCompaction(message.contextCompaction),
+          turnId: String(message.turnId || ""),
+          status: String(message.status || "completed"),
+          workingDirectory: normalizeWorkingDirectory(message.workingDirectory)
         });
         return;
       }
@@ -894,6 +936,113 @@ function streamAgentRequest(startMessage) {
     port.postMessage({ type: "ping" });
     port.postMessage(startMessage);
   });
+}
+
+function handleAgentEvent(event) {
+  if (!event || typeof event !== "object") return;
+  if (event.type === "turn_started") {
+    activeTurnId = String(event.turnId || "");
+    recordTurnEvent(event);
+    elements.status.textContent = "Thinking";
+    return;
+  }
+  if (event.type === "agent_message_delta") {
+    if (!activeAssistantNode) {
+      activeAssistantNode = appendMessage("assistant", "", {
+        turnId: event.turnId,
+        itemId: event.itemId,
+        kind: "agent_message",
+        status: "in_progress"
+      });
+    }
+    updateMessage(activeAssistantNode, `${activeAssistantNode.textContent}${event.delta || ""}`, {
+      status: "in_progress"
+    });
+    return;
+  }
+  if (event.type === "item_started" && event.item?.type === "tool_call") {
+    const node = appendMessage("tool", formatToolExecution(event.item), {
+      turnId: event.turnId,
+      itemId: event.item.id,
+      kind: "tool_call",
+      status: "in_progress",
+      tool: event.item.tool,
+      args: event.item.args
+    });
+    if (node) activeAgentItemNodes.set(String(event.item.id || ""), node);
+    elements.status.textContent = `Running ${event.item.tool || "tool"}`;
+    return;
+  }
+  if (event.type === "item_completed" && event.item?.type === "tool_call") {
+    const itemId = String(event.item.id || "");
+    const node = activeAgentItemNodes.get(itemId);
+    if (node) {
+      updateMessage(node, formatToolExecution(event.item), {
+        status: event.item.status,
+        result: event.item.result,
+        durationMs: event.item.durationMs
+      });
+      activeAgentItemNodes.delete(itemId);
+    }
+    elements.status.textContent = event.item.status === "failed" ? "Tool failed; model is recovering" : "Thinking";
+    return;
+  }
+  if (event.type === "plan_updated") {
+    const text = formatAgentPlan(event);
+    if (activePlanNode) {
+      updateMessage(activePlanNode, text, {
+        status: "completed",
+        plan: event.plan
+      });
+    } else {
+      activePlanNode = appendMessage("plan", text, {
+        turnId: event.turnId,
+        itemId: event.itemId,
+        kind: "plan",
+        status: "completed",
+        plan: event.plan
+      });
+    }
+    return;
+  }
+  if (event.type === "context_compacted") {
+    applyContextCompaction(normalizeContextCompaction(event));
+    elements.status.textContent = "Context compacted";
+    return;
+  }
+  if (["turn_completed", "turn_failed", "turn_interrupted"].includes(event.type)) {
+    recordTurnEvent(event);
+  }
+}
+
+function formatToolExecution(item) {
+  const args = safeJsonPreview(item?.args || {});
+  const status = String(item?.status || "in_progress");
+  if (status === "in_progress") {
+    return `tool: ${item?.tool || "unknown"}\n${formatJsonForDisplay(item?.args || {})}\nRunning`;
+  }
+  const duration = Number.isFinite(Number(item?.durationMs)) ? ` (${Number(item.durationMs)} ms)` : "";
+  if (status === "failed" || item?.result?.ok === false) {
+    return `tool: ${item?.tool || "unknown"}\n${formatJsonForDisplay(item?.args || {})}\nFailed${duration}: ${String(item?.result?.error || "Unknown error")}`;
+  }
+  return `tool: ${item?.tool || "unknown"}\n${args}\nCompleted${duration}`;
+}
+
+function formatJsonForDisplay(value) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return safeJsonPreview(value);
+  }
+}
+
+function formatAgentPlan(value) {
+  const explanation = String(value?.explanation || "").trim();
+  const steps = (Array.isArray(value?.plan) ? value.plan : []).map((item) => {
+    const marker = item.status === "completed" ? "[x]" : item.status === "in_progress" ? "[>]" : "[ ]";
+    return `${marker} ${item.step}`;
+  });
+  return ["Plan", explanation, ...steps].filter(Boolean).join("\n");
 }
 
 function showAgentApproval(port, message) {
@@ -1198,10 +1347,28 @@ function normalizeChatSession(session) {
     id,
     title: String(session.title || "Chat").trim().slice(0, 120) || "Chat",
     source: normalizeSessionSource(session.source),
+    workingDirectory: normalizeWorkingDirectory(session.workingDirectory),
     createdAt: Number(session.createdAt || Date.now()),
     updatedAt: Number(session.updatedAt || Date.now()),
-    messages
+    messages,
+    turns: normalizeStoredTurns(session.turns)
   };
+}
+
+function normalizeStoredTurns(value) {
+  return (Array.isArray(value) ? value : [])
+    .map((turn) => ({
+      id: String(turn?.id || ""),
+      status: ["in_progress", "completed", "failed", "interrupted"].includes(turn?.status)
+        ? turn.status
+        : "completed",
+      startedAt: Number(turn?.startedAt || Date.now()),
+      completedAt: Number(turn?.completedAt || 0),
+      durationMs: Number(turn?.durationMs || 0),
+      error: String(turn?.error || "")
+    }))
+    .filter((turn) => turn.id)
+    .slice(-MAX_STORED_TURNS);
 }
 
 function normalizeSessionSource(source) {
@@ -1219,15 +1386,33 @@ function normalizeSessionSource(source) {
   return { type: "manual" };
 }
 
+function normalizeWorkingDirectory(value) {
+  const raw = String(value || "/workspace").trim().replace(/\\+/g, "/");
+  if (!raw || raw === ".") return "/workspace";
+  const absolute = raw.startsWith("/") ? raw : `/${raw}`;
+  const parts = [];
+  for (const part of absolute.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return `/${parts.join("/")}` || "/";
+}
+
 function createSession({ title = "Chat", source = { type: "manual" }, messages = [] } = {}) {
   const now = Date.now();
   return {
     id: crypto.randomUUID(),
     title: String(title || "Chat").slice(0, 120),
     source: normalizeSessionSource(source),
+    workingDirectory: "/workspace",
     createdAt: now,
     updatedAt: now,
-    messages: normalizeStoredChatMessages(messages)
+    messages: normalizeStoredChatMessages(messages),
+    turns: []
   };
 }
 
@@ -1239,6 +1424,17 @@ function normalizeStoredChatMessages(value) {
       content: String(message?.content || ""),
       modelContent: String(message?.modelContent || message?.content || ""),
       hidden: Boolean(message?.hidden),
+      excludedFromContext: Boolean(message?.excludedFromContext),
+      contextSummary: Boolean(message?.contextSummary),
+      turnId: String(message?.turnId || ""),
+      itemId: String(message?.itemId || ""),
+      kind: String(message?.kind || ""),
+      status: String(message?.status || ""),
+      tool: String(message?.tool || ""),
+      args: message?.args && typeof message.args === "object" ? message.args : undefined,
+      result: message?.result,
+      durationMs: Number(message?.durationMs || 0),
+      plan: Array.isArray(message?.plan) ? message.plan : undefined,
       media: Array.isArray(message?.media) ? message.media : [],
       time: Number(message?.time || Date.now())
     }))
@@ -1248,7 +1444,7 @@ function normalizeStoredChatMessages(value) {
 
 function normalizeMessageRole(role) {
   const value = String(role || "");
-  if (["user", "assistant", "tool", "wechat", "telegram", "channel"].includes(value)) return value;
+  if (["user", "assistant", "tool", "plan", "wechat", "telegram", "channel"].includes(value)) return value;
   return "tool";
 }
 
@@ -1272,27 +1468,48 @@ function renderSessionList() {
     })
   );
   elements.sessionSelect.value = chatSessions.activeSessionId;
+  const session = activeSession();
+  elements.sessionWorkingDirectory.textContent = session.workingDirectory;
   elements.deleteSession.disabled = chatSessions.sessions.length <= 1;
 }
 
 function renderActiveSession() {
   const session = activeSession();
+  if (standaloneView !== "workspace") workspacePath = session.workingDirectory;
   storedChatMessages = session.messages;
-  chat.length = 0;
   elements.messages.replaceChildren();
   renderedWechatEventIds.clear();
   for (const message of storedChatMessages) {
     const isToolTrajectory = message.role === "tool" && isToolTrajectoryContent(message.modelContent);
     if (!message.hidden && !isToolTrajectory) appendMessage(message.role, message.content, { persist: false });
-    if (message.role === "user" || message.role === "assistant" || message.role === "wechat" || message.role === "telegram" || message.role === "channel" || isToolTrajectory) {
+  }
+  rebuildChatContext();
+  renderSessionList();
+}
+
+function rebuildChatContext() {
+  chat.length = 0;
+  for (const message of storedChatMessages) {
+    if (message.excludedFromContext) continue;
+    const isToolTrajectory = message.role === "tool" && isToolTrajectoryContent(message.modelContent);
+    const isContextSummary = message.contextSummary || isContextSummaryContent(message.modelContent);
+    if (
+      message.role === "user" ||
+      message.role === "assistant" ||
+      message.role === "wechat" ||
+      message.role === "telegram" ||
+      message.role === "channel" ||
+      isToolTrajectory ||
+      isContextSummary
+    ) {
       chat.push({
+        id: message.id,
         role: message.role === "assistant" ? "assistant" : "user",
         content: message.modelContent || message.content,
         media: Array.isArray(message.media) ? message.media : []
       });
     }
   }
-  renderSessionList();
 }
 
 function sessionLabel(session) {
@@ -1307,6 +1524,7 @@ async function changeActiveSession() {
   chatSessions.activeSessionId = elements.sessionSelect.value;
   renderActiveSession();
   await persistChatSessions();
+  if (standaloneView === "workspace") await renderWorkspace({ preserveEditor: false });
 }
 
 async function createManualSession() {
@@ -1321,6 +1539,7 @@ async function clearActiveSession() {
   const session = activeSession();
   if (session.messages.length > 0 && !window.confirm(`Clear session "${session.title}"?`)) return;
   session.messages = [];
+  session.turns = [];
   session.updatedAt = Date.now();
   renderActiveSession();
   await persistChatSessions();
@@ -1366,9 +1585,101 @@ function persistChatSessions() {
     })).slice(0, MAX_STORED_SESSIONS)
   };
   chatSessions = normalizeChatSessions(payload);
-  return chrome.storage.local.set({ [CHAT_SESSIONS_KEY]: chatSessions }).catch((error) => {
-    elements.status.textContent = `Chat history save failed: ${error.message}`;
+  const snapshot = structuredClone(chatSessions);
+  chatSessionWriteQueue = chatSessionWriteQueue
+    .catch(() => {})
+    .then(() => chrome.storage.local.set({ [CHAT_SESSIONS_KEY]: snapshot }))
+    .catch((error) => {
+      elements.status.textContent = `Chat history save failed: ${error.message}`;
+    });
+  return chatSessionWriteQueue;
+}
+
+function recordTurnEvent(event) {
+  const turnId = String(event?.turnId || "");
+  if (!turnId) return;
+  const session = activeSession();
+  const existing = (Array.isArray(session.turns) ? session.turns : []).find((turn) => turn.id === turnId);
+  const patch = {
+    id: turnId,
+    status: event.type === "turn_started"
+      ? "in_progress"
+      : event.type === "turn_interrupted"
+        ? "interrupted"
+        : event.type === "turn_failed"
+          ? "failed"
+          : "completed",
+    startedAt: Number(event.startedAt || existing?.startedAt || Date.now()),
+    completedAt: Number(event.completedAt || existing?.completedAt || 0),
+    durationMs: Number(event.durationMs || existing?.durationMs || 0),
+    error: String(event.error || existing?.error || "")
+  };
+  session.turns = [
+    ...(Array.isArray(session.turns) ? session.turns : []).filter((turn) => turn.id !== turnId),
+    patch
+  ].slice(-MAX_STORED_TURNS);
+  session.updatedAt = Date.now();
+  persistChatSessions();
+}
+
+function normalizeContextCompaction(value) {
+  if (!value || typeof value !== "object") return null;
+  const summary = String(value.summary || "").trim();
+  const compactedMessageIds = uniqueStrings(value.compactedMessageIds);
+  if (!summary || compactedMessageIds.length === 0) return null;
+  return {
+    summary,
+    compactedMessageIds,
+    compactedCount: Number(value.compactedCount || compactedMessageIds.length),
+    estimatedTokens: Number(value.estimatedTokens || 0),
+    tokenBudget: Number(value.tokenBudget || 0)
+  };
+}
+
+function applyContextCompaction(value) {
+  const compaction = normalizeContextCompaction(value);
+  if (!compaction) return Promise.resolve();
+  contextCompactionWriteQueue = contextCompactionWriteQueue
+    .catch(() => {})
+    .then(() => applyContextCompactionNow(compaction));
+  return contextCompactionWriteQueue;
+}
+
+async function applyContextCompactionNow(compaction) {
+  const existingSummary = storedChatMessages.find(
+    (message) => !message.excludedFromContext &&
+      (message.contextSummary || isContextSummaryContent(message.modelContent)) &&
+      message.modelContent === `${CONTEXT_SUMMARY_PREFIX}${compaction.summary}`
+  );
+  if (existingSummary) return;
+
+  const compactedIds = new Set(compaction.compactedMessageIds);
+  for (const message of storedChatMessages) {
+    if (compactedIds.has(message.id)) message.excludedFromContext = true;
+    if (message.contextSummary || isContextSummaryContent(message.modelContent)) {
+      message.excludedFromContext = true;
+    }
+  }
+  storedChatMessages.push({
+    id: crypto.randomUUID(),
+    role: "tool",
+    content: "Context compacted",
+    modelContent: `${CONTEXT_SUMMARY_PREFIX}${compaction.summary}`,
+    hidden: true,
+    excludedFromContext: false,
+    contextSummary: true,
+    kind: "context_compaction",
+    status: "completed",
+    media: [],
+    time: Date.now()
   });
+  while (storedChatMessages.length > MAX_STORED_CHAT_MESSAGES) storedChatMessages.shift();
+  rebuildChatContext();
+  await persistChatSessions();
+}
+
+function isContextSummaryContent(content) {
+  return String(content || "").startsWith(CONTEXT_SUMMARY_PREFIX);
 }
 
 function handleWechatPayload(payload) {
@@ -2953,8 +3264,10 @@ async function renderWorkspace({ preserveEditor = true } = {}) {
     if (!preserveEditor || (workspaceEditorState && workspaceEditorState.path !== workspaceSelection?.path)) {
       hideWorkspaceEditor();
     }
+    return listing;
   } catch (error) {
     elements.status.textContent = `Files: ${error.message}`;
+    return null;
   }
 }
 
@@ -2969,15 +3282,21 @@ function renderWorkspaceList(entries) {
     return;
   }
   for (const entry of entries) {
-    const item = document.createElement("button");
-    item.type = "button";
+    const item = document.createElement("div");
     item.className = "workspace-item";
     item.classList.toggle("selected", entry.path === workspaceSelection?.path);
     item.title = entry.path;
-    item.addEventListener("click", () => selectWorkspaceEntry(entry));
 
     const icon = document.createElement("span");
     icon.textContent = entry.type === "directory" ? "\uD83D\uDCC1" : "\uD83D\uDCC4";
+    const main = document.createElement("button");
+    main.type = "button";
+    main.className = "workspace-entry-main";
+    main.title = entry.type === "directory" ? "Select folder; double-click to open" : entry.path;
+    main.addEventListener("click", () => selectWorkspaceEntry(entry));
+    if (entry.type === "directory" && !isWorkspaceTrashItem(entry.path)) {
+      main.addEventListener("dblclick", () => openWorkspacePath(entry.path));
+    }
     const name = document.createElement("span");
     name.className = "workspace-name";
     name.textContent = entry.name;
@@ -2986,29 +3305,131 @@ function renderWorkspaceList(entries) {
     meta.textContent = entry.trash
       ? `${entry.trash.originalPath} · ${formatDeletedAt(entry.trash.deletedAt)}`
       : entry.type === "directory" ? "Folder" : `${formatBytes(entry.size)} · v${entry.version}`;
-    item.append(icon, name, meta);
+    main.append(icon, name, meta);
+    item.append(main);
+    if (entry.type === "file" && isWebPreviewFile(entry.name) && !isWorkspaceTrashItem(entry.path)) {
+      const preview = document.createElement("button");
+      preview.type = "button";
+      preview.className = "workspace-preview-button";
+      preview.title = "Preview in new tab";
+      preview.setAttribute("aria-label", `Preview ${entry.name} in new tab`);
+      preview.textContent = "\u25B6";
+      preview.addEventListener("click", (event) => {
+        event.stopPropagation();
+        openWorkspacePreview(entry.path);
+      });
+      item.append(preview);
+    }
     elements.workspaceList.append(item);
   }
   updateWorkspaceActionState();
 }
 
+function isWebPreviewFile(name) {
+  return /\.(?:html?|xhtml|svg)$/i.test(String(name || ""));
+}
+
+async function openWorkspacePreview(path) {
+  const previewWindow = window.open(chrome.runtime.getURL("src/preview-sandbox.html"), "_blank");
+  if (!previewWindow) {
+    elements.status.textContent = "Preview was blocked by the browser. Allow pop-ups for WebClaw and try again.";
+    return;
+  }
+  let delivered = false;
+  let previewReady = false;
+  let pendingPayload = null;
+  const deliver = (payload) => {
+    if (delivered || previewWindow.closed || (!payload?.html && !payload?.error)) return;
+    pendingPayload = payload;
+    if (!previewReady) return;
+    delivered = true;
+    previewWindow.postMessage(pendingPayload, "*");
+  };
+  const readyHandler = (event) => {
+    if (event.source !== previewWindow || event.data?.type !== "WEBCLAW_PREVIEW_READY") return;
+    previewReady = true;
+    window.removeEventListener("message", readyHandler);
+    if (pendingPayload) deliver(pendingPayload);
+  };
+  let pendingHtml = "";
+  window.addEventListener("message", readyHandler);
+  try {
+    const storageNamespace = `preview:${parentVirtualPath(path)}`;
+    const storageKey = `webclawPreviewLocalStorage:${storageNamespace}`;
+    const stored = await chrome.storage.local.get(storageKey);
+    pendingHtml = await buildVfsPreviewDocument(path, {
+      storageNamespace,
+      localStorage: stored[storageKey] && typeof stored[storageKey] === "object" ? stored[storageKey] : {}
+    });
+    deliver({ type: "WEBCLAW_RENDER_PREVIEW", entryPath: path, html: pendingHtml });
+    elements.status.textContent = `Preview opened: ${path}`;
+  } catch (error) {
+    window.removeEventListener("message", readyHandler);
+    deliver({ type: "WEBCLAW_PREVIEW_ERROR", entryPath: path, error: error.message });
+    elements.status.textContent = `Preview: ${error.message}`;
+  }
+}
+
+function handlePreviewMessage(event) {
+  const message = event.data;
+  if (
+    message?.type !== "WEBCLAW_PREVIEW_STORAGE_SET" ||
+    !String(message.namespace || "").startsWith("preview:")
+  ) return;
+  const storageKey = `webclawPreviewLocalStorage:${String(message.namespace)}`;
+  chrome.storage.local.get(storageKey).then((stored) => {
+    const values = stored[storageKey] && typeof stored[storageKey] === "object" ? stored[storageKey] : {};
+    if (message.action === "clear") {
+      return chrome.storage.local.set({ [storageKey]: {} });
+    }
+    if (message.action === "remove") {
+      delete values[String(message.key || "")];
+    } else {
+      values[String(message.key || "")] = String(message.value ?? "");
+    }
+    return chrome.storage.local.set({ [storageKey]: values });
+  }).catch((error) => console.warn("Preview localStorage persistence failed", error));
+}
+
 async function openWorkspacePath(path) {
   workspaceSelection = null;
   hideWorkspaceEditor();
-  workspacePath = String(path || "/workspace");
+  workspacePath = normalizeWorkingDirectory(path);
   updateWorkspaceActionState();
-  await renderWorkspace({ preserveEditor: false });
+  const listing = await renderWorkspace({ preserveEditor: false });
+  if (listing) await persistActiveSessionWorkingDirectory(listing.path);
+}
+
+async function persistActiveSessionWorkingDirectory(path) {
+  const session = activeSession();
+  const nextPath = normalizeWorkingDirectory(path);
+  if (session.workingDirectory === nextPath) {
+    elements.sessionWorkingDirectory.textContent = nextPath;
+    return;
+  }
+  session.workingDirectory = nextPath;
+  session.updatedAt = Date.now();
+  renderSessionList();
+  await persistChatSessions();
+}
+
+async function syncWorkspaceToActiveSession() {
+  if (workspaceSyncInProgress || standaloneView !== "workspace") return;
+  const nextPath = activeSession().workingDirectory;
+  if (workspacePath === nextPath) return;
+  workspaceSyncInProgress = true;
+  try {
+    await openWorkspacePath(nextPath);
+  } finally {
+    workspaceSyncInProgress = false;
+  }
 }
 
 async function selectWorkspaceEntry(entry) {
-  if (entry.type === "directory" && !isWorkspaceTrashItem(entry.path)) {
-    await openWorkspacePath(entry.path);
-    return;
-  }
   workspaceSelection = entry;
   updateWorkspaceActionState();
   renderWorkspaceList((await vfsList(workspacePath)).entries);
-  if (isWorkspaceTrashItem(entry.path)) {
+  if (entry.type === "directory" || isWorkspaceTrashItem(entry.path)) {
     hideWorkspaceEditor();
     return;
   }
@@ -3653,7 +4074,7 @@ function normalizePanelSettings(value) {
     tools: normalizePanelTools(raw.tools, { legacyWeComWebhookUrl: raw.weComWebhookUrl }),
     skills: normalizePanelSkills(raw.skills),
     schedules: normalizePanelSchedules(raw.schedules),
-    maxSteps: clampNumber(raw.maxSteps, 1, 24, 8),
+    maxSteps: positiveInteger(raw.maxSteps, 8),
     temperature: clampNumber(raw.temperature, 0, 2, 0.2),
     allowUnsafePageJs: Boolean(raw.allowUnsafePageJs),
     disclosures: normalizePanelDisclosures(raw.disclosures),
@@ -3786,13 +4207,14 @@ function normalizePanelTools(value, options = {}) {
   const tools = BUILTIN_TOOLS.map((definition) => {
     const matched = byName.get(definition.name);
     const raw = matched || {};
+    const description = normalizeBuiltinToolDescription(definition, raw.description);
     return {
       ...definition,
       id: definition.name,
       title: definition.name === QIYEWECHAT_NOTIFICATION_TOOL_NAME
         ? QIYEWECHAT_NOTIFICATION_TOOL_NAME
         : String(raw.title || definition.title),
-      description: String(raw.description || definition.description),
+      description,
       enabled: matched ? raw.enabled !== false : !DEFAULT_DISABLED_BUILTIN_TOOLS.has(definition.name),
       advanced: ADVANCED_BUILTIN_TOOLS.has(definition.name),
       config: definition.name === QIYEWECHAT_NOTIFICATION_TOOL_NAME
@@ -3807,6 +4229,14 @@ function normalizePanelTools(value, options = {}) {
     if (tool) tools.push(tool);
   }
   return tools;
+}
+
+function normalizeBuiltinToolDescription(definition, value) {
+  const description = String(value || definition.description || "");
+  if (definition.name === "fs_shell" && !/\bcd\b/i.test(description)) {
+    return `${description} Supports cd <path>; cd changes the current session working directory.`;
+  }
+  return description;
 }
 
 function normalizePanelTool(tool) {
@@ -4084,6 +4514,12 @@ function clampNumber(value, min, max, fallback) {
   return Math.max(min, Math.min(max, number));
 }
 
+function positiveInteger(value, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(1, Math.floor(number));
+}
+
 function shouldStartCodexDeviceLogin(provider) {
   return Boolean(
     provider.type === "codex-oauth" &&
@@ -4288,6 +4724,17 @@ function appendMessage(role, content, options = {}) {
         content: String(content || ""),
         modelContent: String(options.modelContent || content || ""),
         hidden: true,
+        excludedFromContext: Boolean(options.excludedFromContext),
+        contextSummary: Boolean(options.contextSummary),
+        turnId: String(options.turnId || ""),
+        itemId: String(options.itemId || ""),
+        kind: String(options.kind || ""),
+        status: String(options.status || ""),
+        tool: String(options.tool || ""),
+        args: options.args,
+        result: options.result,
+        durationMs: Number(options.durationMs || 0),
+        plan: options.plan,
         media: Array.isArray(options.media) ? options.media : [],
         time: Date.now()
       });
@@ -4308,6 +4755,17 @@ function appendMessage(role, content, options = {}) {
       content: String(content || ""),
       modelContent: String(options.modelContent || content || ""),
       hidden: false,
+      excludedFromContext: Boolean(options.excludedFromContext),
+      contextSummary: Boolean(options.contextSummary),
+      turnId: String(options.turnId || ""),
+      itemId: String(options.itemId || ""),
+      kind: String(options.kind || ""),
+      status: String(options.status || ""),
+      tool: String(options.tool || ""),
+      args: options.args,
+      result: options.result,
+      durationMs: Number(options.durationMs || 0),
+      plan: options.plan,
       media: Array.isArray(options.media) ? options.media : [],
       time: Date.now()
     });
@@ -4319,13 +4777,17 @@ function appendMessage(role, content, options = {}) {
   return node;
 }
 
-function updateMessage(node, content) {
+function updateMessage(node, content, options = {}) {
   node.textContent = content;
   const id = node.dataset.historyId;
   const stored = id ? storedChatMessages.find((message) => message.id === id) : null;
   if (stored) {
     stored.content = String(content || "");
     stored.modelContent = String(content || "");
+    if (options.status !== undefined) stored.status = String(options.status || "");
+    if (options.result !== undefined) stored.result = options.result;
+    if (options.durationMs !== undefined) stored.durationMs = Number(options.durationMs || 0);
+    if (options.plan !== undefined) stored.plan = options.plan;
     stored.time = Date.now();
     persistChatHistory();
   }

@@ -111,7 +111,11 @@ async function runPrompt(message) {
   const session = await languageModel.create(createOptions);
   try {
     const prompt = await finalPrompt(message.messages || []);
-    const stream = session.promptStreaming(prompt, { signal: controller.signal });
+    const promptOptions = { signal: controller.signal };
+    if (message.responseConstraint) {
+      promptOptions.responseConstraint = message.responseConstraint;
+    }
+    const stream = session.promptStreaming(prompt, promptOptions);
     let content = "";
     for await (const chunk of stream) {
       const delta = String(chunk || "");

@@ -14,6 +14,7 @@ Use this checklist for GitHub and Chrome Web Store releases.
 
 ```bash
 ./scripts/check-syntax.sh
+node scripts/test-agent-runtime.mjs
 node scripts/validate-release.mjs
 ```
 
@@ -33,6 +34,12 @@ Load the unpacked extension in a clean Chrome profile and verify:
 - a Codex request from both WeChat and Telegram receives a six-digit numeric approval code, accepts that code alone, rejects with `0`, then sends a verification URL and device code and continues after login; wrong-peer, denied, and expired replies do not authorize it;
 - the enterprise WeChat notification Tool shows `qiyewechat_notification` as both Tool name and Display name, preserves an existing webhook migrated from `send_wecom_message`, and displays any legacy model call under the canonical name;
 - `list_webclaw_config` returns redacted Provider IDs, `set_active_provider` switches only to an existing ID through propose/apply, and rollback restores the previous Provider without exposing credentials;
+- the same session can switch among Ollama, Chrome AI, Codex, Copilot, and OpenAI-compatible Providers without changing Tool, Plan, approval, stop, or Turn behavior;
+- a substantial task can display and persist an `update_plan` plan, and interruption records the Turn as interrupted;
+- a long session compacts older context, remains usable after reload, and preserves recent messages, Tool errors, and unfinished work without showing the generated summary as a user message;
+- the global Max steps field accepts a large positive integer without an artificial UI maximum;
+- the file manager selects a directory on single click and enters it on double click, while HTML/HTM/XHTML/SVG Preview opens a top-level sandbox tab;
+- a static preview loads relative CSS, JavaScript, images, fonts, and JSON, executes inline page JavaScript, and persists its project-scoped localStorage compatibility layer after reload; verify that this is not treated as real website-origin storage;
 - Provider sign-in, model refresh, Channels, and enabled Schedules work only after their origins and disclosures are granted;
 - settings, sessions, VFS, knowledge, and credentials persist across extension reloads;
 - revoking a site permission in Chrome causes a new permission request rather than a silent failure, even when a Schedule operation approval is saved.

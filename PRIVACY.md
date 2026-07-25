@@ -1,6 +1,6 @@
 # WebClaw 隐私政策 / Privacy Policy
 
-生效日期 / Effective date: 2026-07-22
+生效日期 / Effective date: 2026-07-25
 
 WebClaw 是一个“用户控制的浏览器 AI 助手”。它的单一用途是让用户在 Chrome 中与自己选择的模型对话，并在用户授权后执行网页操作、Tool、Channel 和可选的高级自动化。WebClaw 项目不运营用于转发提示词、网页内容或模型响应的后端服务。
 
@@ -15,6 +15,7 @@ WebClaw 可在 Chrome 扩展存储和浏览器 IndexedDB 中保存：
 - Tools、Skills、Schedules、Channels 及其启用状态；
 - Telegram bot token、企业微信机器人 webhook、微信登录凭证和通道状态；
 - 虚拟文件系统（VFS）、知识库索引以及 Channel 接收的图片或文件；
+- VFS 静态预览使用的项目级 `localStorage` 兼容数据；这些数据保存在扩展的浏览器存储中，不是网页真实 origin 的存储，也不包含扩展凭证；
 - 用户对产品披露、外部 Provider 和站点权限作出的选择；
 - 最近的 Channel 授权回复路由，以及用户保存的精确 Schedule 操作授权指纹。
 
@@ -25,6 +26,7 @@ WebClaw may store the following in Chrome extension storage and browser IndexedD
 - Tools, Skills, Schedules, Channels, and their enabled state;
 - Telegram bot tokens, enterprise WeChat robot webhooks, WeChat credentials, and channel state;
 - the virtual file system (VFS), local knowledge index, and images or files received from Channels;
+- project-scoped `localStorage` compatibility data used by VFS static previews; it is stored in extension browser storage, is not the website's real origin storage, and does not include extension credentials;
 - user choices for product disclosure, external providers, and site permissions;
 - recent Channel routes used for authorization replies and fingerprints of exact Schedule operations approved by the user.
 

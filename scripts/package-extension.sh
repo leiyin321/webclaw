@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 ./scripts/check-syntax.sh
+node scripts/test-agent-runtime.mjs
 node scripts/validate-release.mjs
 VERSION="$(node -p "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')).version")"
 OUTPUT="${1:-dist/webclaw-${VERSION}.zip}"
