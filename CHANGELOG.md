@@ -2,6 +2,16 @@
 
 All notable changes to WebClaw will be documented in this file.
 
+## 0.4.7
+
+- Standardize the enterprise WeChat notification Tool name and display name as
+  `qiyewechat_notification`, while retaining `send_wecom_message` only as a
+  hidden legacy input alias.
+- Refresh the built-in WebClaw knowledge manual for the current Provider,
+  permission, Channel, Schedule, VFS, and self-management behavior.
+- Upgrade and re-index historical default manual copies while preserving any
+  manual that the user has edited.
+
 ## 0.4.6
 
 - Generate the matching default Provider name when the Provider type changes.

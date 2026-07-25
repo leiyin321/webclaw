@@ -197,7 +197,7 @@ WebClaw 支持把外部消息通道接入当前活跃会话：
 - 微信 channel
 - Telegram bot channel
 
-企业微信机器人 webhook 不作为全局配置或 Channel，而是在 Tools 中编辑并启用 `qiyewechat_notification`。它支持 `text` 和 `markdown` 消息。
+企业微信机器人 webhook 不作为全局配置或 Channel，而是在 Tools 中编辑并启用 `qiyewechat_notification`。它支持 `text` 和 `markdown` 消息。该 Tool 的 Tool name 与 Display name 均固定为 `qiyewechat_notification`，调用时只使用这一规范名称。
 
 当前设计是：可以有多个会话，但只有一个活跃会话。所有 channel 收到的消息都会进入当前活跃会话，这样可以在 Side Panel、微信、Telegram 等多个终端延续同一个任务上下文。
 

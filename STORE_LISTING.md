@@ -22,6 +22,8 @@ WebClaw 是一个用户控制的 Chrome 浏览器 AI 助手。用户可以连接
 
 Channels、Schedules 和自我配置 Tool 是可选高级功能。只有用户显式配置并启用后才工作。WebClaw 仓库版本不运营用于转发提示词、页面内容或模型响应的后端服务。
 
+企业微信机器人推送不使用全局通知配置，而是通过用户单独配置并启用的 `qiyewechat_notification` Tool 发送；其 Tool name 与 Display name 使用同一规范名称。
+
 ## 权限用途
 
 - `alarms`: 运行用户明确启用的 Schedule、OAuth 轮询和 Channel 保活。

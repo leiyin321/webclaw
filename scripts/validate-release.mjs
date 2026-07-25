@@ -100,7 +100,20 @@ requireCondition(
 requireCondition(!/client(?:_|)secret\s*:/i.test(oauthClients), "OAuth client secrets must not be configured in the extension");
 requireCondition(!/\bnew\s+Function\s*\(/.test(runtimeJavaScriptSource), "runtime code must not contain new Function");
 requireCondition(!/\beval\s*\(/.test(runtimeJavaScriptSource), "runtime code must not contain eval");
-requireCondition(source.includes("qiyewechat_notification"), "qiyewechat_notification tool is missing");
+requireCondition(
+  source.includes('const QIYEWECHAT_NOTIFICATION_TOOL_NAME = "qiyewechat_notification"') &&
+    source.includes('const LEGACY_QIYEWECHAT_NOTIFICATION_TOOL_NAME = "send_wecom_message"') &&
+    source.includes("canonicalizeToolCall(hydrateToolArgs(toolObject, objects))") &&
+    source.includes("title: definition.name === QIYEWECHAT_NOTIFICATION_TOOL_NAME"),
+  "enterprise WeChat Tool canonical-name handling is missing"
+);
+requireCondition(
+  readText("README.md").includes("Tool name 与 Display name 均固定为 `qiyewechat_notification`") &&
+    readText("README.en.md").includes("Tool name and Display name are both fixed to `qiyewechat_notification`") &&
+    readText("STORE_LISTING.md").includes("Tool name 与 Display name 使用同一规范名称") &&
+    source.includes("The canonical Tool name and Display name are both qiyewechat_notification"),
+  "enterprise WeChat Tool canonical name is not synchronized across documentation and default knowledge"
+);
 requireCondition(
   source.includes("webclawOperationApprovalGrants") && source.includes("schedule-run-js:"),
   "exact Schedule operation approvals are missing"
@@ -138,6 +151,13 @@ requireCondition(
     source.includes("activeProviderId: String(settings.activeProviderId") &&
     source.includes("Cannot restore missing Provider"),
   "controlled active Provider switching and rollback are missing"
+);
+requireCondition(
+  source.includes("webclaw-default-manual: 0.4.7-r1") &&
+    source.includes("REPLACEABLE_DEFAULT_KNOWLEDGE_MANUAL_HASHES") &&
+    source.includes("expectedVersion: existing.entry.version") &&
+    source.includes('"webclaw", "manual", "operations", "0.4.7"'),
+  "versioned default knowledge manual migration is missing"
 );
 const sidepanelHtml = readText("src/sidepanel.html");
 requireCondition(!sidepanelHtml.includes("<h2>Notifications</h2>"), "global Notifications settings are still present");

@@ -211,7 +211,7 @@ The direct weather tool geocodes the location with Open-Meteo, fetches current c
 - `fs_shell` only operates on the IndexedDB-backed virtual filesystem and cannot access local machine files. It rejects pipes, redirection, command substitution, and multi-command input; `rm` moves entries into `/.trash`.
 - Trash records retain the original path and deletion time. `fs_restore` rejects a conflicting destination by default, supports `onConflict: "rename"`, and can move the existing destination to trash when `confirmOverwrite: true`; `fs_purge` and `fs_empty_trash` permanently delete only trash entries and require `confirm: true`.
 - Successfully downloaded WeChat channel media is also archived under `/inbox/<channel>/`. Its content is still sent to the active provider according to that provider's media capabilities.
-- Edit and enable the `qiyewechat_notification` Tool to configure an enterprise WeChat robot webhook. It supports text and markdown payloads without putting the webhook into model prompts.
+- Edit and enable the `qiyewechat_notification` Tool to configure an enterprise WeChat robot webhook. Its Tool name and Display name are both fixed to `qiyewechat_notification`; use only this canonical identifier. It supports text and markdown payloads without putting the webhook into model prompts.
 - API keys and OAuth tokens are stored in `chrome.storage.local`.
 - The current Chrome API tool surface is intentionally small. Add operations deliberately instead of exposing all extension APIs to the model.
 

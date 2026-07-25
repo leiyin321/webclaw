@@ -77,6 +77,9 @@ const PROVIDER_DEFAULTS = {
   }
 };
 
+const QIYEWECHAT_NOTIFICATION_TOOL_NAME = "qiyewechat_notification";
+const LEGACY_QIYEWECHAT_NOTIFICATION_TOOL_NAME = "send_wecom_message";
+
 const BUILTIN_TOOLS = [
   ["get_page_context", "Read active page context, with compact limits for small-context providers."],
   ["click", "Click an element by CSS selector."],
@@ -131,7 +134,7 @@ const ADVANCED_BUILTIN_TOOLS = new Set([
 ]);
 const DEFAULT_DISABLED_BUILTIN_TOOLS = new Set([
   ...ADVANCED_BUILTIN_TOOLS,
-  "qiyewechat_notification"
+  QIYEWECHAT_NOTIFICATION_TOOL_NAME
 ]);
 const PRODUCT_DISCLOSURE_VERSION = 1;
 
@@ -1731,7 +1734,7 @@ function renderToolList() {
       const edit = document.createElement("button");
       edit.type = "button";
       edit.className = "secondary";
-      edit.textContent = tool.builtin && tool.name !== "qiyewechat_notification" ? "View" : "Edit";
+      edit.textContent = tool.builtin && tool.name !== QIYEWECHAT_NOTIFICATION_TOOL_NAME ? "View" : "Edit";
       edit.addEventListener("click", () => openToolModal(tool.name));
 
       item.append(enabled, text, edit);
@@ -1809,6 +1812,7 @@ function renderToolModal() {
   elements.toolName.value = toolDraft.name || "";
   elements.toolName.disabled = Boolean(toolDraft.builtin);
   elements.toolTitle.value = toolDraft.title || "";
+  elements.toolTitle.disabled = toolDraft.name === QIYEWECHAT_NOTIFICATION_TOOL_NAME;
   elements.toolDescription.value = toolDraft.description || "";
   elements.toolType.value = toolDraft.type || "http";
   elements.toolType.disabled = Boolean(toolDraft.builtin);
@@ -1826,8 +1830,8 @@ function renderToolModal() {
   elements.toolWorkflowInstruction.value = config.instruction;
   elements.toolWorkflowMaxSteps.value = config.maxSteps;
   elements.toolQiyeWechatWebhookUrl.value = String(toolDraft.config?.webhookUrl || "");
-  const activeSection = toolDraft.name === "qiyewechat_notification"
-    ? "qiyewechat_notification"
+  const activeSection = toolDraft.name === QIYEWECHAT_NOTIFICATION_TOOL_NAME
+    ? QIYEWECHAT_NOTIFICATION_TOOL_NAME
     : toolDraft.type || "http";
   document.querySelectorAll(".tool-section").forEach((section) => {
     section.classList.toggle("hidden", section.dataset.toolSection !== activeSection);
@@ -1871,11 +1875,11 @@ async function saveToolModal() {
     elements.status.textContent = "Workflow instruction is required.";
     return;
   }
-  if (nextTool.name === "qiyewechat_notification" && nextTool.enabled && !nextTool.config.webhookUrl) {
+  if (nextTool.name === QIYEWECHAT_NOTIFICATION_TOOL_NAME && nextTool.enabled && !nextTool.config.webhookUrl) {
     elements.status.textContent = "企业微信机器人 webhook is required while this tool is enabled.";
     return;
   }
-  if (nextTool.name === "qiyewechat_notification" && nextTool.enabled) {
+  if (nextTool.name === QIYEWECHAT_NOTIFICATION_TOOL_NAME && nextTool.enabled) {
     if (!(await requestOriginPermissionsForUrls(
       [nextTool.config.webhookUrl],
       "WebClaw needs access to this enterprise WeChat webhook only when the qiyewechat_notification tool sends a notification you requested."
@@ -1911,7 +1915,9 @@ function syncToolFormToDraft() {
   toolDraft = {
     ...toolDraft,
     name: toolDraft.builtin ? toolDraft.name : normalizeToolName(elements.toolName.value),
-    title: elements.toolTitle.value.trim() || elements.toolName.value.trim(),
+    title: toolDraft.name === QIYEWECHAT_NOTIFICATION_TOOL_NAME
+      ? QIYEWECHAT_NOTIFICATION_TOOL_NAME
+      : elements.toolTitle.value.trim() || elements.toolName.value.trim(),
     description: elements.toolDescription.value.trim(),
     type: toolDraft.builtin ? toolDraft.type : elements.toolType.value,
     enabled: elements.toolEnabled.checked,
@@ -2510,7 +2516,7 @@ async function saveSettings() {
   const currentSkills = normalizePanelSkills(settings?.skills);
   const currentChannels = normalizePanelChannels(settings).object;
   const currentSchedules = normalizePanelSchedules(settings?.schedules);
-  const configuredQiyeWechat = currentTools.find((tool) => tool.name === "qiyewechat_notification" && tool.enabled);
+  const configuredQiyeWechat = currentTools.find((tool) => tool.name === QIYEWECHAT_NOTIFICATION_TOOL_NAME && tool.enabled);
   const accessUrls = [
     ...Object.values(currentChannels).filter((channel) => channel.enabled).flatMap(channelPermissionUrls),
     configuredQiyeWechat?.config?.webhookUrl || ""
@@ -3771,26 +3777,32 @@ function normalizePanelProvider(provider) {
 
 function normalizePanelTools(value, options = {}) {
   const rawTools = Array.isArray(value) ? value : [];
-  const byName = new Map(rawTools.map((tool) => [String(tool?.name || ""), tool]));
+  const byName = new Map();
+  for (const tool of rawTools) {
+    const rawName = String(tool?.name || "").trim();
+    const name = canonicalPanelToolName(rawName);
+    if (name && (!byName.has(name) || rawName === name)) byName.set(name, tool);
+  }
   const tools = BUILTIN_TOOLS.map((definition) => {
-    const matched = byName.get(definition.name) || (
-      definition.name === "qiyewechat_notification" ? byName.get("send_wecom_message") : null
-    );
+    const matched = byName.get(definition.name);
     const raw = matched || {};
     return {
       ...definition,
       id: definition.name,
-      title: String(raw.title || definition.title),
+      title: definition.name === QIYEWECHAT_NOTIFICATION_TOOL_NAME
+        ? QIYEWECHAT_NOTIFICATION_TOOL_NAME
+        : String(raw.title || definition.title),
       description: String(raw.description || definition.description),
       enabled: matched ? raw.enabled !== false : !DEFAULT_DISABLED_BUILTIN_TOOLS.has(definition.name),
       advanced: ADVANCED_BUILTIN_TOOLS.has(definition.name),
-      config: definition.name === "qiyewechat_notification"
+      config: definition.name === QIYEWECHAT_NOTIFICATION_TOOL_NAME
         ? { webhookUrl: String(raw.config?.webhookUrl || options.legacyWeComWebhookUrl || "") }
         : {}
     };
   });
   for (const raw of rawTools) {
-    if (!raw || raw.builtin || raw.type === "builtin" || BUILTIN_TOOLS.some((tool) => tool.name === raw.name)) continue;
+    const name = canonicalPanelToolName(raw?.name);
+    if (!raw || raw.builtin || raw.type === "builtin" || BUILTIN_TOOLS.some((tool) => tool.name === name)) continue;
     const tool = normalizePanelTool(raw);
     if (tool) tools.push(tool);
   }
@@ -3798,7 +3810,7 @@ function normalizePanelTools(value, options = {}) {
 }
 
 function normalizePanelTool(tool) {
-  const name = normalizeToolName(tool?.name);
+  const name = canonicalPanelToolName(normalizeToolName(tool?.name));
   if (!name) return null;
   const builtin = BUILTIN_TOOLS.some((definition) => definition.name === name);
   const rawType = String(tool.type || "workflow");
@@ -3806,18 +3818,27 @@ function normalizePanelTool(tool) {
   return {
     id: String(tool.id || name),
     name,
-    title: String(tool.title || name),
+    title: builtin && name === QIYEWECHAT_NOTIFICATION_TOOL_NAME
+      ? QIYEWECHAT_NOTIFICATION_TOOL_NAME
+      : String(tool.title || name),
     type,
     description: String(tool.description || ""),
     enabled: tool.enabled !== false,
     builtin,
     advanced: ADVANCED_BUILTIN_TOOLS.has(name),
     config: builtin
-      ? name === "qiyewechat_notification"
+      ? name === QIYEWECHAT_NOTIFICATION_TOOL_NAME
         ? { webhookUrl: String(tool.config?.webhookUrl || "") }
         : {}
       : normalizeToolConfig(tool.config || {})
   };
+}
+
+function canonicalPanelToolName(value) {
+  const name = String(value || "").trim();
+  return name === LEGACY_QIYEWECHAT_NOTIFICATION_TOOL_NAME
+    ? QIYEWECHAT_NOTIFICATION_TOOL_NAME
+    : name;
 }
 
 function normalizeToolConfig(config) {
