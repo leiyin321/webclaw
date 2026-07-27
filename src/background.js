@@ -48,6 +48,12 @@ const PROVIDER_DEFAULTS = {
     model: "gpt-4.1-mini",
     thinking: true
   },
+  opencode: {
+    baseUrl: "https://opencode.ai/zen/v1",
+    apiKey: "",
+    model: "gpt-5.5",
+    thinking: true
+  },
   "chrome-ai": {
     model: "gemini-nano",
     thinking: true,
@@ -532,12 +538,12 @@ WebClaw is user controlled:
 - Switching providers does not erase the session. Reuse prior verified tool results, but re-check current browser state before acting.
 
 ## 3. Model providers
-WebClaw supports local Ollama, OpenAI-compatible endpoints, Codex/ChatGPT OAuth, GitHub Copilot OAuth, and Chrome AI when available.
+WebClaw supports local Ollama, OpenAI-compatible endpoints, OpenCode Zen, Codex/ChatGPT OAuth, GitHub Copilot OAuth, and Chrome AI when available.
 
 - Every Provider uses one WebClaw Agent Runtime. Turn lifecycle, Tool dispatch, Plan handling, approvals, interruption, persistence, and context compaction do not change when the active Provider changes.
 - Provider-specific behavior is isolated in a Provider Adapter: authentication, endpoint and wire format, message and media encoding, stream parsing, context capabilities, and native function calling versus JSON Tool transport.
 - An adapter always returns the same assistant or Tool-call shape to the runtime. Codex uses native function calling when available; other adapters can use the JSON transport fallback without creating a second Agent loop.
-- Agent responses use a shared structured shape where supported: Chrome AI uses Prompt API responseConstraint, Ollama uses format JSON Schema, OpenAI-compatible endpoints use response_format JSON Schema, Copilot uses the JSON transport protocol without undocumented request fields, and Codex uses native structured function calls.
+- Agent responses use a shared structured shape where supported: Chrome AI uses Prompt API responseConstraint, Ollama uses format JSON Schema, OpenAI-compatible endpoints use response_format JSON Schema, OpenCode Zen routes each model to Responses, Messages, or Chat Completions, Copilot uses the JSON transport protocol without undocumented request fields, and Codex uses native structured function calls.
 - Configure Providers in Settings and select the single active Provider. Multiple Providers, including multiple entries of the same type, have independent IDs, settings, and stored credentials.
 - In the new Provider dialog, choose Provider type first. WebClaw generates the matching default name; a name manually entered by the user is preserved when the type later changes.
 - Refresh the provider model list before selecting a model when the provider supports discovery.
@@ -3197,6 +3203,7 @@ function normalizeProvider(provider) {
 function defaultProviderName(type) {
   if (type === "ollama") return "Local Ollama";
   if (type === "openai-compatible") return "OpenAI Compatible";
+  if (type === "opencode") return "OpenCode Zen";
   if (type === "chrome-ai") return "Chrome AI";
   if (type === "codex-oauth") return "Codex OAuth";
   if (type === "github-copilot-oauth") return "GitHub Copilot OAuth";
@@ -3749,7 +3756,7 @@ async function callTextProtocolAgent(provider, settings, messages, options = {})
   const responseConstraint = provider.type === "chrome-ai"
     ? structuredAgentResponseForPrompt(settings)
     : undefined;
-  const responseFormat = ["ollama", "openai-compatible"].includes(provider.type)
+  const responseFormat = ["ollama", "openai-compatible", "opencode"].includes(provider.type)
     ? structuredResponseFormat(settings)
     : undefined;
   let streamedContent = "";
@@ -3790,6 +3797,9 @@ const PROVIDER_ADAPTER_DEFINITIONS = Object.freeze({
   },
   "openai-compatible": {
     generateText: (provider, settings, messages, options) => callOpenAICompatible(provider.config, settings, messages, options)
+  },
+  "opencode": {
+    generateText: (provider, settings, messages, options) => callOpenCodeZen(provider.config, settings, messages, options)
   },
   "chrome-ai": {
     generateText: (provider, settings, messages, options) => callChromeAI(provider.config, settings, messages, options)
@@ -4030,7 +4040,7 @@ function providerOriginPatterns(provider) {
   if (!provider || provider.type === "chrome-ai") return [];
   const config = provider.config || {};
   let urls = [];
-  if (provider.type === "ollama" || provider.type === "openai-compatible") {
+  if (provider.type === "ollama" || provider.type === "openai-compatible" || provider.type === "opencode") {
     urls = [config.baseUrl];
   } else if (provider.type === "codex-oauth") {
     urls = [config.issuerUrl, config.authUrl, config.tokenUrl, config.baseUrl];
@@ -4127,6 +4137,125 @@ async function callOpenAICompatible(config, settings, messages, options = {}, be
   });
   if (!response.ok) throw new Error(`OpenAI-compatible backend returned HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
   return readChatCompletionStream(response, options.onDelta);
+}
+
+async function callOpenCodeZen(config, settings, messages, options = {}) {
+  if (!config.baseUrl) throw new Error("OpenCode Zen base URL is required.");
+  if (!config.apiKey) throw new Error("OpenCode Zen API key is required.");
+  if (!config.model) throw new Error("OpenCode Zen model is required.");
+  const endpoint = openCodeEndpointForModel(config.model);
+  if (endpoint === "google") {
+    throw new Error(
+      `OpenCode Zen model ${config.model} uses the Google GenerateContent protocol, which WebClaw does not support yet. ` +
+      "Refresh the model list and select a GPT, Claude, Qwen, Grok, DeepSeek, GLM, MiniMax, Kimi, or free compatible model."
+    );
+  }
+  if (endpoint === "responses") {
+    return callOpenCodeResponses(config, messages, options);
+  }
+  if (endpoint === "messages") {
+    return callOpenCodeMessages(config, settings, messages, options);
+  }
+  return callOpenAICompatible(config, settings, messages, options);
+}
+
+async function callOpenCodeResponses(config, messages, options = {}) {
+  const instructions = messages
+    .filter((message) => message.role === "system" || message.role === "developer")
+    .map((message) => String(message.content || ""))
+    .join("\n\n")
+    .trim();
+  const input = messages
+    .filter((message) => message.role !== "system" && message.role !== "developer")
+    .map((message) => ({
+      role: message.role === "assistant" ? "assistant" : "user",
+      content: String(message.content || "")
+    }));
+  const body = {
+    model: config.model,
+    instructions,
+    input,
+    store: false,
+    stream: true
+  };
+  if (supportsReasoningEffort(config.model)) {
+    body.reasoning = { effort: config.thinking === false ? "low" : "medium" };
+  }
+  const schema = options.responseFormat?.json_schema;
+  if (schema?.schema) {
+    body.text = {
+      format: {
+        type: "json_schema",
+        name: schema.name || "webclaw_agent_response",
+        strict: schema.strict === true,
+        schema: schema.schema
+      }
+    };
+  }
+  const response = await fetch(`${trimSlash(config.baseUrl)}/responses`, {
+    method: "POST",
+    headers: openCodeHeaders(config),
+    signal: options.signal,
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) {
+    throw new Error(`OpenCode Zen Responses API returned HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
+  }
+  return readResponseStream(response, options.onDelta);
+}
+
+async function callOpenCodeMessages(config, settings, messages, options = {}) {
+  const system = messages
+    .filter((message) => message.role === "system" || message.role === "developer")
+    .map((message) => String(message.content || ""))
+    .join("\n\n")
+    .trim();
+  const body = {
+    model: config.model,
+    system,
+    messages: messages
+      .filter((message) => message.role !== "system" && message.role !== "developer")
+      .map((message) => ({
+        role: message.role === "assistant" ? "assistant" : "user",
+        content: String(message.content || "")
+      })),
+    max_tokens: 8192,
+    temperature: Number(settings.temperature || 0.2),
+    stream: true
+  };
+  const response = await fetch(`${trimSlash(config.baseUrl)}/messages`, {
+    method: "POST",
+    headers: {
+      ...openCodeHeaders(config),
+      "x-api-key": config.apiKey,
+      "anthropic-version": "2023-06-01"
+    },
+    signal: options.signal,
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) {
+    throw new Error(`OpenCode Zen Messages API returned HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
+  }
+  return readSseStream(response, (event) => {
+    if (event.type === "content_block_delta" && typeof event.delta?.text === "string") return event.delta.text;
+    if (event.type === "content_block_start" && typeof event.content_block?.text === "string") return event.content_block.text;
+    return "";
+  }, options.onDelta);
+}
+
+function openCodeHeaders(config) {
+  return {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${config.apiKey}`
+  };
+}
+
+function openCodeEndpointForModel(model) {
+  const id = String(model || "").toLowerCase();
+  if (id.startsWith("gpt-")) return "responses";
+  if (id.startsWith("claude-") || id.startsWith("qwen3.")) return "messages";
+  if (id.startsWith("gemini-")) return "google";
+  return "chat";
 }
 
 async function callChromeAI(config, settings, messages, options = {}) {
@@ -4502,6 +4631,8 @@ async function listProviderModels(providerId, providerDraft) {
     models = await listOllamaModels(provider.config);
   } else if (provider.type === "openai-compatible") {
     models = await listOpenAICompatibleModels(provider.config);
+  } else if (provider.type === "opencode") {
+    models = await listOpenCodeModels(provider.config);
   } else if (provider.type === "chrome-ai") {
     models = await listChromeAIModels();
   } else if (provider.type === "codex-oauth") {
@@ -4578,6 +4709,33 @@ async function listOpenAICompatibleModels(config) {
     })
   );
   return parseModelList(json);
+}
+
+async function listOpenCodeModels(config) {
+  if (!config.baseUrl) throw new Error("OpenCode Zen base URL is required.");
+  const headers = {};
+  if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
+  const json = await checkedJson(
+    await fetch(`${trimSlash(config.baseUrl)}/models`, { headers })
+  );
+  const models = parseModelList(json);
+  return models
+    .filter((model) => openCodeEndpointForModel(typeof model === "string" ? model : model.id) !== "google")
+    .map((model) => {
+      const id = typeof model === "string" ? model : model.id;
+      const endpoint = openCodeEndpointForModel(id);
+      return {
+        ...(typeof model === "object" ? model : {}),
+        id,
+        name: typeof model === "object" ? model.name || id : id,
+        vendor: "OpenCode Zen",
+        category: endpoint === "responses"
+          ? "Responses API"
+          : endpoint === "messages"
+            ? "Messages API"
+            : "Chat Completions"
+      };
+    });
 }
 
 async function listCodexModels(settings, provider) {
@@ -5102,6 +5260,7 @@ function listWebClawConfig(settings) {
       provider.config?.githubAccessToken ||
       provider.type === "ollama" ||
       provider.type === "openai-compatible" ||
+      (provider.type === "opencode" && provider.config?.apiKey) ||
       provider.type === "chrome-ai"
     )
   }));

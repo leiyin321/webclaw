@@ -28,6 +28,12 @@ const PROVIDER_DEFAULTS = {
     model: "gpt-4.1-mini",
     thinking: true
   },
+  opencode: {
+    baseUrl: "https://opencode.ai/zen/v1",
+    apiKey: "",
+    model: "gpt-5.5",
+    thinking: true
+  },
   "chrome-ai": {
     model: "gemini-nano",
     thinking: true,
@@ -202,6 +208,13 @@ const elements = {
   openaiModelOptions: document.querySelector("#openaiModelOptions"),
   openaiThinking: document.querySelector("#openaiThinking"),
   refreshOpenAIModels: document.querySelector("#refreshOpenAIModels"),
+  opencodeBaseUrl: document.querySelector("#opencodeBaseUrl"),
+  opencodeApiKey: document.querySelector("#opencodeApiKey"),
+  opencodeModel: document.querySelector("#opencodeModel"),
+  opencodeModelSelect: document.querySelector("#opencodeModelSelect"),
+  opencodeModelOptions: document.querySelector("#opencodeModelOptions"),
+  opencodeThinking: document.querySelector("#opencodeThinking"),
+  refreshOpenCodeModels: document.querySelector("#refreshOpenCodeModels"),
   chromeAIModel: document.querySelector("#chromeAIModel"),
   chromeAIModelSelect: document.querySelector("#chromeAIModelSelect"),
   chromeAIModelOptions: document.querySelector("#chromeAIModelOptions"),
@@ -501,6 +514,7 @@ function bindEvents() {
   );
   elements.refreshOllamaModels.addEventListener("click", refreshActiveProviderModels);
   elements.refreshOpenAIModels.addEventListener("click", refreshActiveProviderModels);
+  elements.refreshOpenCodeModels.addEventListener("click", refreshActiveProviderModels);
   elements.refreshChromeAIModels.addEventListener("click", refreshActiveProviderModels);
   elements.refreshCodexModels.addEventListener("click", refreshActiveProviderModels);
   elements.refreshGitHubCopilotModels.addEventListener("click", refreshActiveProviderModels);
@@ -528,6 +542,7 @@ function bindEvents() {
   elements.deleteSchedule.addEventListener("click", deleteScheduleModal);
   elements.ollamaModelSelect.addEventListener("change", () => syncSelectedModel(elements.ollamaModelSelect, elements.ollamaModel));
   elements.openaiModelSelect.addEventListener("change", () => syncSelectedModel(elements.openaiModelSelect, elements.openaiModel));
+  elements.opencodeModelSelect.addEventListener("change", () => syncSelectedModel(elements.opencodeModelSelect, elements.opencodeModel));
   elements.chromeAIModelSelect.addEventListener("change", () => syncSelectedModel(elements.chromeAIModelSelect, elements.chromeAIModel));
   elements.codexModelSelect.addEventListener("change", () => syncSelectedModel(elements.codexModelSelect, elements.codexModel));
   elements.githubCopilotModelSelect.addEventListener("change", () =>
@@ -562,6 +577,11 @@ function bindProviderDirtyEvents() {
     elements.openaiModel,
     elements.openaiModelSelect,
     elements.openaiThinking,
+    elements.opencodeBaseUrl,
+    elements.opencodeApiKey,
+    elements.opencodeModel,
+    elements.opencodeModelSelect,
+    elements.opencodeThinking,
     elements.chromeAIModel,
     elements.chromeAIModelSelect,
     elements.chromeAIIncludeImages,
@@ -1176,7 +1196,7 @@ function providerPermissionUrls(provider) {
   if (!provider) return [];
   const config = provider.config || {};
   if (provider.type === "chrome-ai") return [];
-  if (provider.type === "ollama" || provider.type === "openai-compatible") return [config.baseUrl];
+  if (provider.type === "ollama" || provider.type === "openai-compatible" || provider.type === "opencode") return [config.baseUrl];
   if (provider.type === "codex-oauth") {
     return [config.issuerUrl, config.authUrl, config.tokenUrl, config.baseUrl];
   }
@@ -3816,6 +3836,12 @@ function renderProviderConfig(provider) {
   elements.openaiThinking.checked = provider.config.thinking !== false;
   renderModelOptions(elements.openaiModelOptions, elements.openaiModelSelect, provider, "openai-compatible");
   syncModelControls(elements.openaiModel, elements.openaiModelSelect);
+  elements.opencodeBaseUrl.value = provider.config.baseUrl || "";
+  elements.opencodeApiKey.value = provider.config.apiKey || "";
+  elements.opencodeModel.value = provider.config.model || "";
+  elements.opencodeThinking.checked = provider.config.thinking !== false;
+  renderModelOptions(elements.opencodeModelOptions, elements.opencodeModelSelect, provider, "opencode");
+  syncModelControls(elements.opencodeModel, elements.opencodeModelSelect);
   elements.chromeAIModel.value = provider.config.model || "";
   elements.chromeAIThinking.checked = false;
   elements.chromeAIThinking.disabled = true;
@@ -3979,6 +4005,14 @@ function readProviderConfig(type) {
       apiKey: elements.openaiApiKey.value.trim(),
       model: elements.openaiModel.value.trim(),
       thinking: elements.openaiThinking.checked
+    };
+  }
+  if (type === "opencode") {
+    return {
+      baseUrl: elements.opencodeBaseUrl.value.trim(),
+      apiKey: elements.opencodeApiKey.value.trim(),
+      model: elements.opencodeModel.value.trim(),
+      thinking: elements.opencodeThinking.checked
     };
   }
   if (type === "chrome-ai") {
@@ -4671,6 +4705,7 @@ function stopGitHubCopilotPolling() {
 function defaultProviderName(type) {
   if (type === "ollama") return "Local Ollama";
   if (type === "openai-compatible") return "OpenAI Compatible";
+  if (type === "opencode") return "OpenCode Zen";
   if (type === "chrome-ai") return "Chrome AI";
   if (type === "codex-oauth") return "Codex OAuth";
   if (type === "github-copilot-oauth") return "GitHub Copilot OAuth";
@@ -4680,6 +4715,7 @@ function defaultProviderName(type) {
 function providerLabel(type) {
   if (type === "ollama") return "Ollama";
   if (type === "openai-compatible") return "OpenAI";
+  if (type === "opencode") return "OpenCode";
   if (type === "chrome-ai") return "Chrome AI";
   if (type === "codex-oauth") return "Codex";
   if (type === "github-copilot-oauth") return "Copilot";
@@ -4816,6 +4852,7 @@ function setBusy(busy, text = "Ready") {
   elements.clearGitHubCopilot.disabled = busy;
   elements.refreshOllamaModels.disabled = busy;
   elements.refreshOpenAIModels.disabled = busy;
+  elements.refreshOpenCodeModels.disabled = busy;
   elements.refreshChromeAIModels.disabled = busy;
   elements.refreshCodexModels.disabled = busy;
   elements.refreshGitHubCopilotModels.disabled = busy;

@@ -15,10 +15,11 @@ or message channels.
 - Settings and the file manager open in separate extension windows, leaving chat unobstructed.
 - Local Ollama provider through `http://localhost:11434/api/chat`.
 - OpenAI API format compatible provider through `/v1/chat/completions`.
+- OpenCode Zen with per-model routing to Responses, Messages, or Chat Completions.
 - Chrome AI provider through Chrome's built-in Prompt API and Gemini Nano.
 - Codex / ChatGPT sign-in provider using a Codex CLI-compatible device OAuth flow.
 - GitHub Copilot sign-in provider using GitHub OAuth device flow.
-- Multiple custom providers. Each provider is one of `Codex / ChatGPT OAuth`, `GitHub Copilot OAuth`, `Chrome AI`, `Local Ollama`, or `OpenAI-compatible API`.
+- Multiple custom providers. Each provider is one of `Codex / ChatGPT OAuth`, `GitHub Copilot OAuth`, `Chrome AI`, `Local Ollama`, `OpenAI-compatible API`, or `OpenCode Zen`.
 - Browser tools: page snapshot, click, type, navigate, wait, page translation, current weather lookup, background HTTP requests, limited tab APIs, and JavaScript execution.
 - Virtual filesystem: the file manager and agent tools share an IndexedDB-backed filesystem with directory browsing, text editing, upload, download, rename, trash, restore, permanent deletion, and structured tools including `fs_list`, `fs_read`, `fs_write`, `fs_edit`, `fs_search`, and `fs_apply_patch`.
 - VFS static site preview: HTML/HTM/XHTML/SVG files in the file manager can open in a separate Chrome tab; the preview runtime loads relative CSS, JavaScript, images, fonts, and JSON resources from VFS.
@@ -112,6 +113,12 @@ Set:
 - Provider type: `OpenAI-compatible API`
 - Base URL: for OpenAI use `https://api.openai.com/v1`; for compatible services use their `/v1` base URL.
 - API key and model.
+
+### OpenCode Zen
+
+Choose provider type `OpenCode Zen`, enter an API key from OpenCode Zen, and click Refresh to load the official model catalog. The default base URL is `https://opencode.ai/zen/v1`.
+
+WebClaw routes GPT models to `/responses`, Claude and Qwen models to `/messages`, and Grok, DeepSeek, GLM, MiniMax, Kimi, and compatible models to `/chat/completions`. Gemini models that require the Google GenerateContent protocol are currently filtered from the selector instead of being exposed as unusable choices.
 
 ### Chrome AI
 

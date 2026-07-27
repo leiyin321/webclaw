@@ -62,9 +62,9 @@ Before first sending data to an external provider, WebClaw presents a prominent 
 - original image or file data supplied by the user or received through a Channel when supported by the model;
 - knowledge-base excerpts needed to answer the request.
 
-数据直接从浏览器发送到用户配置的服务，例如本地 Ollama、OpenAI-compatible API、ChatGPT/Codex endpoint 或 GitHub Copilot endpoint。Chrome AI 内容由 Chrome 的内置 AI API 处理。第三方服务按照各自的条款和隐私政策处理数据。
+数据直接从浏览器发送到用户配置的服务，例如本地 Ollama、OpenAI-compatible API、OpenCode Zen、ChatGPT/Codex endpoint 或 GitHub Copilot endpoint。Chrome AI 内容由 Chrome 的内置 AI API 处理。第三方服务按照各自的条款和隐私政策处理数据。
 
-Data is sent directly from the browser to the user-configured service, such as local Ollama, an OpenAI-compatible API, a ChatGPT/Codex endpoint, or a GitHub Copilot endpoint. Chrome AI content is processed through Chrome's built-in AI APIs. Each third-party service processes data under its own terms and privacy policy.
+Data is sent directly from the browser to the user-configured service, such as local Ollama, an OpenAI-compatible API, OpenCode Zen, a ChatGPT/Codex endpoint, or a GitHub Copilot endpoint. Chrome AI content is processed through Chrome's built-in AI APIs. Each third-party service processes data under its own terms and privacy policy.
 
 ## 4. Channels、通知和网络 Tool / Channels, Notifications, and Network Tools
 

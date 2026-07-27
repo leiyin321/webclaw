@@ -210,6 +210,7 @@
                 <option value="chrome-ai">Chrome AI</option>
                 <option value="ollama">Local Ollama</option>
                 <option value="openai-compatible">OpenAI-compatible API</option>
+                <option value="opencode">OpenCode Zen</option>
               </select>
             </label>
 
@@ -259,6 +260,31 @@
             </label>
             <label class="check-row">
               <input id="openaiThinking" type="checkbox">
+              <span>Thinking mode</span>
+            </label>
+          </div>
+
+          <div data-provider-section="opencode" class="provider-section">
+            <p class="token-state">Connects directly to OpenCode Zen and routes each model to its documented API format.</p>
+            <label>
+              OpenCode Zen base URL
+              <input id="opencodeBaseUrl" spellcheck="false">
+            </label>
+            <label>
+              API key
+              <input id="opencodeApiKey" type="password" spellcheck="false">
+            </label>
+            <label>
+              Model
+              <div class="model-row">
+                <input id="opencodeModel" list="opencodeModelOptions" spellcheck="false">
+                <select id="opencodeModelSelect" aria-label="OpenCode Zen model options"></select>
+                <button id="refreshOpenCodeModels" type="button" class="secondary">Refresh</button>
+              </div>
+              <datalist id="opencodeModelOptions"></datalist>
+            </label>
+            <label class="check-row">
+              <input id="opencodeThinking" type="checkbox">
               <span>Thinking mode</span>
             </label>
           </div>

@@ -180,6 +180,15 @@ requireCondition(
   "Provider-specific behavior must stay behind the Provider Adapter boundary"
 );
 requireCondition(
+  backgroundSource.includes('"opencode": {') &&
+    backgroundSource.includes("callOpenCodeZen") &&
+    backgroundSource.includes('return "responses"') &&
+    backgroundSource.includes('return "messages"') &&
+    backgroundSource.includes('return "google"') &&
+    readText("src/sidepanel.html").includes('value="opencode"'),
+  "OpenCode Zen Provider routing or configuration UI is incomplete"
+);
+requireCondition(
   backgroundSource.includes('name: "update_plan"') &&
     backgroundSource.includes('case "update_plan"') &&
     backgroundSource.includes('"plan_updated"') &&

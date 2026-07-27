@@ -2,6 +2,13 @@
 
 All notable changes to WebClaw will be documented in this file.
 
+## 0.5.1
+
+- Add an OpenCode Zen Provider with official model discovery and per-model
+  routing across Responses, Messages, and Chat Completions APIs.
+- Filter OpenCode Gemini models that require the not-yet-supported Google
+  GenerateContent protocol instead of allowing an invalid selection.
+
 ## 0.5.0
 
 - Introduce one provider-independent Agent Runtime shared by the Side Panel,

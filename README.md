@@ -13,7 +13,7 @@ WebClaw 目前是实验性的浏览器原生 Agent 框架，适合本地开发�
 - Chrome Side Panel 会话界面。
 - 设置与文件管理器通过独立扩展窗口打开，不遮挡会话。
 - 多会话 Session 管理，所有通道消息进入当前活跃会话。
-- Provider 管理：Local Ollama、OpenAI-compatible API、Chrome AI、Codex / ChatGPT OAuth、GitHub Copilot OAuth。
+- Provider 管理：Local Ollama、OpenAI-compatible API、OpenCode Zen、Chrome AI、Codex / ChatGPT OAuth、GitHub Copilot OAuth。
 - 模型列表刷新、模型下拉选择、Thinking mode 配置。
 - 浏览器工具：页面上下文、点击、输入、跳转、等待、页面翻译、天气查询、搜索网页、后台 HTTP 请求、企业微信推送、有限 Chrome API、可选页面 JavaScript 执行。
 - 虚拟文件系统：文件管理器与 Agent Tool 共享 IndexedDB 文件系统；支持目录浏览、文本编辑、上传、下载、重命名、回收站、恢复、彻底删除，以及 `fs_list`、`fs_read`、`fs_write`、`fs_edit`、`fs_search`、`fs_apply_patch` 等结构化 Tool。
@@ -90,6 +90,16 @@ GET http://localhost:11434/api/tags
 ```text
 GET /models
 ```
+
+### OpenCode Zen
+
+Provider type 选择 `OpenCode Zen`，填写从 OpenCode Zen 获取的 API key，然后点击 Refresh 获取官方模型列表。默认 Base URL 为：
+
+```text
+https://opencode.ai/zen/v1
+```
+
+WebClaw 根据 OpenCode 官方模型协议自动路由：GPT 系列使用 `/responses`，Claude 和 Qwen 系列使用 `/messages`，Grok、DeepSeek、GLM、MiniMax、Kimi 及兼容模型使用 `/chat/completions`。当前下拉列表会过滤需要 Google GenerateContent 专用协议的 Gemini 模型，避免选择后产生不兼容请求。
 
 ### Chrome AI
 
