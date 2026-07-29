@@ -154,11 +154,12 @@ requireCondition(
   "controlled active Provider switching and rollback are missing"
 );
 requireCondition(
-  source.includes("webclaw-default-manual: 0.5.0-r1") &&
+  source.includes("webclaw-default-manual: 0.5.2-r1") &&
     source.includes("REPLACEABLE_DEFAULT_KNOWLEDGE_MANUAL_HASHES") &&
     source.includes("qxBFf1iNGSrbPVRGoSSOQUH8Mu9b6rgnrTBznpwsH1s") &&
+    source.includes("qmON25C52Otm3zxd8xOE_dlGJ9DX-j61ECdtgLwChHA") &&
     source.includes("expectedVersion: existing.entry.version") &&
-    source.includes('"webclaw", "manual", "operations", "0.5.0"'),
+    source.includes('"webclaw", "manual", "operations", "0.5.2"'),
   "versioned default knowledge manual migration is missing"
 );
 const backgroundSource = readText("src/background.js");
@@ -194,6 +195,29 @@ requireCondition(
     backgroundSource.includes('"plan_updated"') &&
     readText("src/sidepanel.js").includes('["update_plan",'),
   "unified Agent planning support is incomplete"
+);
+requireCondition(
+  backgroundSource.includes('name: "task_push"') &&
+    backgroundSource.includes('name: "task_stack"') &&
+    backgroundSource.includes("runTaskPush") &&
+    backgroundSource.includes("validateTaskOutput") &&
+    backgroundSource.includes("task_output_validation_error") &&
+    backgroundSource.includes("outputSchema: null") &&
+    backgroundSource.includes("taskMaxModelSteps") &&
+    agentRuntimeSource.includes("normalizeAgentPlan") &&
+    readText("src/task-stack.js").includes("export function pushTask") &&
+    readText("src/task-stack.js").includes("export function validateTaskOutput") &&
+    readText("src/sidepanel.html").includes('id="taskMaxDepth"') &&
+    readText("src/sidepanel.html").includes('id="taskMaxTasks"'),
+  "ephemeral task-stack runtime or structured result validation is incomplete"
+);
+requireCondition(
+  backgroundSource.includes('emitAgentEvent(options, "task_started"') &&
+    backgroundSource.includes('emitAgentEvent(options, "task_progress"') &&
+    readText("src/sidepanel.js").includes('appendMessage("task", content') &&
+    readText("src/sidepanel.js").includes("finalizeTaskRunView(event)") &&
+    readText("src/sidepanel.css").includes(".message.task"),
+  "live task execution UI is missing"
 );
 requireCondition(
   backgroundSource.includes('"context_compacted"') &&

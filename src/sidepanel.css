@@ -845,6 +845,90 @@ textarea {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+.message.task {
+  padding: 0;
+  color: #27384d;
+  background: #f7f9fc;
+  border-color: #c8d1dd;
+  font-size: 12px;
+}
+
+.message.task summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.message.task summary::marker {
+  color: #66788f;
+}
+
+.task-run-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 62px;
+  color: #185abc;
+  font-weight: 700;
+}
+
+.message.task[data-status="running"] .task-run-state::before,
+.message.task[data-status="in_progress"] .task-run-state::before {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+  animation: task-running-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes task-running-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message.task[data-status="running"] .task-run-state::before,
+  .message.task[data-status="in_progress"] .task-run-state::before {
+    animation: none;
+  }
+}
+
+.task-run-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.task-run-body {
+  max-height: 280px;
+  margin: 0;
+  padding: 0 12px 12px;
+  overflow: auto;
+  color: inherit;
+  font: 11px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message.task[data-status="completed"] .task-run-state {
+  color: #137333;
+}
+
+.message.task[data-status="failed"] .task-run-state,
+.message.task[data-status="interrupted"] .task-run-state {
+  color: #b3261e;
+}
+
 .composer {
   display: grid;
   grid-template-columns: 1fr auto auto;
@@ -1013,6 +1097,29 @@ textarea {
     color: #d9eadc;
     background: #18271d;
     border-color: #395540;
+  }
+
+  .message.task {
+    color: #dce4ef;
+    background: #1b2028;
+    border-color: #414b59;
+  }
+
+  .message.task summary::marker {
+    color: #aeb9c8;
+  }
+
+  .task-run-state {
+    color: #8ab4f8;
+  }
+
+  .message.task[data-status="completed"] .task-run-state {
+    color: #81c995;
+  }
+
+  .message.task[data-status="failed"] .task-run-state,
+  .message.task[data-status="interrupted"] .task-run-state {
+    color: #f28b82;
   }
 
   .message.wechat {

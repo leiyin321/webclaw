@@ -48,6 +48,22 @@
           </label>
         </div>
 
+        <div class="grid-two">
+          <label>
+            Task stack depth
+            <input id="taskMaxDepth" type="number" min="1" step="1">
+          </label>
+          <label>
+            Tasks per run
+            <input id="taskMaxTasks" type="number" min="1" step="1">
+          </label>
+        </div>
+
+        <label>
+          Task tree model-step budget (0 = unlimited)
+          <input id="taskMaxModelSteps" type="number" min="0" step="1">
+        </label>
+
         <label class="check-row">
           <input id="allowUnsafePageJs" type="checkbox">
           <span>Allow agent JavaScript execution</span>

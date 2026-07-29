@@ -30,6 +30,12 @@ Important boundaries:
   stored in `chrome.storage.local`.
 - Page content and channel messages may be sent to the active model provider
   selected by the user.
+- Ephemeral child tasks inherit the active Provider and can only retain or
+  reduce the parent's enabled Tool set. Task output is validated locally
+  against its declared JSON Schema before it is returned to the parent.
+- Task-stack depth and task count are bounded. Completed child contexts are
+  removed from the active stack, and interrupted external operations are not
+  automatically replayed.
 - Tools that send network requests or channel messages should remain visible in
   the chat transcript.
 

@@ -102,6 +102,8 @@ const BUILTIN_TOOLS = [
   ["chrome_api", "Use limited Chrome tab APIs."],
   ["wait", "Wait for a short period."],
   ["update_plan", "Create or update the current turn plan for substantial work."],
+  ["task_push", "Execute an ephemeral structured child task with an independent model context."],
+  ["task_stack", "Inspect the current ephemeral task stack and execution budget."],
   ["fs_shell", "Run safe virtual filesystem commands including pwd and cd; cd changes the current session directory."],
   ["fs_list", "List virtual filesystem directories."],
   ["fs_read", "Read virtual filesystem files."],
@@ -253,6 +255,9 @@ const elements = {
   refreshGitHubCopilotModels: document.querySelector("#refreshGitHubCopilotModels"),
   githubCopilotIntegrationId: document.querySelector("#githubCopilotIntegrationId"),
   maxSteps: document.querySelector("#maxSteps"),
+  taskMaxDepth: document.querySelector("#taskMaxDepth"),
+  taskMaxTasks: document.querySelector("#taskMaxTasks"),
+  taskMaxModelSteps: document.querySelector("#taskMaxModelSteps"),
   temperature: document.querySelector("#temperature"),
   allowUnsafePageJs: document.querySelector("#allowUnsafePageJs"),
   toolCount: document.querySelector("#toolCount"),
@@ -372,6 +377,7 @@ let activeAssistantNode = null;
 let activeTurnId = "";
 let activePlanNode = null;
 const activeAgentItemNodes = new Map();
+const activeTaskRunViews = new Map();
 let pendingAgentApproval = null;
 let chatSessionWriteQueue = Promise.resolve();
 let contextCompactionWriteQueue = Promise.resolve();
@@ -793,6 +799,7 @@ async function submitUserMessage(content, source) {
   activeAssistantNode = null;
   activePlanNode = null;
   activeAgentItemNodes.clear();
+  activeTaskRunViews.clear();
 
   try {
     const result = await streamAgentMessage(chat, activeSession().workingDirectory);
@@ -837,6 +844,7 @@ async function submitUserMessage(content, source) {
     activeTurnId = "";
     activePlanNode = null;
     activeAgentItemNodes.clear();
+    activeTaskRunViews.clear();
     setBusy(false);
     processNextWechatMessage();
   }
@@ -960,6 +968,40 @@ function streamAgentRequest(startMessage) {
 
 function handleAgentEvent(event) {
   if (!event || typeof event !== "object") return;
+  if (event.type === "task_started") {
+    updateTaskRunView(event, "running");
+    elements.status.textContent = Number(event.depth || 0) > 0
+      ? `Task ${Number(event.depth)}: ${event.title || "Running"}`
+      : "Thinking";
+    return;
+  }
+  if (event.type === "task_pushed") {
+    updateTaskRunView(event, "running");
+    elements.status.textContent = `Task ${Number(event.depth || event.taskDepth || 0)}: ${event.title || "Running"}`;
+    return;
+  }
+  if (event.type === "task_progress") {
+    updateTaskRunView(event, "running");
+    elements.status.textContent = event.phase === "tool"
+      ? `Task tool: ${event.tool || "Running"}`
+      : `Task step ${Number(event.step || 0)} of ${Number(event.maxSteps || 0)}`;
+    return;
+  }
+  if (event.type === "task_completed") {
+    updateTaskRunView(event, "completed");
+    elements.status.textContent = `Task completed: ${event.title || event.taskId || ""}`;
+    return;
+  }
+  if (event.type === "task_failed") {
+    updateTaskRunView(event, "failed");
+    elements.status.textContent = `Task failed: ${event.error || event.taskId || "Unknown error"}`;
+    return;
+  }
+  if (event.type === "task_output_invalid") {
+    updateTaskRunView(event, "correcting");
+    elements.status.textContent = "Task is correcting its structured output";
+    return;
+  }
   if (event.type === "turn_started") {
     activeTurnId = String(event.turnId || "");
     recordTurnEvent(event);
@@ -1032,7 +1074,164 @@ function handleAgentEvent(event) {
   }
   if (["turn_completed", "turn_failed", "turn_interrupted"].includes(event.type)) {
     recordTurnEvent(event);
+    finalizeTaskRunView(event);
   }
+}
+
+function updateTaskRunView(event, status) {
+  const runId = String(event.taskRunId || "");
+  const taskId = String(event.taskId || "");
+  if (!runId || !taskId) return;
+  let view = activeTaskRunViews.get(runId);
+  if (!view) {
+    view = {
+      runId,
+      rootTaskId: "",
+      status: "running",
+      tasks: new Map(),
+      startedAt: Number(event.timestamp || Date.now()),
+      node: null
+    };
+    activeTaskRunViews.set(runId, view);
+  }
+  const previous = view.tasks.get(taskId) || {};
+  const depth = Number(event.depth ?? event.taskDepth ?? previous.depth ?? 0);
+  const task = {
+    ...previous,
+    id: taskId,
+    parentTaskId: String(event.parentTaskId ?? previous.parentTaskId ?? ""),
+    depth,
+    title: String(event.title || previous.title || (depth === 0 ? "Agent turn" : "Subtask")),
+    status,
+    phase: String(event.phase || previous.phase || ""),
+    tool: String(event.tool || (event.phase === "model" ? "" : previous.tool || "")),
+    step: Number(event.step ?? previous.step ?? 0),
+    maxSteps: Number(event.maxSteps ?? previous.maxSteps ?? 0),
+    retries: Number(previous.retries || 0),
+    error: String(event.error || previous.error || ""),
+    usage: event.usage || previous.usage || null,
+    startedAt: Number(previous.startedAt || event.timestamp || Date.now()),
+    completedAt: ["completed", "failed"].includes(status) ? Number(event.timestamp || Date.now()) : 0
+  };
+  if (status === "correcting") {
+    task.retries += 1;
+    task.phase = "correcting";
+    task.error = formatTaskValidationErrors(event.errors);
+  }
+  if (depth === 0) view.rootTaskId = taskId;
+  if (event.type === "task_pushed" && task.parentTaskId) {
+    const parent = view.tasks.get(task.parentTaskId);
+    if (parent) {
+      parent.status = "waiting_child";
+      parent.phase = "waiting_child";
+    }
+  }
+  if (["completed", "failed"].includes(status) && task.parentTaskId) {
+    const parent = view.tasks.get(task.parentTaskId);
+    if (parent && parent.status === "waiting_child") {
+      parent.status = "running";
+      parent.phase = "model";
+    }
+  }
+  view.tasks.set(taskId, task);
+  renderLiveTaskRunView(view);
+}
+
+function finalizeTaskRunView(event) {
+  const runId = String(event.taskRunId || "");
+  const view = activeTaskRunViews.get(runId);
+  if (!view || (view.rootTaskId && String(event.taskId || "") !== view.rootTaskId)) return;
+  const status = event.type === "turn_completed"
+    ? "completed"
+    : event.type === "turn_interrupted"
+      ? "interrupted"
+      : "failed";
+  view.status = status;
+  const root = view.tasks.get(view.rootTaskId || String(event.taskId || ""));
+  if (root) {
+    root.status = status;
+    root.phase = "";
+    root.error = String(event.error || root.error || "");
+    root.completedAt = Number(event.completedAt || event.timestamp || Date.now());
+  }
+  renderLiveTaskRunView(view);
+  activeTaskRunViews.delete(runId);
+}
+
+function renderLiveTaskRunView(view) {
+  const content = formatTaskRunView(view);
+  if (!view.node) {
+    view.node = appendMessage("task", content, {
+      kind: "task_run",
+      status: view.status,
+      excludedFromContext: true
+    });
+  } else {
+    updateMessage(view.node, content, { status: view.status });
+  }
+}
+
+function formatTaskRunView(view) {
+  const tasks = [...view.tasks.values()].sort((left, right) => {
+    if (left.startedAt !== right.startedAt) return left.startedAt - right.startedAt;
+    return left.depth - right.depth;
+  });
+  const done = tasks.filter((task) => task.status === "completed").length;
+  const failed = tasks.filter((task) => ["failed", "interrupted"].includes(task.status)).length;
+  const heading = view.status === "running"
+    ? `Task execution (${done}/${tasks.length})`
+    : `Task execution (${done} completed${failed ? `, ${failed} failed` : ""})`;
+  const lines = tasks.map((task) => {
+    const indent = "  ".repeat(Math.max(0, task.depth));
+    const marker = task.status === "completed"
+      ? "[x]"
+      : ["failed", "interrupted"].includes(task.status)
+        ? "[!]"
+        : task.status === "waiting_child"
+          ? "[-]"
+          : "[>]";
+    const detail = taskProgressLabel(task);
+    return `${indent}${marker} ${task.title}${detail ? ` - ${detail}` : ""}`;
+  });
+  return [heading, ...lines].join("\n");
+}
+
+function taskProgressLabel(task) {
+  if (task.status === "completed") {
+    const modelSteps = Number(task.usage?.modelSteps || task.step || 0);
+    const toolCalls = Number(task.usage?.toolCalls || 0);
+    return `Completed${taskDurationLabel(task)}${modelSteps ? `, ${modelSteps} model step${modelSteps === 1 ? "" : "s"}` : ""}${toolCalls ? `, ${toolCalls} tool call${toolCalls === 1 ? "" : "s"}` : ""}`;
+  }
+  if (task.status === "failed") return `Failed${taskDurationLabel(task)}: ${task.error || "Unknown error"}`;
+  if (task.status === "interrupted") return "Stopped";
+  if (task.status === "correcting" || task.phase === "correcting") {
+    return `Correcting structured output (attempt ${task.retries})${task.error ? `: ${task.error}` : ""}`;
+  }
+  if (task.status === "waiting_child" || task.phase === "waiting_child") return "Waiting for child task";
+  if (task.phase === "tool") return `Running tool ${task.tool || "unknown"}${task.step ? `, model step ${task.step}/${task.maxSteps || "?"}` : ""}`;
+  if (task.step) return `Model step ${task.step}/${task.maxSteps || "?"}`;
+  return "Starting";
+}
+
+function taskDurationLabel(task) {
+  const durationMs = Number(task.completedAt || 0) - Number(task.startedAt || 0);
+  if (durationMs <= 0) return "";
+  if (durationMs < 1000) return `, ${durationMs} ms`;
+  return `, ${(durationMs / 1000).toFixed(durationMs < 10_000 ? 1 : 0)} s`;
+}
+
+function taskStatusLabel(status) {
+  if (status === "completed") return "Completed";
+  if (status === "failed") return "Failed";
+  if (status === "interrupted") return "Stopped";
+  return "Running";
+}
+
+function formatTaskValidationErrors(errors) {
+  return (Array.isArray(errors) ? errors : [])
+    .slice(0, 2)
+    .map((error) => `${error?.path || "$"} ${error?.message || "is invalid"}`)
+    .join("; ");
 }
 
 function formatToolExecution(item) {
@@ -1464,7 +1663,7 @@ function normalizeStoredChatMessages(value) {
 
 function normalizeMessageRole(role) {
   const value = String(role || "");
-  if (["user", "assistant", "tool", "plan", "wechat", "telegram", "channel"].includes(value)) return value;
+  if (["user", "assistant", "tool", "plan", "task", "wechat", "telegram", "channel"].includes(value)) return value;
   return "tool";
 }
 
@@ -1498,10 +1697,17 @@ function renderActiveSession() {
   if (standaloneView !== "workspace") workspacePath = session.workingDirectory;
   storedChatMessages = session.messages;
   elements.messages.replaceChildren();
+  activeTaskRunViews.clear();
   renderedWechatEventIds.clear();
   for (const message of storedChatMessages) {
     const isToolTrajectory = message.role === "tool" && isToolTrajectoryContent(message.modelContent);
-    if (!message.hidden && !isToolTrajectory) appendMessage(message.role, message.content, { persist: false });
+    if (!message.hidden && !isToolTrajectory) {
+      appendMessage(message.role, message.content, {
+        persist: false,
+        kind: message.kind,
+        status: message.status
+      });
+    }
   }
   rebuildChatContext();
   renderSessionList();
@@ -3714,6 +3920,9 @@ function renderSettings() {
     renderChannelList();
     renderScheduleList();
     elements.maxSteps.value = settings.maxSteps;
+    elements.taskMaxDepth.value = settings.taskMaxDepth;
+    elements.taskMaxTasks.value = settings.taskMaxTasks;
+    elements.taskMaxModelSteps.value = settings.taskMaxModelSteps;
     elements.temperature.value = settings.temperature;
     elements.allowUnsafePageJs.checked = Boolean(settings.allowUnsafePageJs);
     elements.disclosureState.textContent = hasAcceptedProductDisclosure() ? "Accepted" : "Not accepted";
@@ -3973,6 +4182,9 @@ function syncModelControls(input, select) {
 
 function syncGeneralFormToSettings() {
   settings.maxSteps = Number(elements.maxSteps.value || 8);
+  settings.taskMaxDepth = Number(elements.taskMaxDepth.value || 4);
+  settings.taskMaxTasks = Number(elements.taskMaxTasks.value || 16);
+  settings.taskMaxModelSteps = Number(elements.taskMaxModelSteps.value || 0);
   settings.temperature = Number(elements.temperature.value || 0.2);
   settings.allowUnsafePageJs = elements.allowUnsafePageJs.checked;
   settings.channels = normalizePanelChannels(settings).object;
@@ -4055,6 +4267,9 @@ function serializableSettings() {
     skills: normalizePanelSkills(settings.skills),
     schedules: normalizePanelSchedules(settings.schedules),
     maxSteps: settings.maxSteps,
+    taskMaxDepth: settings.taskMaxDepth,
+    taskMaxTasks: settings.taskMaxTasks,
+    taskMaxModelSteps: settings.taskMaxModelSteps,
     temperature: settings.temperature,
     allowUnsafePageJs: settings.allowUnsafePageJs,
     disclosures: normalizePanelDisclosures(settings.disclosures),
@@ -4109,6 +4324,9 @@ function normalizePanelSettings(value) {
     skills: normalizePanelSkills(raw.skills),
     schedules: normalizePanelSchedules(raw.schedules),
     maxSteps: positiveInteger(raw.maxSteps, 8),
+    taskMaxDepth: positiveInteger(raw.taskMaxDepth, 4),
+    taskMaxTasks: positiveInteger(raw.taskMaxTasks, 16),
+    taskMaxModelSteps: nonNegativeInteger(raw.taskMaxModelSteps, 0),
     temperature: clampNumber(raw.temperature, 0, 2, 0.2),
     allowUnsafePageJs: Boolean(raw.allowUnsafePageJs),
     disclosures: normalizePanelDisclosures(raw.disclosures),
@@ -4554,6 +4772,12 @@ function positiveInteger(value, fallback) {
   return Math.max(1, Math.floor(number));
 }
 
+function nonNegativeInteger(value, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(0, Math.floor(number));
+}
+
 function shouldStartCodexDeviceLogin(provider) {
   return Boolean(
     provider.type === "codex-oauth" &&
@@ -4779,9 +5003,9 @@ function appendMessage(role, content, options = {}) {
     }
     return null;
   }
-  const node = document.createElement("div");
+  const node = document.createElement(role === "task" ? "details" : "div");
   node.className = `message ${role}`;
-  node.textContent = content;
+  setMessageNodeContent(node, content, options.status);
   if (options.persist !== false) {
     const id = crypto.randomUUID();
     node.dataset.historyId = id;
@@ -4814,7 +5038,7 @@ function appendMessage(role, content, options = {}) {
 }
 
 function updateMessage(node, content, options = {}) {
-  node.textContent = content;
+  setMessageNodeContent(node, content, options.status);
   const id = node.dataset.historyId;
   const stored = id ? storedChatMessages.find((message) => message.id === id) : null;
   if (stored) {
@@ -4828,6 +5052,32 @@ function updateMessage(node, content, options = {}) {
     persistChatHistory();
   }
   elements.messages.scrollTop = elements.messages.scrollHeight;
+}
+
+function setMessageNodeContent(node, content, status = undefined) {
+  const text = String(content || "");
+  if (!node.classList.contains("task")) {
+    node.textContent = text;
+    return;
+  }
+  const [heading = "Task execution", ...lines] = text.split("\n");
+  const summary = document.createElement("summary");
+  const state = document.createElement("span");
+  state.className = "task-run-state";
+  const currentStatus = String(status || node.dataset.status || "in_progress");
+  state.textContent = ["in_progress", "running"].includes(currentStatus)
+    ? "Running"
+    : taskStatusLabel(currentStatus);
+  const title = document.createElement("span");
+  title.className = "task-run-title";
+  title.textContent = heading;
+  summary.append(state, title);
+  const body = document.createElement("pre");
+  body.className = "task-run-body";
+  body.textContent = lines.join("\n");
+  node.replaceChildren(summary, body);
+  if (status !== undefined) node.dataset.status = String(status || "");
+  node.open = ["in_progress", "running"].includes(currentStatus);
 }
 
 function setBusy(busy, text = "Ready") {

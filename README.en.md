@@ -30,6 +30,7 @@ or message channels.
 - Bounded structured tool trajectories: preserves tool outcomes and failure reasons for later turns and cross-provider continuation.
 - Structured agent responses: Chrome AI uses Prompt API `responseConstraint`, Ollama uses a JSON Schema in `format`, OpenAI-compatible endpoints use `response_format`, Copilot uses the compatible JSON Tool protocol, and Codex uses native function calling.
 - Unified Agent Runtime: every Provider, Side Panel conversation, Channel, and Schedule shares the same Turn, Item, Tool, Plan, approval, stop, and context-compaction lifecycle.
+- Ephemeral task stack: `task_push` runs a child task with an independent model context; children may push deeper tasks and return JSON Schema-validated structured results.
 - Controlled self-management patches can add tools, skills, and schedules or switch the active Provider to an existing Provider ID. They cannot read or modify Provider credentials.
 
 ## Agent Architecture
@@ -39,6 +40,20 @@ WebClaw maintains one outer Agent Runtime. A request is represented as a `Turn`;
 Model-specific behavior is isolated in Provider Adapters. An adapter owns authentication, message and media encoding, endpoints, stream parsing, context capabilities, and conversion of native function calling or JSON Tool transport into the same assistant/tool-call response. Switching Providers therefore does not switch the Agent workflow. Codex currently uses native function calling; Providers without a usable native Tool response use the adapter-level JSON transport fallback.
 
 For substantial work, the model can call `update_plan` to publish and update a plan. When a conversation exceeds the active adapter's context budget, the runtime compacts older history while retaining recent messages, goals, constraints, verified Tool results, relevant errors, and unfinished work. The resulting summary is WebClaw-generated execution state, not a user instruction.
+
+### Ephemeral task stack
+
+`task_push` places a separable unit of work on a one-time task stack. Each child has an independent model context and receives only its explicit `instruction`, structured `context`, working directory, and `outputSchema`; the parent waits synchronously for the structured result. A child may call `task_push` again. The defaults allow four levels and sixteen tasks per root run. Settings can raise those values and set a whole-tree model-step budget; zero means unlimited. `task_stack` reports the active frames and budget.
+
+Tasks are never added to Tool configuration and do not become Workflows. Their full execution context is removed from the active stack after completion or failure; the parent receives a standard result envelope whose `output` is locally validated against the JSON Schema. Active snapshots and recent status, count, budget, and error summaries stay in the current Chrome profile for interruption diagnostics without duplicating final answers. WebClaw does not automatically replay uncertain external operations after a service-worker interruption.
+
+The current `outputSchema` supports a controlled JSON Schema subset: `type`, `properties`, `required`, `additionalProperties`, `items`, `enum`, `const`, string/array length limits, and numeric bounds. It rejects `$ref`, `$defs`, `oneOf`, `anyOf`, `allOf`, and recursive schemas.
+
+```json
+{"tool":{"name":"task_push","args":{"title":"Verify sources","instruction":"Check the candidate sources and return the reliable ones.","context":{"sources":["https://example.com"]},"outputSchema":{"type":"object","properties":{"reliable":{"type":"array","items":{"type":"string"}},"summary":{"type":"string"}},"required":["reliable","summary"],"additionalProperties":false},"maxSteps":6}}}
+```
+
+A Workflow remains a persistent reusable custom Tool, while a Task is an ephemeral execution instance. Tasks may call Workflows, and Workflows may use `task_push` for runtime decomposition.
 
 ## Repository Guide
 

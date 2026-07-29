@@ -2,6 +2,15 @@
 
 All notable changes to WebClaw will be documented in this file.
 
+## 0.5.2
+
+- Show live hierarchical Task execution progress in the conversation, including model steps, active Tools, structured-output correction, and failures; completed runs collapse automatically.
+- Add a provider-independent ephemeral task stack with `task_push` and
+  `task_stack`, nested child-agent contexts, bounded depth and task counts,
+  structured JSON Schema results, and local output validation.
+- Persist active task-stack snapshots and retain only bounded run summaries
+  after task completion or interruption.
+
 ## 0.5.1
 
 - Add an OpenCode Zen Provider with official model discovery and per-model

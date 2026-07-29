@@ -32,6 +32,17 @@ import {
   normalizeAgentPlan,
   planHistoryCompaction
 } from "./agent-runtime.js";
+import {
+  completeRootTask,
+  completeTask,
+  createTaskRun,
+  failTask,
+  normalizeTaskSpec,
+  pushTask,
+  recordTaskModelStep,
+  taskStackSnapshot,
+  validateTaskOutput
+} from "./task-stack.js";
 import { DISTRIBUTION_OAUTH_CLIENT_IDS } from "./oauth-clients.js";
 
 const PRODUCT_DISCLOSURE_VERSION = 1;
@@ -116,6 +127,9 @@ const DEFAULT_SETTINGS = {
     }
   ],
   maxSteps: 8,
+  taskMaxDepth: 4,
+  taskMaxTasks: 16,
+  taskMaxModelSteps: 0,
   temperature: 0.2,
   allowUnsafePageJs: false,
   disclosures: {
@@ -216,6 +230,35 @@ const BUILTIN_TOOLS = [
         }
       }
     }
+  },
+  {
+    name: "task_push",
+    description: "Create and synchronously execute an ephemeral child task with an independent model context. The child may push deeper tasks. Define its result contract with outputSchema; the task is removed from the active stack after returning.",
+    example: {
+      tool: {
+        name: "task_push",
+        args: {
+          title: "Verify sources",
+          instruction: "Check the supplied sources and report which are reliable.",
+          context: { sources: ["https://example.com"] },
+          outputSchema: {
+            type: "object",
+            properties: {
+              reliable: { type: "array", items: { type: "string" } },
+              summary: { type: "string" }
+            },
+            required: ["reliable", "summary"],
+            additionalProperties: false
+          },
+          maxSteps: 6
+        }
+      }
+    }
+  },
+  {
+    name: "task_stack",
+    description: "Inspect the current ephemeral task stack, active task frames, and remaining run budget.",
+    example: { tool: { name: "task_stack", args: {} } }
   },
   {
     name: "fs_shell",
@@ -356,6 +399,7 @@ const BUILTIN_TOOL_REQUIRED_ARGS = Object.freeze({
   qiyewechat_notification: ["content"],
   chrome_api: ["operation"],
   update_plan: ["plan"],
+  task_push: ["instruction"],
   fs_shell: ["command"],
   fs_read: ["path"],
   fs_write: ["path", "content"],
@@ -449,6 +493,8 @@ const MAX_CHANNEL_AUTH_ROUTES = 20;
 const MAX_OPERATION_APPROVAL_GRANTS = 200;
 const MAX_STORED_CHAT_MESSAGES = 200;
 const MAX_STORED_SESSIONS = 80;
+const TASK_RUNS_KEY = "webclawTaskRuns";
+const MAX_RECENT_TASK_RUNS = 20;
 
 let wechatBridgeSocket = null;
 let wechatBridgeStatus = {
@@ -480,6 +526,11 @@ let channelAuthorizationRouteWriteQueue = Promise.resolve();
 let operationApprovalGrantWriteQueue = Promise.resolve();
 let backgroundAgentEventWriteQueue = Promise.resolve();
 let wechatAgentBusy = false;
+const activeTaskRuns = new Map();
+let taskRunWriteQueue = Promise.resolve();
+const taskRuntimeReady = markStoredTaskRunsInterrupted().catch((error) => {
+  console.warn("WebClaw task runtime recovery failed", error);
+});
 
 const TOOL_TRAJECTORY_PREFIX = "WEBCLAW_TOOL_TRAJECTORY ";
 const MAX_TOOL_TRAJECTORY_STEPS = 8;
@@ -494,9 +545,9 @@ const WORKSPACE_BOOTSTRAP_LEGACY_TEMPLATES = {
   "MEMORY.md": `# Long-Term Memory\n\nStore concise, durable facts, decisions, preferences, constraints, and open loops here. Remove stale information rather than letting this file become a raw transcript.`
 };
 const WORKSPACE_BOOTSTRAP_TEMPLATES = {
-  "AGENTS.md": `# WebClaw Workspace\n\n## Operating model\nWebClaw is a browser AI agent. It works through enabled Tools, Skills, Channels, Schedules, the local knowledge base, and the virtual filesystem (VFS). Core system policy and tool permissions always take precedence over workspace instructions.\n\n## Workflow\n1. Understand the current user goal and inspect the relevant page or VFS file before acting.\n2. Prefer existing Tools and Skills. Use a Skill for reusable guidance; use a Tool for deterministic actions.\n3. For questions about imported material, use knowledge_search then knowledge_read. Cite the returned VFS path and do not claim support from a source you did not retrieve.\n4. Verify tool results. Never claim a browser action, message delivery, file change, or network request succeeded without a confirming result.\n5. Keep the active session coherent across side panel and connected channels. Use prior successful tool trajectories as verified examples, especially after switching providers.\n\n## Workspace discipline\n- Read a file before changing it. Use fs_edit or expectedVersion for existing files.\n- Put durable facts, decisions, constraints, and open loops in MEMORY.md. Put dated working notes in memory/YYYY-MM-DD.md.\n- Put source files in /workspace/knowledge and index text material with knowledge_ingest. The index is local metadata and chunks; the original source remains in VFS.\n- Put reusable website or task instructions in Skills; put stable page parsing logic in VFS JavaScript only when normal Tools are insufficient.\n- Never store passwords, OAuth tokens, cookies, API keys, private message contents, or other secrets in workspace memory.`,
+  "AGENTS.md": `# WebClaw Workspace\n\n## Operating model\nWebClaw is a browser AI agent. It works through enabled Tools, Skills, Channels, Schedules, the local knowledge base, the ephemeral task stack, and the virtual filesystem (VFS). Core system policy and tool permissions always take precedence over workspace instructions.\n\n## Workflow\n1. Understand the current user goal and inspect the relevant page or VFS file before acting.\n2. Prefer existing Tools and Skills. Use a Skill for reusable guidance; use a Tool for deterministic actions.\n3. Use task_push only for a genuinely separable subtask. Pass minimal structured context and a precise outputSchema, then wait for its verified result.\n4. For questions about imported material, use knowledge_search then knowledge_read. Cite the returned VFS path and do not claim support from a source you did not retrieve.\n5. Verify tool results. Never claim a browser action, message delivery, file change, or network request succeeded without a confirming result.\n6. Keep the active session coherent across side panel and connected channels. Use prior successful tool trajectories as verified examples, especially after switching providers.\n\n## Workspace discipline\n- Read a file before changing it. Use fs_edit or expectedVersion for existing files.\n- Put durable facts, decisions, constraints, and open loops in MEMORY.md. Put dated working notes in memory/YYYY-MM-DD.md.\n- Put source files in /workspace/knowledge and index text material with knowledge_ingest. The index is local metadata and chunks; the original source remains in VFS.\n- Put reusable website or task instructions in Skills; put stable page parsing logic in VFS JavaScript only when normal Tools are insufficient.\n- Never store passwords, OAuth tokens, cookies, API keys, private message contents, or other secrets in workspace memory.`,
   "SOUL.md": `# Soul\n\nWebClaw is calm, practical, precise, and honest about uncertainty. It acts only when an action clearly follows from the user request and reports outcomes grounded in tool results.\n\nUse the user's language when practical. Prefer concise answers with concrete next steps. Avoid inventing page state, external facts, completed actions, or capabilities. When an action is risky, irreversible, public, or sends a message, verify the target and content first.\n\nLearn from successful work without blindly repeating it: reuse verified tool argument patterns, and use errors to correct the next call.`,
-  "TOOLS.md": `# Tool Notes\n\n## Browser\nUse get_page_context before unfamiliar page interaction. Prefer click/type_text/navigate over run_js. Use run_js only for logic normal Tools cannot express; it can execute inline code or a VFS .js file in the active page. Ad-hoc run_js calls require approval every time. An exact scheduled run_js operation can reuse a saved approval only while its Schedule, target URL, execution world, and code remain unchanged.\n\n## VFS and knowledge\n/workspace is durable agent context. /workspace/knowledge holds source files, while the local knowledge index stores only chunks and metadata. Use knowledge_ingest for text sources, knowledge_search for retrieval, and knowledge_read for additional context. /inbox stores channel media, /skills stores reusable scripts or references, and /exports stores output. fs_delete and rm move items to /.trash; restore or permanently purge them deliberately.\n\n## Network and messaging\nUse search_web for current facts, get_weather for weather, and background http_request for cross-origin requests. qiyewechat_notification uses the webhook configured on that Tool. Connected Channels receive and reply through the active chat session.\n\n## Configuration\nTools, Skills, Schedules, Providers, and Channels are configuration-managed. Self-management and Schedules are optional advanced features. Inspect configuration first, propose a validated patch, then apply it. Do not invent direct chrome.storage writes.\n\n## Recovery\nFor TOOL_RESULT ok:false, read the error and supplied valid example, then correct arguments or choose another approach. Never repeat an invalid call unchanged.`,
+  "TOOLS.md": `# Tool Notes\n\n## Browser\nUse get_page_context before unfamiliar page interaction. Prefer click/type_text/navigate over run_js. Use run_js only for logic normal Tools cannot express; it can execute inline code or a VFS .js file in the active page. Ad-hoc run_js calls require approval every time. An exact scheduled run_js operation can reuse a saved approval only while its Schedule, target URL, execution world, and code remain unchanged.\n\n## Tasks\nUse task_push for a separable child task that benefits from an independent model context. Provide complete instruction, minimal JSON context, a precise outputSchema, and a reasonable maxSteps value. The parent waits for the validated output. Use task_stack to inspect active frames and budget. Tasks are ephemeral and do not replace reusable Workflow Tools.\n\n## VFS and knowledge\n/workspace is durable agent context. /workspace/knowledge holds source files, while the local knowledge index stores only chunks and metadata. Use knowledge_ingest for text sources, knowledge_search for retrieval, and knowledge_read for additional context. /inbox stores channel media, /skills stores reusable scripts or references, and /exports stores output. fs_delete and rm move items to /.trash; restore or permanently purge them deliberately.\n\n## Network and messaging\nUse search_web for current facts, get_weather for weather, and background http_request for cross-origin requests. qiyewechat_notification uses the webhook configured on that Tool. Connected Channels receive and reply through the active chat session.\n\n## Configuration\nTools, Skills, Schedules, Providers, and Channels are configuration-managed. Self-management and Schedules are optional advanced features. Inspect configuration first, propose a validated patch, then apply it. Do not invent direct chrome.storage writes.\n\n## Recovery\nFor TOOL_RESULT ok:false, read the error and supplied valid example, then correct arguments or choose another approach. Never repeat an invalid call unchanged.`,
   "IDENTITY.md": `# Identity\n\nName: WebClaw\nRole: A Chrome extension AI agent with browser tools, connected chat channels, model providers, schedules, and a virtual filesystem.\n\nWebClaw operates within Chrome extension permissions and configured services. VFS scripts and Skills can extend reusable workflows, but they cannot grant permissions that the extension does not have.`,
   "USER.md": `# User Preferences\n\nRecord only durable preferences that the user explicitly states or repeatedly demonstrates. Examples: preferred language, preferred output format, notification conventions, recurring project context, and risk tolerance.\n\nDo not infer sensitive personal data. Do not store credentials, access tokens, cookies, private media, or temporary one-off requests.`,
   "MEMORY.md": `# Long-Term Memory\n\n## What belongs here\n- Stable user preferences and working conventions\n- Confirmed project facts, decisions, constraints, and unresolved tasks\n- Reusable provider, channel, or workflow conventions that remain valid\n\n## What does not belong here\n- Raw chat transcripts, large page captures, tool dumps, secrets, tokens, cookies, passwords, or transient details\n\nKeep entries short, dated when useful, and remove stale information. Use daily files under memory/ for temporary execution notes before promoting durable facts here.`
@@ -509,12 +560,13 @@ const REPLACEABLE_DEFAULT_KNOWLEDGE_MANUAL_HASHES = new Set([
   "_uz_Iq1FohnshxEdLilZgnoten2czL774_1hvjyROwA",
   "_f_DN4KMvIA-xb3uo8pnR4fx0dMcfxi8Rytloa9QS6A",
   "iSxV-2LRGJl8d20Z4vUVo9xyaGthO6Aov-L2uSsIXjo",
-  "qxBFf1iNGSrbPVRGoSSOQUH8Mu9b6rgnrTBznpwsH1s"
+  "qxBFf1iNGSrbPVRGoSSOQUH8Mu9b6rgnrTBznpwsH1s",
+  "qmON25C52Otm3zxd8xOE_dlGJ9DX-j61ECdtgLwChHA"
 ]);
-const DEFAULT_KNOWLEDGE_MANUAL = `<!-- webclaw-default-manual: 0.5.0-r1 -->
+const DEFAULT_KNOWLEDGE_MANUAL = `<!-- webclaw-default-manual: 0.5.2-r1 -->
 # WebClaw Operation Manual
 
-Built-in operating reference for WebClaw 0.5.0. The file is stored in VFS and indexed into the local knowledge base. WebClaw upgrades an unchanged historical default copy, but preserves a copy that the user has edited.
+Built-in operating reference for WebClaw 0.5.2. The file is stored in VFS and indexed into the local knowledge base. WebClaw upgrades an unchanged historical default copy, but preserves a copy that the user has edited.
 
 ## 1. What WebClaw is
 WebClaw is a Chrome extension AI agent. It can converse in the side panel and through connected WeChat or Telegram channels, use configured model providers, operate the active browser tab, use a browser-backed virtual filesystem (VFS), run schedules, and retain durable workspace context.
@@ -554,6 +606,22 @@ WebClaw supports local Ollama, OpenAI-compatible endpoints, OpenCode Zen, Codex/
 - Image and file support depends on the active Provider and model. Preserve original Channel attachment data in VFS and send it only when the Provider request format supports it.
 - Use a capable online model for exploration and planning, then a local model for follow-up execution with the same session history.
 - Thinking mode is provider-specific. It may improve planning but costs more latency and tokens.
+
+## 3.1 Ephemeral task stack
+Use task_push when a genuinely separable part of a large request benefits from an independent model context. A Task is an execution instance, not a Tool definition and not a persistent Workflow.
+
+- Pass a complete instruction, minimal JSON context, a JSON Schema outputSchema, optional outputInstructions, maxSteps, and an optional allowedTools subset.
+- The parent waits synchronously. The child receives its own messages and may call task_push again until the stack depth or task-count budget is reached.
+- Settings controls maximum depth, Tasks per run, and the whole-tree model-step budget. A model-step budget of 0 is unlimited.
+- The active Provider is inherited. allowedTools can only reduce the enabled Tool set and cannot expand permissions.
+- The child result is locally validated even when the Provider supports native structured output. Validation errors are returned to the child for correction.
+- outputSchema supports type, properties, required, additionalProperties, items, enum, const, string/array length limits, and numeric bounds. Do not use references, combinators, or recursive Schemas.
+- The parent receives a result envelope with ok, taskId, status, output, artifacts, errors, and usage. Read output according to the requested Schema.
+- task_stack reports active frames and budget. Completed child contexts are removed from the active stack.
+- Workflow Tools remain persistent reusable procedures. Tasks may call Workflows, and Workflows may push ephemeral Tasks.
+
+Example:
+{"tool":{"name":"task_push","args":{"title":"Verify sources","instruction":"Check the supplied sources and return reliable entries.","context":{"sources":["https://example.com"]},"outputSchema":{"type":"object","properties":{"reliable":{"type":"array","items":{"type":"string"}},"summary":{"type":"string"}},"required":["reliable","summary"],"additionalProperties":false},"maxSteps":6}}}
 
 ## 4. Browser operations
 Use normal browser tools before run_js. Ad-hoc run_js calls require approval every time. An exact scheduled operation may reuse a saved approval until its Schedule, target URL, execution world, or code changes.
@@ -694,6 +762,7 @@ If an operation lacks a website or Provider origin permission, explain why it is
 - Work with a webpage: get_page_context -> click/type_text/navigate -> re-check context -> report confirmed result.
 - Build a local report: fs_write under /workspace -> fs_read to verify -> optionally export to /exports.
 - Answer from documents: knowledge_search -> knowledge_read -> answer with source path.
+- Delegate a separable subtask: task_push with minimal context and outputSchema -> read validated output -> continue the parent task.
 - Reuse a workflow: write a Skill with clear steps; create a VFS JavaScript helper only if the repeated DOM logic is stable.
 - Continue after provider switch: read current session and workspace context, reuse successful trajectory argument shapes, and validate live page state before changing it.
 - Change the active Provider safely: list_webclaw_config -> choose an existing redacted Provider ID -> propose set_active_provider -> inspect preview -> apply -> use the new Provider on the next run.
@@ -722,6 +791,7 @@ function buildAgentSystemPrompt(settings) {
     hasTool("translate_page") ? "When the user asks to translate the current page, call translate_page directly without calling get_page_context first." : "",
     hasTool("get_page_context") ? "Use get_page_context before interacting with an unfamiliar page for non-translation tasks." : "",
     hasTool("run_js") ? "Prefer selectors and normal tools for page operations. Use run_js only when normal tools are insufficient. run_js accepts exactly one of inline code or vfsPath for a virtual .js file." : "",
+    hasTool("task_push") ? "For a genuinely separable part of a large task, task_push creates an ephemeral child task with an independent context. Pass only the needed context and a precise outputSchema, wait for its structured result, and keep simple sequential work in the current task. A child task may use task_push again within the task-stack budget." : "",
     hasTool("fs_shell") ? "The current virtual filesystem working directory is provided in the system context; fs_shell resolves relative paths from it. When the user asks to change directories, call fs_shell with command `cd <path>` and wait for its result; do not merely claim that the directory changed. Use an explicit cwd only when intentionally operating elsewhere." : "",
     hasTool("propose_webclaw_config_patch")
       ? "You can improve WebClaw by first calling list_webclaw_config, then propose_webclaw_config_patch, then apply_webclaw_config_patch after the proposal is validated. Use set_active_provider with an existing providerId to change the default Provider; never attempt to read or write Provider credentials. Never invent raw chrome.storage writes. Prefer a skill for reusable knowledge, a tool for executable capability, and a schedule for recurring work."
@@ -748,8 +818,14 @@ ${skillNotes ? `\nSkills:\n${skillNotes}` : ""}
 ${customNotes ? `\nCustom tools:\n${customNotes}` : ""}`;
 }
 
-function buildTextToolProtocolPrompt(settings) {
+function buildTextToolProtocolPrompt(settings, outputSchema = null) {
   const examples = enabledTools(settings).map((tool) => JSON.stringify(toolExample(tool))).join("\n");
+  const finalExample = outputSchema
+    ? `{"type":"final","final":${JSON.stringify(exampleValueFromSchema(outputSchema))}}`
+    : `{"type":"final","final":"answer for the user"}`;
+  const outputContract = outputSchema
+    ? `\nThe final field must be JSON matching this schema:\n${JSON.stringify(outputSchema)}\n`
+    : "";
   return `WEBCLAW_TOOL_TRANSPORT
 This provider does not expose a usable native function-calling response to WebClaw. Encode exactly one response as one JSON object with no prose.
 
@@ -762,23 +838,24 @@ Available Tool examples:
 ${examples}
 
 When the task is complete, encode the final answer as:
-{"type":"final","final":"answer for the user"}
+${finalExample}
+${outputContract}
 
 Do not emit a Tool call and a final answer in the same response. This is a transport format, not an instruction to discuss JSON with the user.`;
 }
 
-function structuredResponseFormat(settings) {
+function structuredResponseFormat(settings, outputSchema = null) {
   return {
     type: "json_schema",
     json_schema: {
       name: "webclaw_agent_response",
       strict: false,
-      schema: structuredAgentResponseForPrompt(settings)
+      schema: structuredAgentResponseForPrompt(settings, outputSchema)
     }
   };
 }
 
-function structuredAgentResponseForPrompt(settings) {
+function structuredAgentResponseForPrompt(settings, outputSchema = null) {
   const toolNames = enabledTools(settings).map((tool) => tool.name);
   const toolNameSchema = toolNames.length > 0
     ? { type: "string", enum: toolNames }
@@ -802,9 +879,7 @@ function structuredAgentResponseForPrompt(settings) {
         required: ["name", "args"],
         additionalProperties: false
       },
-      final: {
-        type: "string"
-      }
+      final: outputSchema ? structuredClone(outputSchema) : { type: "string" }
     },
     required: ["type"],
     additionalProperties: false
@@ -856,6 +931,35 @@ function nativeToolInputSchema(tool) {
       additionalProperties: false
     };
   }
+  if (tool.name === "task_push") {
+    return {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Short child-task title." },
+        instruction: { type: "string", description: "Complete instruction for the independent child task." },
+        context: {
+          type: "object",
+          description: "Only the structured parent context needed by the child.",
+          additionalProperties: true
+        },
+        outputSchema: {
+          type: "object",
+          description: "JSON Schema for the child task output object.",
+          additionalProperties: true
+        },
+        outputInstructions: { type: "string", description: "Semantic requirements not expressible in JSON Schema." },
+        maxSteps: { type: "integer", minimum: 1 },
+        allowedTools: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional subset of the parent's enabled tools."
+        },
+        workingDirectory: { type: "string" }
+      },
+      required: ["instruction"],
+      additionalProperties: false
+    };
+  }
   return inferToolInputSchema(
     toolExample(tool)?.tool?.args || {},
     BUILTIN_TOOL_REQUIRED_ARGS[tool.name] || []
@@ -880,11 +984,19 @@ function exampleValueFromSchema(schema) {
   if (schema?.type === "number" || schema?.type === "integer") return 0;
   if (schema?.type === "boolean") return true;
   if (schema?.type === "array") return [];
-  if (schema?.type === "object") return {};
+  if (schema?.type === "object") {
+    const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+    return Object.fromEntries(
+      Object.entries(schema.properties || {})
+        .filter(([name]) => required.has(name))
+        .map(([name, property]) => [name, exampleValueFromSchema(property)])
+    );
+  }
   return "";
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
+  await markStoredTaskRunsInterrupted();
   const settings = await ensureSettings();
   await initializeWorkspaceDefaults();
   syncWechatBridge(settings);
@@ -896,6 +1008,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 });
 
 chrome.runtime.onStartup.addListener(async () => {
+  await markStoredTaskRunsInterrupted();
   const settings = await ensureSettings();
   await initializeWorkspaceDefaults();
   syncWechatBridge(settings);
@@ -1264,6 +1377,9 @@ function normalizeSettings(raw) {
     activeProviderId,
     providers: normalizedProviders,
     maxSteps: positiveInteger(migrated.maxSteps, DEFAULT_SETTINGS.maxSteps),
+    taskMaxDepth: positiveInteger(migrated.taskMaxDepth, DEFAULT_SETTINGS.taskMaxDepth),
+    taskMaxTasks: positiveInteger(migrated.taskMaxTasks, DEFAULT_SETTINGS.taskMaxTasks),
+    taskMaxModelSteps: nonNegativeInteger(migrated.taskMaxModelSteps, DEFAULT_SETTINGS.taskMaxModelSteps),
     temperature: clampNumber(migrated.temperature, 0, 2, DEFAULT_SETTINGS.temperature),
     allowUnsafePageJs: Boolean(migrated.allowUnsafePageJs),
     disclosures: normalizeDisclosures(migrated.disclosures),
@@ -3222,33 +3338,171 @@ function positiveInteger(value, fallback) {
   return Math.max(1, Math.floor(number));
 }
 
+function nonNegativeInteger(value, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(0, Math.floor(number));
+}
+
+function rootTaskTitle(messages) {
+  const lastUserMessage = [...(Array.isArray(messages) ? messages : [])]
+    .reverse()
+    .find((message) => message?.role === "user");
+  return truncateText(String(lastUserMessage?.content || "Agent turn").replace(/\s+/g, " ").trim(), 160);
+}
+
+function parseTaskOutput(response) {
+  const candidate = response?.value !== undefined ? response.value : response?.text;
+  if (typeof candidate !== "string") return candidate;
+  const text = stripMarkdownFence(candidate.trim());
+  try {
+    return JSON.parse(text);
+  } catch {
+    return candidate;
+  }
+}
+
+function taskRunSummary(run, status = run?.status || "completed", error = null) {
+  return {
+    id: String(run?.id || ""),
+    sessionId: String(run?.sessionId || ""),
+    providerId: String(run?.providerId || ""),
+    status: String(status || "completed"),
+    completedTaskCount: Number(run?.completedTaskCount || 0),
+    budget: run?.budget ? { ...run.budget } : null,
+    error: error ? truncateText(normalizeError(error), 1000) : "",
+    createdAt: Number(run?.createdAt || Date.now()),
+    completedAt: Date.now()
+  };
+}
+
+function persistTaskRuns(completedRun = null) {
+  taskRunWriteQueue = taskRunWriteQueue
+    .catch(() => {})
+    .then(async () => {
+      const stored = await getExtensionStorage(TASK_RUNS_KEY);
+      const existing = stored[TASK_RUNS_KEY] && typeof stored[TASK_RUNS_KEY] === "object"
+        ? stored[TASK_RUNS_KEY]
+        : {};
+      const recent = Array.isArray(existing.recent) ? existing.recent : [];
+      if (completedRun?.id) {
+        recent.push(completedRun);
+      }
+      await setExtensionStorage({
+        [TASK_RUNS_KEY]: {
+          active: [...activeTaskRuns.values()].map(taskStackSnapshot),
+          recent: recent.slice(-MAX_RECENT_TASK_RUNS),
+          updatedAt: Date.now()
+        }
+      });
+    })
+    .catch((error) => {
+      console.warn("WebClaw task-stack snapshot save failed", error);
+    });
+  return taskRunWriteQueue;
+}
+
+async function markStoredTaskRunsInterrupted() {
+  const stored = await getExtensionStorage(TASK_RUNS_KEY);
+  const state = stored[TASK_RUNS_KEY] && typeof stored[TASK_RUNS_KEY] === "object"
+    ? stored[TASK_RUNS_KEY]
+    : {};
+  const active = Array.isArray(state.active) ? state.active : [];
+  if (!active.length) return;
+  const recent = Array.isArray(state.recent) ? state.recent : [];
+  for (const run of active) {
+    recent.push({
+      id: String(run.id || ""),
+      sessionId: String(run.sessionId || ""),
+      status: "interrupted",
+      completedTaskCount: 0,
+      budget: run.budget || null,
+      error: "Chrome stopped before this task stack completed.",
+      createdAt: Number(run.createdAt || Date.now()),
+      completedAt: Date.now()
+    });
+  }
+  await setExtensionStorage({
+    [TASK_RUNS_KEY]: {
+      active: [],
+      recent: recent.slice(-MAX_RECENT_TASK_RUNS),
+      updatedAt: Date.now()
+    }
+  });
+}
+
 async function runAgent(uiMessages, options = {}) {
+  await taskRuntimeReady;
   const settings = options.settingsOverride ? normalizeSettings(options.settingsOverride) : await ensureSettings();
   let workingDirectory = normalizeWorkingDirectory(options.workingDirectory || "/workspace");
   const turnId = String(options.turnId || createAgentId("turn"));
   const turnStartedAt = Date.now();
   const steps = [];
   let contextCompaction = null;
+  const ownsTaskRun = !options.taskRun;
+  const taskRun = options.taskRun || createTaskRun({
+    sessionId: options.sessionId,
+    providerId: settings.activeProviderId,
+    title: rootTaskTitle(uiMessages),
+    maxSteps: settings.maxSteps,
+    workingDirectory,
+    maxDepth: settings.taskMaxDepth,
+    maxTasks: settings.taskMaxTasks,
+    maxModelSteps: settings.taskMaxModelSteps
+  });
+  const taskFrameId = String(options.taskFrameId || taskRun.rootTaskId);
+  options = {
+    ...options,
+    taskRun,
+    taskFrameId
+  };
+  if (ownsTaskRun) {
+    activeTaskRuns.set(taskRun.id, taskRun);
+    await persistTaskRuns();
+  }
   emitAgentEvent(options, "turn_started", {
     turnId,
-    startedAt: turnStartedAt
+    startedAt: turnStartedAt,
+    taskRunId: taskRun.id,
+    taskId: taskFrameId
+  });
+  const startedTask = taskRun.tasks[taskFrameId];
+  emitAgentEvent(options, "task_started", {
+    turnId,
+    taskRunId: taskRun.id,
+    taskId: taskFrameId,
+    parentTaskId: startedTask?.parentId || "",
+    depth: Number(startedTask?.depth || 0),
+    title: startedTask?.title || "Agent turn",
+    step: Number(startedTask?.step || 0),
+    maxSteps: Number(startedTask?.maxSteps || settings.maxSteps || 8)
   });
 
-  const finish = (final) => {
+  const finish = async (final, metadata = {}) => {
     const completedAt = Date.now();
     emitAgentEvent(options, "turn_completed", {
       turnId,
       status: "completed",
       completedAt,
-      durationMs: completedAt - turnStartedAt
+      durationMs: completedAt - turnStartedAt,
+      taskRunId: taskRun.id,
+      taskId: taskFrameId
     });
+    if (ownsTaskRun) {
+      completeRootTask(taskRun, "completed");
+      activeTaskRuns.delete(taskRun.id);
+      await persistTaskRuns(taskRunSummary(taskRun, "completed"));
+    }
     return agentResult(final, steps, {
       turnId,
       status: "completed",
       startedAt: turnStartedAt,
       completedAt,
       contextCompaction,
-      workingDirectory
+      workingDirectory,
+      taskRunId: taskRun.id,
+      taskId: taskFrameId,
+      ...metadata
     });
   };
 
@@ -3273,6 +3527,16 @@ async function runAgent(uiMessages, options = {}) {
 
     for (let step = 0; step < Number(settings.maxSteps || 8); step += 1) {
       throwIfAborted(options.signal);
+      recordTaskModelStep(taskRun, taskFrameId);
+      persistTaskRuns().catch(() => {});
+      emitAgentEvent(options, "task_progress", {
+        turnId,
+        taskRunId: taskRun.id,
+        taskId: taskFrameId,
+        phase: "model",
+        step: Number(taskRun.tasks[taskFrameId]?.step || step + 1),
+        maxSteps: Number(taskRun.tasks[taskFrameId]?.maxSteps || settings.maxSteps || 8)
+      });
       const modelItemId = createAgentId("item");
       emitAgentEvent(options, "item_started", {
         turnId,
@@ -3318,6 +3582,53 @@ async function runAgent(uiMessages, options = {}) {
         return finish(`${response.text}\n\n原始输出：\n\n${truncateText(response.raw, 6000)}`);
       }
       if (response.kind === "assistant") {
+        if (options.outputSchema) {
+          const output = parseTaskOutput(response);
+          const validation = validateTaskOutput(output, options.outputSchema);
+          const outputChars = safeJsonLength(output);
+          if (
+            validation.valid &&
+            Number(options.outputMaxChars || 0) > 0 &&
+            outputChars > Number(options.outputMaxChars)
+          ) {
+            validation.valid = false;
+            validation.errors.push({
+              path: "$",
+              message: `serialized output is ${outputChars} characters; limit is ${Number(options.outputMaxChars)}`
+            });
+          }
+          if (!validation.valid) {
+            const validationResult = {
+              ok: false,
+              errorType: "task_output_validation_error",
+              errors: validation.errors
+            };
+            steps.push({
+              type: "task_output_validation_error",
+              result: validationResult
+            });
+            messages.push({
+              role: "assistant",
+              content: response.text
+            });
+            messages.push({
+              role: "user",
+              content: [
+                "TASK_OUTPUT_VALIDATION_ERROR",
+                JSON.stringify(validationResult),
+                "Return a corrected final JSON value matching the required output schema. Do not claim completion until it validates."
+              ].join("\n")
+            });
+            emitAgentEvent(options, "task_output_invalid", {
+              turnId,
+              taskRunId: taskRun.id,
+              taskId: taskFrameId,
+              errors: validation.errors
+            });
+            continue;
+          }
+          return finish(JSON.stringify(output), { taskOutput: output });
+        }
         return finish(response.text);
       }
       if (response.kind !== "tool_call" || !response.tool?.name) {
@@ -3343,6 +3654,15 @@ async function runAgent(uiMessages, options = {}) {
           callId: toolCallId,
           startedAt: Date.now()
         }
+      });
+      emitAgentEvent(options, "task_progress", {
+        turnId,
+        taskRunId: taskRun.id,
+        taskId: taskFrameId,
+        phase: "tool",
+        tool: toolName,
+        step: Number(taskRun.tasks[taskFrameId]?.step || step + 1),
+        maxSteps: Number(taskRun.tasks[taskFrameId]?.maxSteps || settings.maxSteps || 8)
       });
 
       let toolResult;
@@ -3440,8 +3760,15 @@ async function runAgent(uiMessages, options = {}) {
       status: interrupted ? "interrupted" : "failed",
       error: interrupted ? "Stopped" : normalizeError(error),
       completedAt,
-      durationMs: completedAt - turnStartedAt
+      durationMs: completedAt - turnStartedAt,
+      taskRunId: taskRun.id,
+      taskId: taskFrameId
     });
+    if (ownsTaskRun) {
+      completeRootTask(taskRun, interrupted ? "cancelled" : "failed");
+      activeTaskRuns.delete(taskRun.id);
+      await persistTaskRuns(taskRunSummary(taskRun, interrupted ? "cancelled" : "failed", error));
+    }
     if (interrupted) throw new Error("Stopped");
     throw error;
   }
@@ -3617,7 +3944,7 @@ async function ensureDefaultKnowledgeManual() {
   }
   await knowledgeIngestVfsFile(DEFAULT_KNOWLEDGE_MANUAL_PATH, {
     title: "WebClaw Operation Manual",
-    tags: ["webclaw", "manual", "operations", "0.5.0"]
+    tags: ["webclaw", "manual", "operations", "0.5.2"]
   });
 }
 
@@ -3752,12 +4079,15 @@ async function callAgentModel(settings, messages, options = {}) {
 }
 
 async function callTextProtocolAgent(provider, settings, messages, options = {}) {
-  const transportMessages = appendSystemInstruction(messages, buildTextToolProtocolPrompt(settings));
+  const transportMessages = appendSystemInstruction(
+    messages,
+    buildTextToolProtocolPrompt(settings, options.outputSchema)
+  );
   const responseConstraint = provider.type === "chrome-ai"
-    ? structuredAgentResponseForPrompt(settings)
+    ? structuredAgentResponseForPrompt(settings, options.outputSchema)
     : undefined;
   const responseFormat = ["ollama", "openai-compatible", "opencode"].includes(provider.type)
-    ? structuredResponseFormat(settings)
+    ? structuredResponseFormat(settings, options.outputSchema)
     : undefined;
   let streamedContent = "";
   let streamPlainText = null;
@@ -3879,17 +4209,19 @@ function normalizeTextProviderResponse(content) {
       raw
     };
   }
-  if (parsed?.type === "final" && typeof parsed.final === "string") {
+  if (parsed?.type === "final" && Object.hasOwn(parsed, "final")) {
     return {
       kind: "assistant",
-      text: parsed.final,
+      text: typeof parsed.final === "string" ? parsed.final : JSON.stringify(parsed.final),
+      value: parsed.final,
       raw
     };
   }
-  if (typeof parsed?.final === "string") {
+  if (parsed && Object.hasOwn(parsed, "final")) {
     return {
       kind: "assistant",
-      text: parsed.final,
+      text: typeof parsed.final === "string" ? parsed.final : JSON.stringify(parsed.final),
+      value: parsed.final,
       raw
     };
   }
@@ -4982,6 +5314,10 @@ async function dispatchTool(name, args, settings, options = {}) {
       options.onPlan?.(plan);
       return { ok: true, ...plan };
     }
+    case "task_push":
+      return runTaskPush(args, settings, options);
+    case "task_stack":
+      return taskStackSnapshot(options.taskRun);
     case "fs_shell": {
       const result = await runVirtualFileSystemShell(required(args.command, "command"), {
         cwd: args.cwd || options.workingDirectory || "/workspace"
@@ -5202,6 +5538,201 @@ async function runCustomTool(tool, args, settings, options = {}) {
   };
 }
 
+async function runTaskPush(args, settings, options = {}) {
+  const run = options.taskRun;
+  const parentTaskId = String(options.taskFrameId || "");
+  if (!run || !parentTaskId) {
+    throw new Error("task_push requires an active WebClaw task run.");
+  }
+  const spec = normalizeTaskSpec(args, {
+    maxSteps: settings.maxSteps,
+    workingDirectory: options.workingDirectory || "/workspace"
+  });
+  const enabledToolNames = new Set(enabledTools(settings).map((tool) => tool.name));
+  const unavailableTools = spec.allowedTools.filter((name) => !enabledToolNames.has(name));
+  if (unavailableTools.length > 0) {
+    throw new Error(`task_push allowedTools are disabled or unknown: ${unavailableTools.join(", ")}`);
+  }
+  const task = pushTask(run, parentTaskId, spec);
+  await persistTaskRuns();
+  emitAgentEvent(options, "task_pushed", {
+    taskRunId: run.id,
+    taskId: task.id,
+    parentTaskId,
+    depth: task.depth,
+    title: task.title,
+    maxSteps: task.maxSteps
+  });
+
+  const childSettings = taskSettings(settings, task, run);
+  const taskPrompt = [
+    `Execute ephemeral child task: ${task.title}`,
+    "Instruction:",
+    task.instruction,
+    "Parent context JSON:",
+    JSON.stringify(task.context, null, 2),
+    "Required output JSON Schema:",
+    JSON.stringify(task.outputSchema, null, 2),
+    task.outputInstructions ? `Additional output requirements:\n${task.outputInstructions}` : "",
+    "Work independently from the parent conversation. Use actual Tool results. When complete, return only a final value matching the required output schema."
+  ].filter(Boolean).join("\n\n");
+
+  try {
+    const result = await runAgent(
+      [{ role: "user", content: taskPrompt }],
+      {
+        ...options,
+        settingsOverride: childSettings,
+        taskRun: run,
+        taskFrameId: task.id,
+        workingDirectory: task.workingDirectory,
+        outputSchema: task.outputSchema,
+        outputMaxChars: taskOutputMaxChars(settings),
+        nested: true,
+        disableCompaction: true,
+        onDelta: null,
+        onToolCall: null,
+        onPlan: null,
+        onStatus: null,
+        onWorkingDirectoryChange: (nextPath) => {
+          const activeTask = run.tasks[task.id];
+          if (activeTask) {
+            activeTask.workingDirectory = normalizeWorkingDirectory(nextPath);
+            run.updatedAt = Date.now();
+            persistTaskRuns().catch(() => {});
+          }
+        },
+        onEvent: (event) => {
+          if (!String(event?.type || "").startsWith("task_")) return;
+          options.onEvent?.({
+            ...event,
+            taskRunId: event.taskRunId || run.id,
+            taskId: event.taskId || task.id,
+            parentTaskId: event.parentTaskId || parentTaskId,
+            taskDepth: event.taskDepth ?? task.depth
+          });
+        }
+      }
+    );
+    if (result.taskOutput === undefined) {
+      const failedTask = failTask(run, task.id);
+      await persistTaskRuns();
+      const failure = {
+        ok: false,
+        taskId: task.id,
+        status: "failed",
+        errorType: "task_incomplete",
+        error: result.final || "Child task ended without a valid structured output.",
+        usage: {
+          modelSteps: failedTask.step,
+          toolCalls: countToolSteps(result.steps)
+        }
+      };
+      emitAgentEvent(options, "task_failed", {
+        taskRunId: run.id,
+        taskId: task.id,
+        parentTaskId,
+        depth: task.depth,
+        error: failure.error
+      });
+      return failure;
+    }
+
+    const completedTask = completeTask(run, task.id);
+    await persistTaskRuns();
+    const envelope = {
+      ok: true,
+      taskId: task.id,
+      status: "completed",
+      output: result.taskOutput,
+      artifacts: taskResultArtifacts(result.taskOutput),
+      errors: [],
+      usage: {
+        modelSteps: completedTask.step,
+        toolCalls: countToolSteps(result.steps)
+      }
+    };
+    emitAgentEvent(options, "task_completed", {
+      taskRunId: run.id,
+      taskId: task.id,
+      parentTaskId,
+      depth: task.depth,
+      title: task.title,
+      usage: envelope.usage
+    });
+    return envelope;
+  } catch (error) {
+    if (run.tasks[task.id] && run.stack.at(-1) === task.id) {
+      failTask(run, task.id);
+      await persistTaskRuns();
+    }
+    emitAgentEvent(options, "task_failed", {
+      taskRunId: run.id,
+      taskId: task.id,
+      parentTaskId,
+      depth: task.depth,
+      error: normalizeError(error)
+    });
+    if (options.signal?.aborted || normalizeError(error) === "Stopped") throw new Error("Stopped");
+    return {
+      ok: false,
+      taskId: task.id,
+      status: "failed",
+      errorType: "task_execution_error",
+      error: normalizeError(error),
+      errors: [{ message: normalizeError(error) }]
+    };
+  }
+}
+
+function taskSettings(settings, task, run) {
+  const allowed = new Set(task.allowedTools || []);
+  const restrictTools = allowed.size > 0;
+  return {
+    ...settings,
+    maxSteps: task.maxSteps,
+    tools: normalizeTools(settings.tools).map((tool) => {
+      const taskRuntimeTool = tool.name === "task_push" || tool.name === "task_stack";
+      const depthAllowsPush = tool.name !== "task_push" || task.depth < run.budget.maxDepth;
+      const allowedByTask = !restrictTools || allowed.has(tool.name) || taskRuntimeTool;
+      return {
+        ...tool,
+        enabled: tool.enabled && allowedByTask && depthAllowsPush
+      };
+    })
+  };
+}
+
+function countToolSteps(steps) {
+  return (Array.isArray(steps) ? steps : []).filter((step) => step?.type === "tool").length;
+}
+
+function taskOutputMaxChars(settings) {
+  const resultLimit = providerAdapterFor(getActiveProvider(settings)).capabilities.toolResultChars;
+  return Math.max(1000, Number(resultLimit || 6000) - 1800);
+}
+
+function safeJsonLength(value) {
+  try {
+    return JSON.stringify(value).length;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+function taskResultArtifacts(output) {
+  const artifacts = output && typeof output === "object" && Array.isArray(output.artifacts)
+    ? output.artifacts
+    : [];
+  return artifacts.slice(0, 50).map((artifact) => {
+    if (typeof artifact === "string") return { path: artifact };
+    return {
+      path: String(artifact?.path || ""),
+      mediaType: String(artifact?.mediaType || "")
+    };
+  }).filter((artifact) => artifact.path);
+}
+
 async function runWorkflowTool(tool, args, settings, options = {}) {
   const config = normalizeCustomToolConfig(tool.config || {});
   if (!config.instruction) throw new Error(`Workflow tool ${tool.name} instruction is required.`);
@@ -5231,6 +5762,8 @@ async function runWorkflowTool(tool, args, settings, options = {}) {
       settingsOverride: workflowSettings,
       nested: true,
       disableCompaction: true,
+      outputSchema: null,
+      outputMaxChars: 0,
       onDelta: null,
       onToolCall: null,
       onEvent: null,
@@ -5275,6 +5808,11 @@ function listWebClawConfig(settings) {
   return {
     ok: true,
     activeProviderId: settings.activeProviderId,
+    taskStack: {
+      maxDepth: settings.taskMaxDepth,
+      maxTasks: settings.taskMaxTasks,
+      maxModelSteps: settings.taskMaxModelSteps
+    },
     providers,
     channels,
     tools: normalizeTools(settings.tools).map((tool) => ({

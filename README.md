@@ -23,6 +23,7 @@ WebClaw 目前是实验性的浏览器原生 Agent 框架，适合本地开发�
 - 工作区记忆：自动初始化 `AGENTS.md`、`SOUL.md`、`TOOLS.md`、`IDENTITY.md`、`USER.md`、`MEMORY.md` 及每日记忆文件，并在每次 Agent 运行前按上下文预算注入。
 - 受控 Tool 轨迹：保留受限长度的工具结果和失败原因，用于后续会话与 Provider 切换时的自我纠错。
 - 统一 Agent Runtime：所有 Provider、Side Panel、Channel 和 Schedule 共用 Turn、Item、Tool、Plan、审批、停止和上下文压缩机制。
+- 临时任务栈：复杂任务可通过 `task_push` 创建独立上下文的子任务；子任务可以继续压入次级任务，并以 JSON Schema 约束的结构化结果返回父任务。
 - 结构化 Agent 响应：Chrome AI 使用 Prompt API `responseConstraint`，Ollama 使用 `format` JSON Schema，OpenAI-compatible 使用 `response_format`，Copilot 使用兼容的 JSON Tool 协议，Codex 使用原生函数调用。
 - 受限 `fs_shell`：可在该虚拟文件系统中执行 `pwd`、`cd`、`ls`、`stat`、`mkdir`、`touch`、`cat`、`cp`、`mv`、`rm`，`cd` 会更新当前会话的工作目录，不执行真实系统 Shell。
 - 自定义 Tool、Skill，以及可选的高级 Schedule 和自我配置 Tool。
@@ -37,6 +38,20 @@ WebClaw 只维护一套外层 Agent Runtime。它把一次请求表示为 `Turn`
 模型差异限制在 Provider Adapter 内。每种 Provider 只负责认证、消息与媒体编码、请求端点、流解析、上下文能力，以及原生 function calling 或 JSON Tool transport 的转换。适配器最终都返回统一的 assistant 或 tool-call 响应，因此切换 Provider 不会切换 Agent 工作流。Codex 当前使用原生 function calling；未提供可用原生 Tool 响应的 Provider 使用适配器内的 JSON transport fallback。
 
 复杂任务可调用 `update_plan` 发布或更新计划。长会话超过当前模型的适配器预算时，运行时会压缩较早历史，保留近期消息、目标、约束、已验证 Tool 结果、错误和未完成事项。压缩摘要属于 WebClaw 生成的执行状态，不作为用户指令。
+
+### 临时任务栈
+
+`task_push` 用于把可独立完成的工作压入一次性任务栈。每个子任务有独立模型上下文，只接收明确传入的 `instruction`、`context`、工作目录和 `outputSchema`；父任务同步等待结构化结果。子任务可以继续调用 `task_push`，默认最大深度为 4、每个根任务最多创建 16 个 Task。Settings 可调整这两个值和整棵任务树的模型步骤预算，其中步骤预算 `0` 表示不设总上限。`task_stack` 可读取当前栈和预算。
+
+Task 不会写入 Tool 配置，也不会固化成 Workflow。完成或失败后，其完整上下文从活动栈删除；父任务只收到统一结果信封及符合 JSON Schema 的 `output`。活动栈快照和最近运行的状态、计数、预算及错误摘要保存在当前 Chrome 配置文件，用于诊断中断，不重复保存最终回答，也不会自动恢复或重放不确定的外部操作。
+
+当前 `outputSchema` 支持受控 JSON Schema 子集：`type`、`properties`、`required`、`additionalProperties`、`items`、`enum`、`const`、字符串/数组长度和数值上下限；不接受 `$ref`、`$defs`、`oneOf`、`anyOf`、`allOf` 或递归 Schema。
+
+```json
+{"tool":{"name":"task_push","args":{"title":"核对来源","instruction":"检查候选来源并返回可靠项","context":{"sources":["https://example.com"]},"outputSchema":{"type":"object","properties":{"reliable":{"type":"array","items":{"type":"string"}},"summary":{"type":"string"}},"required":["reliable","summary"],"additionalProperties":false},"maxSteps":6}}}
+```
+
+Workflow 仍是持久化、可复用的自定义 Tool；Task 是仅在一次执行中存在的调度实例。Task 可以调用 Workflow，Workflow 也可以使用 `task_push` 动态拆分临时子任务。
 
 ## 仓库文档
 
