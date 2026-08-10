@@ -16,6 +16,10 @@ jobs:
         run: ./scripts/check-syntax.sh
       - name: Test Agent Runtime
         run: node scripts/test-agent-runtime.mjs
+      - name: Test Provider Client Metadata
+        run: node scripts/test-provider-client-metadata.mjs
+      - name: Test OpenAI-compatible Structured Output
+        run: node scripts/test-openai-compatible-structured-output.mjs
       - name: Validate release configuration
         run: node scripts/validate-release.mjs
       - name: Build extension package

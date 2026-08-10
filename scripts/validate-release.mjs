@@ -154,12 +154,15 @@ requireCondition(
   "controlled active Provider switching and rollback are missing"
 );
 requireCondition(
-  source.includes("webclaw-default-manual: 0.5.2-r1") &&
+  source.includes("webclaw-default-manual: 0.5.3-r1") &&
     source.includes("REPLACEABLE_DEFAULT_KNOWLEDGE_MANUAL_HASHES") &&
     source.includes("qxBFf1iNGSrbPVRGoSSOQUH8Mu9b6rgnrTBznpwsH1s") &&
     source.includes("qmON25C52Otm3zxd8xOE_dlGJ9DX-j61ECdtgLwChHA") &&
+    source.includes("kcQOQB5In4knHBpRgUGlvN7AVp-W6I435HqezmffziU") &&
+    source.includes("XAX46BXypQ1LE7DWmgpSqdw78M-Tw_JjPFRkRPSb4yw") &&
+    source.includes("04RN_x4Yj49RriWSQGBAn7Wqh1UaDHM0iq395QmQb30") &&
     source.includes("expectedVersion: existing.entry.version") &&
-    source.includes('"webclaw", "manual", "operations", "0.5.2"'),
+    source.includes('"webclaw", "manual", "operations", "0.5.3"'),
   "versioned default knowledge manual migration is missing"
 );
 const backgroundSource = readText("src/background.js");
@@ -188,6 +191,14 @@ requireCondition(
     backgroundSource.includes('return "google"') &&
     readText("src/sidepanel.html").includes('value="opencode"'),
   "OpenCode Zen Provider routing or configuration UI is incomplete"
+);
+requireCondition(
+  backgroundSource.includes("callOpenAICompatibleResponses") &&
+    backgroundSource.includes('openAICompatibleApiForConfig(config) === "responses"') &&
+    backgroundSource.includes("responseTextFormatForOpenAICompatibleMode") &&
+    readText("src/sidepanel.html").includes('id="openaiApiProtocol"') &&
+    readText("src/sidepanel.js").includes("normalizeOpenAICompatibleApiProtocol"),
+  "OpenAI-compatible Responses API routing or configuration is incomplete"
 );
 requireCondition(
   backgroundSource.includes('name: "update_plan"') &&

@@ -14,7 +14,7 @@ or message channels.
 - Side panel chat UI.
 - Settings and the file manager open in separate extension windows, leaving chat unobstructed.
 - Local Ollama provider through `http://localhost:11434/api/chat`.
-- OpenAI API format compatible provider through `/v1/chat/completions`.
+- OpenAI API format compatible provider through either `/v1/responses` or `/v1/chat/completions`.
 - OpenCode Zen with per-model routing to Responses, Messages, or Chat Completions.
 - Chrome AI provider through Chrome's built-in Prompt API and Gemini Nano.
 - Codex / ChatGPT sign-in provider using a Codex CLI-compatible device OAuth flow.
@@ -28,7 +28,7 @@ or message channels.
 - Local knowledge base: indexes VFS text files in browser-local IndexedDB with `knowledge_ingest`, `knowledge_search`, `knowledge_read`, `knowledge_forget`, and `knowledge_status`; a WebClaw operation manual is created and indexed on first startup.
 - Workspace memory: initializes `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, and daily memory files, then injects bounded workspace context before each agent run.
 - Bounded structured tool trajectories: preserves tool outcomes and failure reasons for later turns and cross-provider continuation.
-- Structured agent responses: Chrome AI uses Prompt API `responseConstraint`, Ollama uses a JSON Schema in `format`, OpenAI-compatible endpoints use `response_format`, Copilot uses the compatible JSON Tool protocol, and Codex uses native function calling.
+- Structured agent responses: Chrome AI uses Prompt API `responseConstraint`, Ollama uses a JSON Schema in `format`, OpenAI-compatible adapters negotiate `json_schema`, `json_object`, or prompt-only constraints, Copilot selects Responses or Chat Completions from discovered model metadata and uses the compatible JSON Tool protocol, and Codex uses native function calling.
 - Unified Agent Runtime: every Provider, Side Panel conversation, Channel, and Schedule shares the same Turn, Item, Tool, Plan, approval, stop, and context-compaction lifecycle.
 - Ephemeral task stack: `task_push` runs a child task with an independent model context; children may push deeper tasks and return JSON Schema-validated structured results.
 - Controlled self-management patches can add tools, skills, and schedules or switch the active Provider to an existing Provider ID. They cannot read or modify Provider credentials.
@@ -104,7 +104,7 @@ Each provider's `Model` field is a typeable dropdown. Click `Refresh` next to th
 
 If model discovery fails because a local server is offline, an API key is missing, or a provider does not expose a model-list endpoint, you can still type the model name manually.
 
-Each provider also has a `Thinking mode` toggle in its model configuration. For Ollama, WebClaw sends Ollama's `think` flag. For Codex and OpenAI-compatible reasoning model names, WebClaw sends a reasoning effort hint (`medium` when enabled, `low` when disabled). Chrome AI and GitHub Copilot keep the setting for consistency but WebClaw does not send undocumented thinking parameters.
+Each provider also has a `Thinking mode` toggle in its model configuration. For Ollama, WebClaw sends Ollama's `think` flag. For Codex, OpenAI-compatible reasoning models, and Copilot Responses models, WebClaw sends a reasoning effort hint (`medium` when enabled, `low` when disabled). Chrome AI and Copilot Chat Completions do not receive undocumented thinking parameters.
 
 For custom OAuth providers that publish standard metadata, set `OAuth issuer URL` and click `Discover metadata`. WebClaw will try:
 
@@ -127,7 +127,12 @@ Set:
 
 - Provider type: `OpenAI-compatible API`
 - Base URL: for OpenAI use `https://api.openai.com/v1`; for compatible services use their `/v1` base URL.
+- API protocol: `Auto`, `Responses API`, or `Chat Completions`.
 - API key and model.
+
+`Auto` uses `supported_endpoints` metadata returned by `/models` when available and otherwise keeps the backward-compatible Chat Completions route. Selecting Responses API explicitly sends `POST /responses` with `instructions + input`, `text.format`, `reasoning.effort`, and semantic Responses SSE events. For DeepSeek `deepseek-v4-flash`, set the Base URL to `https://api.deepseek.com` and select Responses API.
+
+“OpenAI-compatible” does not imply support for every optional OpenAI feature. Both protocols negotiate structured output inside the Provider Adapter: JSON Schema first, then JSON Object after an explicit compatibility error, then prompt-only output with local Schema validation. The successful mode is cached for seven days per protocol, Provider, endpoint, and model.
 
 ### OpenCode Zen
 
@@ -159,7 +164,7 @@ For a request originating from WeChat or Telegram, WebClaw sends a six-digit num
 
 Access and refresh tokens are stored in `chrome.storage.local` and refreshed automatically, so sign-in is normally one-time. Sign-out, revocation, or an unusable refresh token starts authorization again. A new Chrome optional host permission still requires a click in the browser running WebClaw; a Channel reply cannot grant browser-level site access. See [OAuth configuration and release guidance](OAUTH.md).
 
-When refreshing Codex models, WebClaw calls `/models?client_version=0.142.0`; the ChatGPT Codex backend requires a Codex client version on the model-list endpoint. The returned model catalog uses Codex fields such as `slug`, `display_name`, `visibility`, and `supported_in_api`.
+When refreshing Codex models, WebClaw calls `/models?client_version=0.145.0`; the ChatGPT Codex backend requires a Codex client version on the model-list endpoint. WebClaw keeps this compatibility identity aligned with the supported Codex CLI because the service can hide models whose minimum client version is newer than the declared version. The returned catalog is filtered by Codex fields such as `slug`, `display_name`, `visibility`, and `supported_in_api`, without mixing a hard-coded legacy catalog into a successful refresh.
 
 This follows the Codex CLI device-login shape instead of the default local callback server shape. A Chrome extension cannot bind a `127.0.0.1` callback server like a native CLI process, so device auth is the browser-extension friendly path.
 
@@ -181,13 +186,15 @@ The extension ships with GitHub device-flow defaults:
 
 The compatibility Client ID is not a secret, but WebClaw's distributor does not control it and it is not a stable third-party extension contract. It may stop working because of service, risk-control, or distribution-policy changes. Each distributor should register its own GitHub OAuth App or GitHub App, enable Device Flow, and override the default. Never package a Client Secret in the extension.
 
-Click `Sign in with GitHub`. WebClaw requests a GitHub device code, opens `https://github.com/login/device` in a dedicated window, and shows the code in Settings. A background Alarm keeps polling even if Settings is hidden or closed. After GitHub returns an OAuth access token, WebClaw saves it in `chrome.storage.local`, closes the authorization window, restores Settings when possible, and exchanges the GitHub token for a Copilot session token before calling the configured Copilot-compatible `/chat/completions` endpoint.
+Click `Sign in with GitHub`. WebClaw requests a GitHub device code, opens `https://github.com/login/device` in a dedicated window, and shows the code in Settings. A background Alarm keeps polling even if Settings is hidden or closed. After GitHub returns an OAuth access token, WebClaw saves it in `chrome.storage.local`, closes the authorization window, restores Settings when possible, and exchanges the GitHub token for a Copilot session token before calling the endpoint supported by the selected model.
 
 GitHub's OAuth device flow is public and documented. GitHub documents the currently supported Copilot models in the GitHub Copilot AI model reference, but does not document a stable account-level model-list REST endpoint. WebClaw tries the Copilot OpenAI-compatible `GET /models` endpoint after exchanging the GitHub token for a Copilot token; the returned IDs depend on your plan, client surface, and organization or enterprise model policies. The Copilot chat/token endpoint shape is not a stable public REST contract, so WebClaw keeps the Copilot token URL, chat base URL, model, and integration ID configurable.
 
+Model discovery uses the current compatible Copilot CLI identity. Account availability still depends on the plan and policy; see GitHub's [official supported-model list](https://docs.github.com/en/copilot/reference/ai-models/supported-models). WebClaw retains each returned model's `supported_endpoints`: models that support `/responses` use the Responses API, models limited to `/chat/completions` use Chat Completions, and models supporting both prefer Responses. This allows Responses-only GPT-5.3, GPT-5.4 mini, GPT-5.5, and GPT-5.6 models to remain selectable and callable instead of being discarded by a Chat Completions-only filter.
+
 GitHub's native `Auto` model option is a Copilot routing mode, not a single fixed model. GitHub's documentation says auto model selection chooses from supported models based on task complexity, system health, model availability, policies, and subscription type. Paid Copilot plans qualify for a 10% discount on model costs while using auto model selection in supported Copilot surfaces.
 
-When you choose `auto` in WebClaw, WebClaw omits the `model` field from the Copilot `/chat/completions` request body and lets the Copilot service decide whether to apply server-side auto model selection. Concrete model selections are still sent as `model`.
+When you choose `auto` in WebClaw, WebClaw omits the `model` field from the Copilot request body and lets the Copilot service apply server-side auto model selection. Concrete model selections are sent as `model` and routed through their discovered API.
 
 ## Agent protocol
 

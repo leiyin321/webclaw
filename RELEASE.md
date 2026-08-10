@@ -15,6 +15,8 @@ Use this checklist for GitHub and Chrome Web Store releases.
 ```bash
 ./scripts/check-syntax.sh
 node scripts/test-agent-runtime.mjs
+node scripts/test-provider-client-metadata.mjs
+node scripts/test-openai-compatible-structured-output.mjs
 node scripts/validate-release.mjs
 ```
 
@@ -31,10 +33,15 @@ Load the unpacked extension in a clean Chrome profile and verify:
 - missing Codex credentials prompt in the Side Panel, complete device login, and automatically continue the original request;
 - Settings starts Codex login in a separate window; hide or close Settings, complete authorization, then confirm the background poll stores the token and reopening Settings shows connected without another login;
 - Settings starts GitHub Copilot login in a separate window; hide or close Settings, complete authorization, then confirm the background poll stores the token and reopening Settings shows connected without another login;
+- Codex model Refresh returns the current account catalog using the declared compatible client version, including a newly available model that an older client identity would hide;
+- Copilot model Refresh includes both Chat Completions and Responses-only models returned for the account; selecting a Responses-only GPT-5.6 model sends the conversation through `/responses`, streams the result, and does not produce `model_not_supported`;
+- an existing Copilot Provider saved with the legacy `vscode-chat` integration ID migrates to `copilot-developer-cli` without losing its OAuth tokens;
 - a Codex request from both WeChat and Telegram receives a six-digit numeric approval code, accepts that code alone, rejects with `0`, then sends a verification URL and device code and continues after login; wrong-peer, denied, and expired replies do not authorize it;
 - the enterprise WeChat notification Tool shows `qiyewechat_notification` as both Tool name and Display name, preserves an existing webhook migrated from `send_wecom_message`, and displays any legacy model call under the canonical name;
 - `list_webclaw_config` returns redacted Provider IDs, `set_active_provider` switches only to an existing ID through propose/apply, and rollback restores the previous Provider without exposing credentials;
 - the same session can switch among Ollama, Chrome AI, Codex, Copilot, and OpenAI-compatible Providers without changing Tool, Plan, approval, stop, or Turn behavior;
+- a DeepSeek OpenAI-compatible Provider retries an unsupported `json_schema` request with `json_object`, completes the Agent turn, caches that mode, and does not repeat the initial compatibility 400 on the next turn;
+- an OpenAI-compatible Provider set to Responses API sends `POST /responses`, streams `response.output_text.delta` events, preserves Stop behavior, and completes structured JSON Tool turns; verify `deepseek-v4-flash` against `https://api.deepseek.com`;
 - a substantial task can display and persist an `update_plan` plan, and interruption records the Turn as interrupted;
 - a long session compacts older context, remains usable after reload, and preserves recent messages, Tool errors, and unfinished work without showing the generated summary as a user message;
 - the global Max steps field accepts a large positive integer without an artificial UI maximum;

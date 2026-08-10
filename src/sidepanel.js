@@ -14,6 +14,11 @@ import {
 } from "./virtual-file-system.js";
 import { CONTEXT_SUMMARY_PREFIX } from "./agent-runtime.js";
 import { DISTRIBUTION_OAUTH_CLIENT_IDS } from "./oauth-clients.js";
+import {
+  COPILOT_INTEGRATION_ID,
+  normalizeCopilotIntegrationId
+} from "./provider-client-metadata.js";
+import { normalizeOpenAICompatibleApiProtocol } from "./openai-compatible-api.js";
 import { buildVfsPreviewDocument } from "./vfs-preview.js";
 
 const PROVIDER_DEFAULTS = {
@@ -26,6 +31,7 @@ const PROVIDER_DEFAULTS = {
     baseUrl: "https://api.openai.com/v1",
     apiKey: "",
     model: "gpt-4.1-mini",
+    apiProtocol: "auto",
     thinking: true
   },
   opencode: {
@@ -70,7 +76,7 @@ const PROVIDER_DEFAULTS = {
     baseUrl: "https://api.githubcopilot.com",
     model: "auto",
     thinking: true,
-    integrationId: "vscode-chat",
+    integrationId: COPILOT_INTEGRATION_ID,
     userLogin: "",
     githubAccessToken: "",
     githubTokenType: "",
@@ -204,6 +210,7 @@ const elements = {
   ollamaThinking: document.querySelector("#ollamaThinking"),
   refreshOllamaModels: document.querySelector("#refreshOllamaModels"),
   openaiBaseUrl: document.querySelector("#openaiBaseUrl"),
+  openaiApiProtocol: document.querySelector("#openaiApiProtocol"),
   openaiApiKey: document.querySelector("#openaiApiKey"),
   openaiModel: document.querySelector("#openaiModel"),
   openaiModelSelect: document.querySelector("#openaiModelSelect"),
@@ -579,6 +586,7 @@ function bindProviderDirtyEvents() {
     elements.ollamaModelSelect,
     elements.ollamaThinking,
     elements.openaiBaseUrl,
+    elements.openaiApiProtocol,
     elements.openaiApiKey,
     elements.openaiModel,
     elements.openaiModelSelect,
@@ -4040,6 +4048,7 @@ function renderProviderConfig(provider) {
   renderModelOptions(elements.ollamaModelOptions, elements.ollamaModelSelect, provider, "ollama");
   syncModelControls(elements.ollamaModel, elements.ollamaModelSelect);
   elements.openaiBaseUrl.value = provider.config.baseUrl || "";
+  elements.openaiApiProtocol.value = normalizeOpenAICompatibleApiProtocol(provider.config.apiProtocol);
   elements.openaiApiKey.value = provider.config.apiKey || "";
   elements.openaiModel.value = provider.config.model || "";
   elements.openaiThinking.checked = provider.config.thinking !== false;
@@ -4214,6 +4223,7 @@ function readProviderConfig(type) {
   if (type === "openai-compatible") {
     return {
       baseUrl: elements.openaiBaseUrl.value.trim(),
+      apiProtocol: normalizeOpenAICompatibleApiProtocol(elements.openaiApiProtocol.value),
       apiKey: elements.openaiApiKey.value.trim(),
       model: elements.openaiModel.value.trim(),
       thinking: elements.openaiThinking.checked
@@ -4439,6 +4449,12 @@ function normalizePanelProvider(provider) {
   }
   if (type === "github-copilot-oauth" && !String(config.clientId || "").trim()) {
     config.clientId = PROVIDER_DEFAULTS["github-copilot-oauth"].clientId;
+  }
+  if (type === "github-copilot-oauth") {
+    config.integrationId = normalizeCopilotIntegrationId(config.integrationId);
+  }
+  if (type === "openai-compatible") {
+    config.apiProtocol = normalizeOpenAICompatibleApiProtocol(config.apiProtocol);
   }
   return {
     id: String(provider.id || crypto.randomUUID()),

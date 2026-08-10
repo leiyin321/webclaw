@@ -44,6 +44,28 @@ import {
   validateTaskOutput
 } from "./task-stack.js";
 import { DISTRIBUTION_OAUTH_CLIENT_IDS } from "./oauth-clients.js";
+import {
+  CODEX_CLIENT_VERSION,
+  COPILOT_INTEGRATION_ID,
+  copilotClientHeaders,
+  copilotModelApi,
+  normalizeCopilotIntegrationId
+} from "./provider-client-metadata.js";
+import {
+  OPENAI_COMPATIBLE_STRUCTURED_OUTPUT_CACHE_KEY,
+  OPENAI_COMPATIBLE_STRUCTURED_OUTPUT_CACHE_TTL_MS,
+  isOpenAICompatibleResponseFormatError,
+  normalizeOpenAICompatibleStructuredOutputMode,
+  openAICompatibleStructuredOutputCacheId,
+  openAICompatibleStructuredOutputModes,
+  responseFormatForOpenAICompatibleMode
+} from "./openai-compatible-structured-output.js";
+import {
+  normalizeOpenAICompatibleApiProtocol,
+  openAICompatibleApiForConfig,
+  openAICompatibleModelApi,
+  responseTextFormatForOpenAICompatibleMode
+} from "./openai-compatible-api.js";
 
 const PRODUCT_DISCLOSURE_VERSION = 1;
 
@@ -57,6 +79,7 @@ const PROVIDER_DEFAULTS = {
     baseUrl: "https://api.openai.com/v1",
     apiKey: "",
     model: "gpt-4.1-mini",
+    apiProtocol: "auto",
     thinking: true
   },
   opencode: {
@@ -101,7 +124,7 @@ const PROVIDER_DEFAULTS = {
     baseUrl: "https://api.githubcopilot.com",
     model: "auto",
     thinking: true,
-    integrationId: "vscode-chat",
+    integrationId: COPILOT_INTEGRATION_ID,
     userLogin: "",
     githubAccessToken: "",
     githubTokenType: "",
@@ -464,8 +487,6 @@ const DEFAULT_DISABLED_BUILTIN_TOOLS = new Set([
   QIYEWECHAT_NOTIFICATION_TOOL_NAME
 ]);
 
-const CODEX_CLIENT_VERSION = "0.142.0";
-const WEBCLAW_VERSION = chrome.runtime.getManifest().version;
 const CHROME_AI_OFFSCREEN_URL = "src/chrome-ai-offscreen.html";
 const WECHAT_BRIDGE_RECONNECT_MS = 3000;
 const WECHAT_BRIDGE_KEEPALIVE_MS = 20000;
@@ -561,12 +582,15 @@ const REPLACEABLE_DEFAULT_KNOWLEDGE_MANUAL_HASHES = new Set([
   "_f_DN4KMvIA-xb3uo8pnR4fx0dMcfxi8Rytloa9QS6A",
   "iSxV-2LRGJl8d20Z4vUVo9xyaGthO6Aov-L2uSsIXjo",
   "qxBFf1iNGSrbPVRGoSSOQUH8Mu9b6rgnrTBznpwsH1s",
-  "qmON25C52Otm3zxd8xOE_dlGJ9DX-j61ECdtgLwChHA"
+  "qmON25C52Otm3zxd8xOE_dlGJ9DX-j61ECdtgLwChHA",
+  "kcQOQB5In4knHBpRgUGlvN7AVp-W6I435HqezmffziU",
+  "XAX46BXypQ1LE7DWmgpSqdw78M-Tw_JjPFRkRPSb4yw",
+  "04RN_x4Yj49RriWSQGBAn7Wqh1UaDHM0iq395QmQb30"
 ]);
-const DEFAULT_KNOWLEDGE_MANUAL = `<!-- webclaw-default-manual: 0.5.2-r1 -->
+const DEFAULT_KNOWLEDGE_MANUAL = `<!-- webclaw-default-manual: 0.5.3-r1 -->
 # WebClaw Operation Manual
 
-Built-in operating reference for WebClaw 0.5.2. The file is stored in VFS and indexed into the local knowledge base. WebClaw upgrades an unchanged historical default copy, but preserves a copy that the user has edited.
+Built-in operating reference for WebClaw 0.5.3. The file is stored in VFS and indexed into the local knowledge base. WebClaw upgrades an unchanged historical default copy, but preserves a copy that the user has edited.
 
 ## 1. What WebClaw is
 WebClaw is a Chrome extension AI agent. It can converse in the side panel and through connected WeChat or Telegram channels, use configured model providers, operate the active browser tab, use a browser-backed virtual filesystem (VFS), run schedules, and retain durable workspace context.
@@ -595,10 +619,11 @@ WebClaw supports local Ollama, OpenAI-compatible endpoints, OpenCode Zen, Codex/
 - Every Provider uses one WebClaw Agent Runtime. Turn lifecycle, Tool dispatch, Plan handling, approvals, interruption, persistence, and context compaction do not change when the active Provider changes.
 - Provider-specific behavior is isolated in a Provider Adapter: authentication, endpoint and wire format, message and media encoding, stream parsing, context capabilities, and native function calling versus JSON Tool transport.
 - An adapter always returns the same assistant or Tool-call shape to the runtime. Codex uses native function calling when available; other adapters can use the JSON transport fallback without creating a second Agent loop.
-- Agent responses use a shared structured shape where supported: Chrome AI uses Prompt API responseConstraint, Ollama uses format JSON Schema, OpenAI-compatible endpoints use response_format JSON Schema, OpenCode Zen routes each model to Responses, Messages, or Chat Completions, Copilot uses the JSON transport protocol without undocumented request fields, and Codex uses native structured function calls.
+- Agent responses use a shared structured shape where supported: Chrome AI uses Prompt API responseConstraint, Ollama uses format JSON Schema, OpenAI-compatible endpoints negotiate json_schema, json_object, or prompt-only output constraints inside their adapter, OpenCode Zen routes each model to Responses, Messages, or Chat Completions, Copilot selects Responses or Chat Completions from discovered model metadata, and Codex uses native structured function calls.
 - Configure Providers in Settings and select the single active Provider. Multiple Providers, including multiple entries of the same type, have independent IDs, settings, and stored credentials.
 - In the new Provider dialog, choose Provider type first. WebClaw generates the matching default name; a name manually entered by the user is preserved when the type later changes.
 - Refresh the provider model list before selecting a model when the provider supports discovery.
+- OpenAI-compatible Providers can use Auto, Responses API, or Chat Completions. Auto follows supported endpoint metadata when available and otherwise preserves Chat Completions compatibility; select Responses API explicitly for a compatible endpoint such as DeepSeek deepseek-v4-flash.
 - Copilot Auto is server-side automatic selection: do not send a literal unsupported model name when Auto is selected.
 - Codex and GitHub device login use a dedicated authorization window and continue polling in the extension background if Settings is hidden. Issued access and refresh tokens are reused until sign-out, revocation, or refresh failure.
 - A Channel can start Codex authorization and receive the verification URL and device code remotely. Chrome origin permission prompts still require a local browser click.
@@ -3305,6 +3330,12 @@ function normalizeProvider(provider) {
   if (type === "github-copilot-oauth" && !String(config.clientId || "").trim()) {
     config.clientId = PROVIDER_DEFAULTS["github-copilot-oauth"].clientId;
   }
+  if (type === "github-copilot-oauth") {
+    config.integrationId = normalizeCopilotIntegrationId(config.integrationId);
+  }
+  if (type === "openai-compatible") {
+    config.apiProtocol = normalizeOpenAICompatibleApiProtocol(config.apiProtocol);
+  }
   if (type === "github-copilot-oauth" && config.model === "gpt-4o-copilot") {
     config.model = PROVIDER_DEFAULTS["github-copilot-oauth"].model;
   }
@@ -3944,7 +3975,7 @@ async function ensureDefaultKnowledgeManual() {
   }
   await knowledgeIngestVfsFile(DEFAULT_KNOWLEDGE_MANUAL_PATH, {
     title: "WebClaw Operation Manual",
-    tags: ["webclaw", "manual", "operations", "0.5.2"]
+    tags: ["webclaw", "manual", "operations", "0.5.3"]
   });
 }
 
@@ -4126,7 +4157,10 @@ const PROVIDER_ADAPTER_DEFINITIONS = Object.freeze({
     generateText: (provider, settings, messages, options) => callOllama(provider.config, settings, messages, options)
   },
   "openai-compatible": {
-    generateText: (provider, settings, messages, options) => callOpenAICompatible(provider.config, settings, messages, options)
+    generateText: (provider, settings, messages, options) => callOpenAICompatible(provider.config, settings, messages, {
+      ...options,
+      structuredOutputCacheNamespace: provider.id
+    })
   },
   "opencode": {
     generateText: (provider, settings, messages, options) => callOpenCodeZen(provider.config, settings, messages, options)
@@ -4444,6 +4478,9 @@ async function callOllama(config, settings, messages, options = {}) {
 async function callOpenAICompatible(config, settings, messages, options = {}, bearerOverride = "") {
   if (!config.baseUrl) throw new Error("OpenAI-compatible base URL is required.");
   if (!config.model) throw new Error("Model is required.");
+  if (openAICompatibleApiForConfig(config) === "responses") {
+    return callOpenAICompatibleResponses(config, settings, messages, options, bearerOverride);
+  }
   const headers = { "Content-Type": "application/json" };
   const bearer = bearerOverride || config.apiKey;
   if (bearer) headers.Authorization = `Bearer ${bearer}`;
@@ -4457,18 +4494,146 @@ async function callOpenAICompatible(config, settings, messages, options = {}, be
   if (supportsReasoningEffort(config.model)) {
     body.reasoning_effort = config.thinking === false ? "low" : "medium";
   }
-  if (options.responseFormat) {
-    body.response_format = options.responseFormat;
-  }
+  const cacheId = openAICompatibleStructuredOutputCacheId(
+    options.structuredOutputCacheNamespace,
+    config.baseUrl,
+    config.model
+  );
+  const cachedMode = options.responseFormat
+    ? await getOpenAICompatibleStructuredOutputMode(cacheId)
+    : "";
+  const modes = openAICompatibleStructuredOutputModes(options.responseFormat, cachedMode);
+  for (let index = 0; index < modes.length; index += 1) {
+    const mode = modes[index];
+    const responseFormat = responseFormatForOpenAICompatibleMode(mode, options.responseFormat);
+    if (responseFormat) body.response_format = responseFormat;
+    else delete body.response_format;
 
-  const response = await fetch(`${trimSlash(config.baseUrl)}/chat/completions`, {
-    method: "POST",
-    headers,
-    signal: options.signal,
-    body: JSON.stringify(body)
-  });
-  if (!response.ok) throw new Error(`OpenAI-compatible backend returned HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
-  return readChatCompletionStream(response, options.onDelta);
+    const response = await fetch(`${trimSlash(config.baseUrl)}/chat/completions`, {
+      method: "POST",
+      headers,
+      signal: options.signal,
+      body: JSON.stringify(body)
+    });
+    if (response.ok) {
+      if (options.responseFormat) {
+        await setOpenAICompatibleStructuredOutputMode(cacheId, mode);
+      }
+      return readChatCompletionStream(response, options.onDelta);
+    }
+    const responseText = await response.text();
+    const canFallback = index < modes.length - 1 &&
+      isOpenAICompatibleResponseFormatError(response.status, responseText);
+    if (canFallback) {
+      console.info(
+        `OpenAI-compatible structured output ${mode} unavailable; retrying with ${modes[index + 1]}.`,
+        responseText.slice(0, 500)
+      );
+      continue;
+    }
+    throw new Error(`OpenAI-compatible backend returned HTTP ${response.status}: ${responseText.slice(0, 500)}`);
+  }
+  throw new Error("OpenAI-compatible structured output negotiation failed.");
+}
+
+async function callOpenAICompatibleResponses(config, settings, messages, options = {}, bearerOverride = "") {
+  const headers = { "Content-Type": "application/json" };
+  const bearer = bearerOverride || config.apiKey;
+  if (bearer) headers.Authorization = `Bearer ${bearer}`;
+  const instructions = messages
+    .filter((message) => message.role === "system" || message.role === "developer")
+    .map((message) => String(message.content || ""))
+    .join("\n\n")
+    .trim();
+  const input = await Promise.all(
+    messages
+      .filter((message) => message.role !== "system" && message.role !== "developer")
+      .map((message) => buildCodexInputMessage(message))
+  );
+  const body = {
+    model: config.model,
+    instructions,
+    input,
+    store: false,
+    stream: true,
+    temperature: Number(settings.temperature || 0.2)
+  };
+  if (supportsReasoningEffort(config.model)) {
+    body.reasoning = { effort: config.thinking === false ? "low" : "medium" };
+  }
+  const cacheId = openAICompatibleStructuredOutputCacheId(
+    `${options.structuredOutputCacheNamespace || ""}:responses`,
+    config.baseUrl,
+    config.model
+  );
+  const cachedMode = options.responseFormat
+    ? await getOpenAICompatibleStructuredOutputMode(cacheId)
+    : "";
+  const modes = openAICompatibleStructuredOutputModes(options.responseFormat, cachedMode);
+  for (let index = 0; index < modes.length; index += 1) {
+    const mode = modes[index];
+    const format = responseTextFormatForOpenAICompatibleMode(mode, options.responseFormat);
+    if (format) body.text = { format };
+    else delete body.text;
+    const response = await fetch(`${trimSlash(config.baseUrl)}/responses`, {
+      method: "POST",
+      headers,
+      signal: options.signal,
+      body: JSON.stringify(body)
+    });
+    if (response.ok) {
+      if (options.responseFormat) {
+        await setOpenAICompatibleStructuredOutputMode(cacheId, mode);
+      }
+      return readResponseStream(response, options.onDelta);
+    }
+    const responseText = await response.text();
+    const canFallback = index < modes.length - 1 &&
+      isOpenAICompatibleResponseFormatError(response.status, responseText);
+    if (canFallback) {
+      console.info(
+        `OpenAI-compatible Responses structured output ${mode} unavailable; retrying with ${modes[index + 1]}.`,
+        responseText.slice(0, 500)
+      );
+      continue;
+    }
+    throw new Error(`OpenAI-compatible Responses API returned HTTP ${response.status}: ${responseText.slice(0, 500)}`);
+  }
+  throw new Error("OpenAI-compatible Responses structured output negotiation failed.");
+}
+
+async function getOpenAICompatibleStructuredOutputMode(cacheId) {
+  try {
+    const stored = await getExtensionStorage(OPENAI_COMPATIBLE_STRUCTURED_OUTPUT_CACHE_KEY);
+    const entry = stored[OPENAI_COMPATIBLE_STRUCTURED_OUTPUT_CACHE_KEY]?.[cacheId];
+    const mode = normalizeOpenAICompatibleStructuredOutputMode(entry?.mode);
+    if (!mode || Date.now() - Number(entry?.updatedAt || 0) >= OPENAI_COMPATIBLE_STRUCTURED_OUTPUT_CACHE_TTL_MS) {
+      return "";
+    }
+    return mode;
+  } catch {
+    return "";
+  }
+}
+
+async function setOpenAICompatibleStructuredOutputMode(cacheId, mode) {
+  const normalizedMode = normalizeOpenAICompatibleStructuredOutputMode(mode);
+  if (!normalizedMode) return;
+  try {
+    const stored = await getExtensionStorage(OPENAI_COMPATIBLE_STRUCTURED_OUTPUT_CACHE_KEY);
+    const cache = stored[OPENAI_COMPATIBLE_STRUCTURED_OUTPUT_CACHE_KEY];
+    await setExtensionStorage({
+      [OPENAI_COMPATIBLE_STRUCTURED_OUTPUT_CACHE_KEY]: {
+        ...(cache && typeof cache === "object" ? cache : {}),
+        [cacheId]: {
+          mode: normalizedMode,
+          updatedAt: Date.now()
+        }
+      }
+    });
+  } catch {
+    // Capability caching must not block a successful model response.
+  }
 }
 
 async function callOpenCodeZen(config, settings, messages, options = {}) {
@@ -4827,11 +4992,7 @@ async function callGitHubCopilotOAuth(provider, settings, messages, options = {}
 
   const headers = {
     "Content-Type": "application/json",
-    Authorization: `Bearer ${copilot.copilotAccessToken}`,
-    "Copilot-Integration-Id": copilot.integrationId || "vscode-chat",
-    "Editor-Version": `WebClaw/${WEBCLAW_VERSION}`,
-    "Editor-Plugin-Version": `WebClaw/${WEBCLAW_VERSION}`,
-    "OpenAI-Intent": "conversation-panel"
+    ...copilotClientHeaders(copilot.copilotAccessToken, copilot.integrationId)
   };
   const body = {
     messages: await chatCompletionMessages(messages),
@@ -4839,6 +5000,11 @@ async function callGitHubCopilotOAuth(provider, settings, messages, options = {}
     stream: true
   };
   const model = String(copilot.model || "").trim();
+  const modelDetail = (Array.isArray(copilot.availableModelDetails) ? copilot.availableModelDetails : [])
+    .find((detail) => String(detail?.id || "") === model);
+  if (model !== "auto" && modelDetail?.api === "responses") {
+    return callGitHubCopilotResponses(copilot, messages, options, headers, model);
+  }
   if (model && model !== "auto") {
     body.model = model;
   }
@@ -4853,6 +5019,50 @@ async function callGitHubCopilotOAuth(provider, settings, messages, options = {}
     throw new Error(`GitHub Copilot returned HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
   }
   return readChatCompletionStream(response, options.onDelta);
+}
+
+async function callGitHubCopilotResponses(copilot, messages, options, headers, model) {
+  const instructions = messages
+    .filter((message) => message.role === "system" || message.role === "developer")
+    .map((message) => String(message.content || ""))
+    .join("\n\n")
+    .trim();
+  const input = await Promise.all(
+    messages
+      .filter((message) => message.role !== "system" && message.role !== "developer")
+      .map((message) => buildCodexInputMessage(message))
+  );
+  const body = {
+    model,
+    instructions,
+    input,
+    store: false,
+    stream: true
+  };
+  if (supportsReasoningEffort(model)) {
+    body.reasoning = { effort: copilot.thinking === false ? "low" : "medium" };
+  }
+  const schema = options.responseFormat?.json_schema;
+  if (schema?.schema) {
+    body.text = {
+      format: {
+        type: "json_schema",
+        name: schema.name || "webclaw_agent_response",
+        strict: schema.strict === true,
+        schema: schema.schema
+      }
+    };
+  }
+  const response = await fetch(`${trimSlash(copilot.baseUrl)}/responses`, {
+    method: "POST",
+    headers,
+    signal: options.signal,
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) {
+    throw new Error(`GitHub Copilot Responses API returned HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
+  }
+  return readResponseStream(response, options.onDelta);
 }
 
 function textOnlyMessages(messages) {
@@ -4946,6 +5156,7 @@ function supportsReasoningEffort(model) {
     value.startsWith("o1") ||
     value.startsWith("o3") ||
     value.startsWith("o4") ||
+    value.startsWith("deepseek-v4") ||
     value.includes("codex") ||
     value.includes("reasoning")
   );
@@ -5040,7 +5251,40 @@ async function listOpenAICompatibleModels(config) {
       headers
     })
   );
-  return parseModelList(json);
+  return parseOpenAICompatibleModelList(json);
+}
+
+function parseOpenAICompatibleModelList(json) {
+  const items = Array.isArray(json)
+    ? json
+    : Array.isArray(json?.data)
+      ? json.data
+      : Array.isArray(json?.models)
+        ? json.models
+        : [];
+  return items
+    .filter((model) => Boolean(modelListItemId(model)))
+    .map((model) => {
+      if (typeof model === "string") return model;
+      const id = String(modelListItemId(model));
+      const api = openAICompatibleModelApi(model);
+      return {
+        id,
+        name: String(model.display_name || model.name || id),
+        vendor: String(model.owned_by || model.vendor || ""),
+        category: api === "responses"
+          ? "Responses API"
+          : api === "chat"
+            ? "Chat Completions"
+            : "",
+        preview: Boolean(model.preview),
+        api,
+        contextWindow: Number(model.context_window || model.contextWindow || 0),
+        capabilities: Array.isArray(model.capabilities)
+          ? model.capabilities.map(String)
+          : []
+      };
+    });
 }
 
 async function listOpenCodeModels(config) {
@@ -5104,11 +5348,7 @@ async function listGitHubCopilotModels(settings, provider) {
   const json = await checkedJson(
     await fetch(`${trimSlash(copilot.baseUrl)}/models`, {
       headers: {
-        Authorization: `Bearer ${copilot.copilotAccessToken}`,
-        "Copilot-Integration-Id": copilot.integrationId || "vscode-chat",
-        "Editor-Version": `WebClaw/${WEBCLAW_VERSION}`,
-        "Editor-Plugin-Version": `WebClaw/${WEBCLAW_VERSION}`,
-        "OpenAI-Intent": "conversation-panel"
+        ...copilotClientHeaders(copilot.copilotAccessToken, copilot.integrationId)
       }
     })
   );
@@ -5196,9 +5436,7 @@ function parseCopilotModelList(json) {
       if (!modelListItemId(model)) return false;
       if (model.policy?.state === "disabled") return false;
       if (model.model_picker_enabled === false) return false;
-      if (Array.isArray(model.supported_endpoints) && !model.supported_endpoints.includes("/chat/completions")) {
-        return false;
-      }
+      if (!copilotModelApi(model)) return false;
       if (model.capabilities?.type && model.capabilities.type !== "chat") return false;
       return true;
     })
@@ -5210,6 +5448,7 @@ function parseCopilotModelList(json) {
         vendor: model.vendor || "",
         category: model.model_picker_category || "",
         preview: Boolean(model.preview),
+        api: copilotModelApi(model),
         contextWindow: Number(
           model.capabilities?.limits?.max_prompt_tokens ||
           model.capabilities?.limits?.max_context_window_tokens ||
@@ -5218,7 +5457,7 @@ function parseCopilotModelList(json) {
         ),
         capabilities: [
           ...(model.capabilities?.supports?.vision ? ["vision"] : []),
-          ...(Array.isArray(model.supported_endpoints) && model.supported_endpoints.includes("/chat/completions") ? ["tools"] : [])
+          ...(model.capabilities?.supports?.tool_calls !== false ? ["tools"] : [])
         ]
       };
     });
@@ -5238,6 +5477,7 @@ function modelDetails(models) {
       vendor: String(model.vendor || ""),
       category: String(model.category || ""),
       preview: Boolean(model.preview),
+      api: model.api === "responses" ? "responses" : model.api === "chat" ? "chat" : "",
       contextWindow: Number(model.contextWindow || model.context_window || 0),
       capabilities: Array.isArray(model.capabilities) ? uniqueStrings(model.capabilities) : []
     }));
@@ -5260,7 +5500,8 @@ function copilotAutoModelDetail() {
     name: "Auto",
     vendor: "GitHub Copilot",
     category: "10% discount",
-    preview: false
+    preview: false,
+    api: "chat"
   };
 }
 
@@ -7565,8 +7806,8 @@ async function ensureFreshGitHubCopilotToken(settings, providerId) {
 
   const response = await fetch(copilot.copilotTokenUrl, {
     headers: {
+      ...copilotClientHeaders(copilot.githubAccessToken, copilot.integrationId),
       Accept: "application/json",
-      Authorization: `Bearer ${copilot.githubAccessToken}`,
       "GitHub-Authentication-Token": copilot.githubAccessToken
     }
   });
@@ -8184,13 +8425,107 @@ async function readChatCompletionStream(response, onDelta) {
 }
 
 async function readResponseStream(response, onDelta) {
-  return readSseStream(response, (event) => {
-    if (event.type === "response.output_text.delta" && typeof event.delta === "string") return event.delta;
-    if (event.type === "response.output_text.done" && typeof event.text === "string") return "";
-    if (!event.type && typeof event.output_text === "string") return event.output_text;
-    if (!event.type && typeof event.text === "string") return event.text;
-    return "";
-  }, onDelta);
+  const state = { text: "", raw: "", error: "" };
+  if (!response.body?.getReader) {
+    const text = await response.text();
+    state.raw = text;
+    const events = parseSseEvents(text);
+    for (const event of events) consumeResponseTextEvent(state, event, onDelta);
+    if (events.length === 0) {
+      try {
+        consumeResponseTextEvent(state, JSON.parse(text), onDelta);
+      } catch {
+        state.text = extractResponseText(text);
+        if (state.text) onDelta?.(state.text);
+      }
+    }
+    if (state.error) throw new Error(state.error);
+    return state.text;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      state.raw += chunk;
+      buffer += chunk;
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        const event = parseSseEventLine(line);
+        if (event) consumeResponseTextEvent(state, event, onDelta);
+      }
+    }
+    const tail = decoder.decode();
+    state.raw += tail;
+    buffer += tail;
+    const event = parseSseEventLine(buffer);
+    if (event) consumeResponseTextEvent(state, event, onDelta);
+    if (state.error) throw new Error(state.error);
+    if (!state.text && state.raw.trim()) {
+      state.text = extractResponseText(state.raw);
+      if (state.text) onDelta?.(state.text);
+    }
+    return state.text;
+  } catch (error) {
+    if (error?.name === "AbortError") throw new Error("Stopped");
+    throw error;
+  }
+}
+
+function consumeResponseTextEvent(state, event, onDelta) {
+  if (!event || typeof event !== "object") return;
+  if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
+    state.text += event.delta;
+    onDelta?.(event.delta);
+    return;
+  }
+  if (event.type === "response.output_text.done" && !state.text && typeof event.text === "string") {
+    state.text = event.text;
+    onDelta?.(event.text);
+    return;
+  }
+  if (event.type === "response.completed" && event.response && !state.text) {
+    const text = extractResponseText(JSON.stringify(event.response));
+    if (text) {
+      state.text = text;
+      onDelta?.(text);
+    }
+    return;
+  }
+  if (event.type === "response.failed") {
+    state.error = responseStreamError("failed", event.response || event);
+    return;
+  }
+  if (event.type === "response.incomplete") {
+    state.error = responseStreamError("incomplete", event.response || event);
+    return;
+  }
+  if (!event.type) {
+    const status = String(event.status || "");
+    if (status === "failed" || status === "incomplete") {
+      state.error = responseStreamError(status, event);
+      return;
+    }
+    const text = extractResponseText(JSON.stringify(event));
+    if (text && !state.text) {
+      state.text = text;
+      onDelta?.(text);
+    }
+  }
+}
+
+function responseStreamError(status, response) {
+  const detail = response?.error?.message ||
+    response?.error ||
+    response?.incomplete_details?.reason ||
+    response?.incomplete_details ||
+    "unknown reason";
+  return `Responses API response ${status}: ${typeof detail === "string" ? detail : JSON.stringify(detail)}`;
 }
 
 async function readCodexAgentResponseStream(response, onDelta) {

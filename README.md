@@ -24,7 +24,7 @@ WebClaw 目前是实验性的浏览器原生 Agent 框架，适合本地开发�
 - 受控 Tool 轨迹：保留受限长度的工具结果和失败原因，用于后续会话与 Provider 切换时的自我纠错。
 - 统一 Agent Runtime：所有 Provider、Side Panel、Channel 和 Schedule 共用 Turn、Item、Tool、Plan、审批、停止和上下文压缩机制。
 - 临时任务栈：复杂任务可通过 `task_push` 创建独立上下文的子任务；子任务可以继续压入次级任务，并以 JSON Schema 约束的结构化结果返回父任务。
-- 结构化 Agent 响应：Chrome AI 使用 Prompt API `responseConstraint`，Ollama 使用 `format` JSON Schema，OpenAI-compatible 使用 `response_format`，Copilot 使用兼容的 JSON Tool 协议，Codex 使用原生函数调用。
+- 结构化 Agent 响应：Chrome AI 使用 Prompt API `responseConstraint`，Ollama 使用 `format` JSON Schema，OpenAI-compatible 在 Provider Adapter 内协商 `json_schema`、`json_object` 或仅提示词约束，Copilot 根据模型元数据自动选择 Responses 或 Chat Completions 并使用兼容的 JSON Tool 协议，Codex 使用原生函数调用。
 - 受限 `fs_shell`：可在该虚拟文件系统中执行 `pwd`、`cd`、`ls`、`stat`、`mkdir`、`touch`、`cat`、`cp`、`mv`、`rm`，`cd` 会更新当前会话的工作目录，不执行真实系统 Shell。
 - 自定义 Tool、Skill，以及可选的高级 Schedule 和自我配置 Tool。
 - 微信和 Telegram Channel；企业微信机器人通知由独立的 `qiyewechat_notification` Tool 提供。
@@ -97,6 +97,7 @@ GET http://localhost:11434/api/tags
 
 - Provider type: `OpenAI-compatible API`
 - Base URL: OpenAI 可用 `https://api.openai.com/v1`，兼容服务填写对应 `/v1` 地址
+- API protocol: `Auto`、`Responses API` 或 `Chat Completions`
 - API key
 - Model
 
@@ -105,6 +106,10 @@ GET http://localhost:11434/api/tags
 ```text
 GET /models
 ```
+
+`Auto` 会优先采用 `/models` 为当前模型声明的 `supported_endpoints`；服务端没有返回端点元数据时继续使用 Chat Completions，以保持旧配置兼容。也可以明确选择 Responses API，使 WebClaw 调用 `POST /responses`，使用 `instructions + input`、`text.format`、`reasoning.effort` 和 Responses SSE 事件。DeepSeek `deepseek-v4-flash` 可将 Base URL 设置为 `https://api.deepseek.com` 并明确选择 Responses API。
+
+“OpenAI-compatible”不代表服务端实现了 OpenAI 的全部可选能力。两种协议都会在 Provider Adapter 内协商结构化输出：优先 JSON Schema，服务端明确表示不支持时降级为 JSON Object，再降级到仅提示词约束和 WebClaw 本地 Schema 校验。成功模式按协议、Provider、端点和模型在扩展本地缓存 7 天。
 
 ### OpenCode Zen
 
@@ -149,8 +154,10 @@ access token 和 refresh token 保存在 `chrome.storage.local` 并自动刷新�
 刷新 Codex 模型时，WebClaw 会调用：
 
 ```text
-/models?client_version=0.142.0
+/models?client_version=0.145.0
 ```
+
+`client_version` 与当前兼容的 Codex CLI 身份保持同步。Codex 服务端会按最低客户端版本控制模型可见性，因此版本过旧时，即使账号已经具备权限，刷新结果也可能缺少新模型。WebClaw 只显示服务端返回且标记为可列出、API 可用的模型，不额外混入写死的旧模型目录。
 
 ### GitHub Copilot OAuth
 
@@ -167,7 +174,11 @@ WebClaw 使用 GitHub OAuth device flow 登录 Copilot：
 
 点击 `Sign in with GitHub` 后，WebClaw 会显示设备码，并在独立窗口打开 GitHub 授权页面。待授权状态由扩展后台 Alarm 持续轮询，因此 Settings 被隐藏或关闭也不会中断 token 保存；授权成功后独立窗口会关闭，并尝试重新聚焦原 Settings 窗口。GitHub access token 保存在 `chrome.storage.local`，重新打开 Provider 时会显示已连接。
 
+刷新模型时，WebClaw 以当前兼容的 Copilot CLI 客户端身份请求 `GET /models`。下拉列表只显示服务端针对当前账号、套餐和组织策略返回的可选模型，产品范围可参考 GitHub 的[官方支持模型列表](https://docs.github.com/en/copilot/reference/ai-models/supported-models)。每个模型的 `supported_endpoints` 会保存在 Provider 模型元数据中：支持 `/responses` 的模型自动使用 Responses API，只支持 `/chat/completions` 的模型使用 Chat Completions；同时支持两者时优先使用 Responses。这使仅提供 Responses API 的 GPT-5.3、GPT-5.4 mini、GPT-5.5 和 GPT-5.6 系列可以被选择并正常调用，而不是因缺少 `/chat/completions` 被过滤。
+
 选择 `auto` 时，WebClaw 会省略请求体里的 `model` 字段，让 Copilot 服务端执行 auto model selection。
+
+Copilot Responses 模型的 Thinking mode 会转换为标准 reasoning effort：开启为 `medium`，关闭为 `low`。Chat Completions 模型不附加未文档化的 thinking 参数。
 
 ## Agent 协议
 

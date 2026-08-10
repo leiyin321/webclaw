@@ -2,6 +2,15 @@
 
 All notable changes to WebClaw will be documented in this file.
 
+## 0.5.3
+
+- Align Codex and GitHub Copilot model discovery with the current compatible CLI client identities so server-side minimum-client-version gates do not hide newly available models.
+- Preserve Copilot `supported_endpoints` model metadata and route each concrete model through Responses or Chat Completions as advertised, including Responses-only GPT-5.6 models.
+- Migrate existing Copilot Providers from the legacy `vscode-chat` integration identity to `copilot-developer-cli` without requiring sign-in again.
+- Add provider client metadata tests to CI and the extension packaging checks.
+- Negotiate structured-output support for OpenAI-compatible providers, falling back from `json_schema` to `json_object` and then prompt-only validation on explicit compatibility errors; cache the successful mode per endpoint and model for seven days.
+- Add `Auto`, `Responses API`, and `Chat Completions` protocol selection to OpenAI-compatible Providers; route Responses requests through `/responses` with `instructions`, `input`, `text.format`, reasoning effort, and semantic SSE event parsing.
+
 ## 0.5.2
 
 - Show live hierarchical Task execution progress in the conversation, including model steps, active Tools, structured-output correction, and failures; completed runs collapse automatically.

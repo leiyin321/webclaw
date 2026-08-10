@@ -12,6 +12,8 @@
 
 当前纯扩展实现使用 GitHub Device Flow。为了让 Copilot Provider 无需先注册应用即可连接，本仓库暂时恢复早期 WebClaw 使用的公开 GitHub Copilot Client ID。它不是 Client Secret，但不由 WebClaw 发布者控制，也不是面向第三方扩展的稳定集成契约，可能因服务端、风控或分发政策变化而失效。
 
+OAuth Client ID 与 Copilot API 的客户端身份是两个不同概念。模型发现、短期 Copilot token 交换和模型请求使用兼容的 `copilot-developer-cli` integration identity 及对应 CLI 版本，以获得服务端为该客户端开放的当前模型元数据；这些请求头不是登录凭证，也不能替代用户 OAuth token。上游 CLI 身份或最低版本变化时，应集中更新 `src/provider-client-metadata.js` 并运行元数据测试。
+
 正式发行版仍应注册一个由发布者控制、只用于 WebClaw 的 GitHub OAuth App 或 GitHub App，启用 Device Flow，并替换 `src/oauth-clients.js` 中的默认值。Provider 页面中的非空 Client ID 会覆盖临时默认值。
 
 1. 在 GitHub Developer settings 创建应用。
@@ -40,6 +42,8 @@ GitHub 提醒 public client 无法保护 Client Secret，并更偏好 Authorizat
 OpenAI 的公开 Codex app-server 文档描述了由 app-server 管理的 ChatGPT browser/device-code 登录和 token 刷新，但没有文档化一个供任意第三方 Chrome 扩展注册客户端的通用流程。
 
 为了保留当前 Codex Provider，本仓库暂时使用公开的 Codex CLI Client ID。这个值是 public client identifier，不是 Client Secret；但它仍属于 Codex CLI 的应用身份，是一个未被文档化为第三方扩展契约的兼容依赖。服务端、OAuth 风控或 Chrome Web Store 审核策略变化都可能使它失效。
+
+Codex 模型发现还会单独声明兼容的 Codex CLI `client_version`。服务端可能根据模型的最低客户端版本隐藏新模型，因此该值与 OAuth Client ID 分开维护在 `src/provider-client-metadata.js`。它不扩大账号权限，只影响服务端是否把当前客户端可处理且账号可用的模型列入响应。
 
 当前实现遵循以下边界：
 
