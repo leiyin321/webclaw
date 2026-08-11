@@ -15,6 +15,7 @@ Use this checklist for GitHub and Chrome Web Store releases.
 ```bash
 ./scripts/check-syntax.sh
 node scripts/test-agent-runtime.mjs
+./scripts/test-agent-loop.sh
 node scripts/test-provider-client-metadata.mjs
 node scripts/test-openai-compatible-structured-output.mjs
 node scripts/validate-release.mjs
@@ -43,6 +44,12 @@ Load the unpacked extension in a clean Chrome profile and verify:
 - a DeepSeek OpenAI-compatible Provider retries an unsupported `json_schema` request with `json_object`, completes the Agent turn, caches that mode, and does not repeat the initial compatibility 400 on the next turn;
 - an OpenAI-compatible Provider set to Responses API sends `POST /responses`, streams `response.output_text.delta` events, preserves Stop behavior, and completes structured JSON Tool turns; verify `deepseek-v4-flash` against `https://api.deepseek.com`;
 - a substantial task can display and persist an `update_plan` plan, and interruption records the Turn as interrupted;
+- stopping immediately after a model returns Tool calls prevents any not-yet-started Tool operation from being created or executed;
+- reloading after a deterministic `before_model` or `after_tool` checkpoint resumes with the saved model/Tool/time budgets, retry counters, progress state, task state, and working directory;
+- reloading at `before_tool` reuses a completed operation result, retries only `safe` or `retry_safe` operations with the original call, and never automatically replays an operation with unknown external effects;
+- a pending local approval reappears in the Side Panel and a pending Channel approval returns to the originating Channel and peer after service-worker recovery;
+- a Tool result that exceeds the context limit is represented by `FULL_RESULT_REF` and can be read in bounded ranges with `agent_artifact_read`;
+- clearing or deleting a session removes its related Agent RunStore records, while a running Turn remains present when a session already contains 100 completed Turn records;
 - a long session compacts older context, remains usable after reload, and preserves recent messages, Tool errors, and unfinished work without showing the generated summary as a user message;
 - the global Max steps field accepts a large positive integer without an artificial UI maximum;
 - the file manager selects a directory on single click and enters it on double click, while HTML/HTM/XHTML/SVG Preview opens a top-level sandbox tab;

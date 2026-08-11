@@ -35,6 +35,8 @@ WebClaw 目前是实验性的浏览器原生 Agent 框架，适合本地开发�
 
 WebClaw 只维护一套外层 Agent Runtime。它把一次请求表示为 `Turn`，把模型输出、Tool 调用、Tool 结果和计划表示为有状态的 `Item`，并统一处理流式输出、停止、审批、错误反馈、历史持久化和上下文压缩。Side Panel、微信、Telegram 和 Schedule 都调用同一运行时。
 
+核心循环由显式状态机驱动，并通过 AgentService 按会话串行。ToolScheduler 支持 JSON Schema 参数校验、Codex 原生多 Tool Call、相邻只读调用并行、写操作屏障、operation key 去重和未知外部副作用保护。RunStore 使用独立 IndexedDB 保存脱敏事件、checkpoint、Tool operation 和大型结果 artifact；run lease 与写入 owner 在同一事务中校验，checkpoint 或 lease 写入失败会停止执行。确定性边界可在 Service Worker 中断后继续，并恢复原有预算、重试次数和无进展检测状态；已完成 Tool 会复用 observation，安全或可重试 Tool 可从原调用继续，未知副作用不会自动重放。等待审批会重新呈现在 Side Panel 或原 Channel。重复 Tool Call 与相同 observation 会先触发纠偏，持续无进展时进入 `stuck`，不会无限循环。
+
 模型差异限制在 Provider Adapter 内。每种 Provider 只负责认证、消息与媒体编码、请求端点、流解析、上下文能力，以及原生 function calling 或 JSON Tool transport 的转换。适配器最终都返回统一的 assistant 或 tool-call 响应，因此切换 Provider 不会切换 Agent 工作流。Codex 当前使用原生 function calling；未提供可用原生 Tool 响应的 Provider 使用适配器内的 JSON transport fallback。
 
 复杂任务可调用 `update_plan` 发布或更新计划。长会话超过当前模型的适配器预算时，运行时会压缩较早历史，保留近期消息、目标、约束、已验证 Tool 结果、错误和未完成事项。压缩摘要属于 WebClaw 生成的执行状态，不作为用户指令。
@@ -63,6 +65,7 @@ Workflow 仍是持久化、可复用的自定义 Tool；Task 是仅在一次执�
 - [发布检查清单](RELEASE.md)
 - [OAuth 配置与发布建议](OAUTH.md)
 - [Chrome Web Store 上架资料](STORE_LISTING.md)
+- [Agent Loop 架构与恢复语义](docs/agent-loop-architecture.md)
 - [许可证](LICENSE)
 
 ## 在 Chrome 中加载
@@ -271,11 +274,14 @@ WebClaw 支持把外部消息通道接入当前活跃会话：
 
 ## 开发检查
 
-运行与 CI 相同的语法检查：
+运行与 CI 相同的语法、Agent Loop 和发布检查：
 
 ```bash
 ./scripts/check-syntax.sh
 node scripts/test-agent-runtime.mjs
+./scripts/test-agent-loop.sh
+node scripts/test-provider-client-metadata.mjs
+node scripts/test-openai-compatible-structured-output.mjs
 node scripts/validate-release.mjs
 ```
 

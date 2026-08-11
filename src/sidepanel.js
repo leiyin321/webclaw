@@ -129,6 +129,7 @@ const BUILTIN_TOOLS = [
   ["knowledge_read", "Read indexed knowledge chunks."],
   ["knowledge_forget", "Remove a document from the local knowledge index."],
   ["knowledge_status", "Read local knowledge index status."],
+  ["agent_artifact_read", "Read a bounded range from a large Agent Tool Result artifact."],
   ["list_webclaw_config", "Read a redacted summary of WebClaw configuration."],
   ["propose_webclaw_config_patch", "Propose validated changes to tools, skills, schedules, or the active Provider."],
   ["apply_webclaw_config_patch", "Apply a previously validated WebClaw config patch."],
@@ -418,6 +419,7 @@ let workspaceSelection = null;
 let workspaceEditorState = null;
 const incomingWechatQueue = [];
 const renderedWechatEventIds = new Set();
+const shownRecoverableApprovalRuns = new Set();
 const chat = [];
 let storedChatMessages = [];
 let chatSessions = {
@@ -439,12 +441,57 @@ async function init() {
       return;
     }
     ensureWechatBridgeConnection();
+    checkRecoverableAgentApprovals();
+    setInterval(checkRecoverableAgentApprovals, 30000);
     drainWechatAgentEvents();
     startWechatDrainTimer();
   } catch (error) {
     elements.status.textContent = `Settings error: ${error.message}`;
     settings = normalizePanelSettings(settings);
     renderSettings();
+  }
+}
+
+async function checkRecoverableAgentApprovals() {
+  if (pendingAgentApproval) return;
+  try {
+    const response = await runtimeMessage({ type: "WEBCLAW_LIST_RECOVERABLE_AGENT_RUNS" });
+    const runs = Array.isArray(response.result) ? response.result : [];
+    const run = runs.find((candidate) => (
+      candidate?.recovery?.action === "wait_approval" &&
+      candidate?.source !== "channel" &&
+      !shownRecoverableApprovalRuns.has(candidate.runId)
+    ));
+    if (!run?.checkpoint?.pendingApproval) return;
+    shownRecoverableApprovalRuns.add(run.runId);
+    const localPort = {
+      postMessage: async (decision) => {
+        try {
+          elements.status.textContent = "Resuming approved Agent run";
+          const resumed = await runtimeMessage({
+            type: "WEBCLAW_RESUME_AGENT_RUN",
+            runId: run.runId,
+            options: {
+              recoveredApprovalDecision: {
+                approved: decision?.approved === true,
+                remember: decision?.remember === true
+              }
+            }
+          });
+          if (resumed.result?.final) appendMessage("assistant", resumed.result.final);
+          elements.status.textContent = "Ready";
+        } catch (error) {
+          shownRecoverableApprovalRuns.delete(run.runId);
+          elements.status.textContent = `Unable to resume Agent run: ${error.message}`;
+        }
+      }
+    };
+    showAgentApproval(localPort, {
+      requestId: run.runId,
+      approval: run.checkpoint.pendingApproval
+    });
+  } catch (error) {
+    console.warn("WebClaw could not inspect recoverable approvals", error);
   }
 }
 
@@ -829,7 +876,11 @@ async function submitUserMessage(content, source) {
     if (source?.type === "channel") {
       await sendWechatReply(source, result.final);
     }
-    elements.status.textContent = "Ready";
+    elements.status.textContent = result.status === "completed"
+      ? "Ready"
+      : result.status === "stuck"
+        ? "Stopped: no progress"
+        : "Error";
   } catch (error) {
     if (error.message === "Stopped") {
       if (activeAssistantNode) {
@@ -1014,6 +1065,22 @@ function handleAgentEvent(event) {
     activeTurnId = String(event.turnId || "");
     recordTurnEvent(event);
     elements.status.textContent = "Thinking";
+    return;
+  }
+  if (event.type === "run_state_changed") {
+    const labels = {
+      sampling_model: "Thinking",
+      normalizing_response: "Reading model response",
+      validating_actions: "Validating actions",
+      executing_tools: "Running tools",
+      recording_observations: "Recording tool results",
+      evaluating_progress: "Evaluating progress",
+      recovering: "Recovering",
+      completed: "Completed",
+      stuck: "Stopped: no progress",
+      failed: "Stopped"
+    };
+    elements.status.textContent = labels[event.state] || "Thinking";
     return;
   }
   if (event.type === "agent_message_delta") {
@@ -1772,11 +1839,12 @@ async function createManualSession() {
 async function clearActiveSession() {
   const session = activeSession();
   if (session.messages.length > 0 && !window.confirm(`Clear session "${session.title}"?`)) return;
+  await runtimeMessage({ type: "WEBCLAW_DELETE_AGENT_RUNS_FOR_SESSION", sessionId: session.id });
   session.messages = [];
   session.turns = [];
   session.updatedAt = Date.now();
   renderActiveSession();
-  await persistChatSessions();
+  await persistChatSessions({ replaceSessionIds: [session.id] });
 }
 
 async function deleteActiveSession() {
@@ -1786,10 +1854,12 @@ async function deleteActiveSession() {
     return;
   }
   if (!window.confirm(`Delete session "${session.title}"?`)) return;
+  const deletedSessionId = session.id;
+  await runtimeMessage({ type: "WEBCLAW_DELETE_AGENT_RUNS_FOR_SESSION", sessionId: deletedSessionId });
   chatSessions.sessions = chatSessions.sessions.filter((item) => item.id !== session.id);
   chatSessions.activeSessionId = chatSessions.sessions[0]?.id || "";
   renderActiveSession();
-  await persistChatSessions();
+  await persistChatSessions({ deletedSessionIds: [deletedSessionId] });
 }
 
 function nextManualSessionTitle() {
@@ -1810,7 +1880,7 @@ function persistChatHistory() {
   persistChatSessions();
 }
 
-function persistChatSessions() {
+function persistChatSessions(options = {}) {
   const payload = {
     activeSessionId: chatSessions.activeSessionId,
     sessions: chatSessions.sessions.map((session) => ({
@@ -1822,7 +1892,11 @@ function persistChatSessions() {
   const snapshot = structuredClone(chatSessions);
   chatSessionWriteQueue = chatSessionWriteQueue
     .catch(() => {})
-    .then(() => chrome.storage.local.set({ [CHAT_SESSIONS_KEY]: snapshot }))
+    .then(() => runtimeMessage({
+      type: "WEBCLAW_SAVE_CHAT_SESSIONS",
+      state: snapshot,
+      options
+    }))
     .catch((error) => {
       elements.status.textContent = `Chat history save failed: ${error.message}`;
     });

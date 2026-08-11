@@ -22,6 +22,8 @@ WebClaw 是一个用户控制的 Chrome 浏览器 AI 助手。用户可以连接
 
 复杂请求可以使用临时任务栈拆分为独立上下文的子任务。子任务只继承当前 Provider 和不超过父任务范围的已启用 Tool，其结果按照声明的 JSON Schema 在浏览器本地校验；完成后子任务上下文从活动栈删除。
 
+所有 Provider 共用同一 Agent Runtime。运行状态、脱敏事件、边界 checkpoint 和 Tool operation 状态保存在浏览器本地，用于在扩展后台中断后恢复确定性任务；已经完成的 Tool 结果不会重复执行，只有明确标记为安全或可重试的操作才会自动继续，外部副作用不确定的操作保持待检查状态。
+
 Channels、Schedules 和自我配置 Tool 是可选高级功能。只有用户显式配置并启用后才工作。WebClaw 仓库版本不运营用于转发提示词、页面内容或模型响应的后端服务。
 
 企业微信机器人推送不使用全局通知配置，而是通过用户单独配置并启用的 `qiyewechat_notification` Tool 发送；其 Tool name 与 Display name 使用同一规范名称。

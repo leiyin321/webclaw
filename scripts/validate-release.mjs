@@ -154,19 +154,30 @@ requireCondition(
   "controlled active Provider switching and rollback are missing"
 );
 requireCondition(
-  source.includes("webclaw-default-manual: 0.5.3-r1") &&
+  source.includes("webclaw-default-manual: 0.6.0-r1") &&
     source.includes("REPLACEABLE_DEFAULT_KNOWLEDGE_MANUAL_HASHES") &&
     source.includes("qxBFf1iNGSrbPVRGoSSOQUH8Mu9b6rgnrTBznpwsH1s") &&
     source.includes("qmON25C52Otm3zxd8xOE_dlGJ9DX-j61ECdtgLwChHA") &&
     source.includes("kcQOQB5In4knHBpRgUGlvN7AVp-W6I435HqezmffziU") &&
     source.includes("XAX46BXypQ1LE7DWmgpSqdw78M-Tw_JjPFRkRPSb4yw") &&
     source.includes("04RN_x4Yj49RriWSQGBAn7Wqh1UaDHM0iq395QmQb30") &&
+    source.includes("AUoWZDFRlU1yysJ_EojdS8ROqAgFMuvXzZz5yYheR8g") &&
     source.includes("expectedVersion: existing.entry.version") &&
-    source.includes('"webclaw", "manual", "operations", "0.5.3"'),
+    source.includes('"webclaw", "manual", "operations", "0.6.0"'),
   "versioned default knowledge manual migration is missing"
 );
 const backgroundSource = readText("src/background.js");
 const agentRuntimeSource = readText("src/agent-runtime.js");
+const agentRunnerSource = readText("src/agent-runner.js");
+const agentRecoveryPolicySource = readText("src/agent-recovery-policy.js");
+const agentRunStoreSource = readText("src/agent-run-store.js");
+const agentToolSchedulerSource = readText("src/agent-tool-scheduler.js");
+const agentContextCompactorSource = readText("src/agent-context-compactor.js");
+const agentContextProjectorSource = readText("src/agent-context-projector.js");
+const agentStateSource = readText("src/agent-state.js");
+const agentTaskSupervisorSource = readText("src/agent-task-supervisor.js");
+const agentServiceSource = readText("src/agent-service.js");
+const agentTerminalOutcomeSource = readText("src/agent-terminal-outcome.js");
 const runAgentSource = backgroundSource.match(
   /async function runAgent\([\s\S]*?\n}\n\nfunction emitAgentEvent/
 )?.[0] || "";
@@ -177,11 +188,98 @@ requireCondition(
   "the shared Agent Runtime module is missing"
 );
 requireCondition(
+  backgroundSource.includes('from "./agent-terminal-outcome.js"') &&
+    backgroundSource.includes("resolveAgentTerminalOutcome(loopResult, steps)") &&
+    agentTerminalOutcomeSource.includes('eventType: completed ? "turn_completed" : "turn_failed"') &&
+    agentTerminalOutcomeSource.includes('runStatus: completed ? "completed" : "failed"'),
+  "Agent terminal failures must not be persisted or emitted as completed turns"
+);
+requireCondition(
+  backgroundSource.includes("queueBackgroundSessionsMutation((sessionsState)") &&
+    backgroundSource.includes("return queueBackgroundSessionsMutation((state)"),
+  "background Channel and Agent event session writes must use one serialized mutation queue"
+);
+requireCondition(
   backgroundSource.includes("const PROVIDER_ADAPTER_DEFINITIONS = Object.freeze") &&
-    backgroundSource.includes("providerAdapterFor(provider).generateAgent") &&
+    backgroundSource.includes("providerAdapterFor(provider).sample") &&
     backgroundSource.includes("providerAdapterFor(provider).generateText") &&
+    backgroundSource.includes("providerProtocolCapabilities(provider)") &&
     !/provider(?:\?|\.)?\.type/.test(runAgentSource),
   "Provider-specific behavior must stay behind the Provider Adapter boundary"
+);
+requireCondition(
+  backgroundSource.includes('from "./agent-model-turn.js"') &&
+    backgroundSource.includes("normalizeAgentModelTurn(response") &&
+    !/response\.kind/.test(runAgentSource),
+  "runAgent must consume the shared ModelTurn contract instead of legacy Provider response kinds"
+);
+requireCondition(
+  backgroundSource.includes('from "./agent-runner.js"') &&
+    runAgentSource.includes("const loopResult = await runAgentLoop({") &&
+    agentRunnerSource.includes("export async function runAgentLoop") &&
+    !agentRunnerSource.includes("dispatchTool(") &&
+    !agentRunnerSource.includes("provider.type") &&
+    !agentRunnerSource.includes("chrome."),
+  "the shared AgentRunner must own loop control without depending on Providers, Tools, or Chrome APIs"
+);
+requireCondition(
+  backgroundSource.includes('from "./agent-recovery-policy.js"') &&
+    backgroundSource.includes("createAgentRecoveryPolicy({") &&
+    agentRunnerSource.includes("recoveryPolicy?.recoverProtocolError") &&
+    agentRecoveryPolicySource.includes("recoverEmptyResponse") &&
+    agentRecoveryPolicySource.includes("recoverFinalValidation") &&
+    !agentRecoveryPolicySource.includes("dispatchTool(") &&
+    !agentRecoveryPolicySource.includes("provider.type") &&
+    !agentRecoveryPolicySource.includes("chrome."),
+  "Agent recovery policy must remain bounded and independent of Providers, Tools, and Chrome APIs"
+);
+requireCondition(
+  backgroundSource.includes('from "./agent-run-store.js"') &&
+    backgroundSource.includes("createAgentRunJournal(agentRunStore") &&
+    backgroundSource.includes("checkpointAgentRun(runJournal") &&
+    backgroundSource.includes('case "WEBCLAW_LIST_RECOVERABLE_AGENT_RUNS"') &&
+    agentRunnerSource.includes('phase: "after_tool"') &&
+    agentRunStoreSource.includes('const DATABASE_NAME = "webclaw-agent-runs"') &&
+    agentRunStoreSource.includes("listRecoverableRuns") &&
+    agentRunStoreSource.includes("claimRun") &&
+    agentRunStoreSource.includes("acquireLease") &&
+    agentRunStoreSource.includes("assertRunLease") &&
+    agentRunStoreSource.includes("classifyAgentRunRecovery") &&
+    agentRunStoreSource.includes("toolOperations") &&
+    agentRunStoreSource.includes("artifacts") &&
+    agentRunStoreSource.includes("deleteRunsForSession") &&
+    agentRunStoreSource.includes("SENSITIVE_KEY") &&
+    !agentRunStoreSource.includes("dispatchTool("),
+  "Agent RunStore must persist redacted events and boundary checkpoints without depending on Tool handlers"
+);
+requireCondition(
+  agentRunnerSource.includes('from "./agent-tool-scheduler.js"') &&
+    agentToolSchedulerSource.includes("scheduleExecutionWaves") &&
+    agentToolSchedulerSource.includes("operation_state_unknown") &&
+    agentToolSchedulerSource.includes("tool_argument_validation_error") &&
+    !agentToolSchedulerSource.includes("dispatchTool("),
+  "ToolScheduler must own batching, validation, resource scheduling, and operation deduplication"
+);
+requireCondition(
+  agentRunnerSource.includes('from "./agent-state.js"') &&
+    agentStateSource.includes("Invalid Agent state transition") &&
+    agentRunnerSource.includes('transition("evaluating_progress"') &&
+    agentRunnerSource.includes('status: "stuck"'),
+  "AgentRunner explicit state transitions and stuck detection are incomplete"
+);
+requireCondition(
+  backgroundSource.includes('from "./agent-task-supervisor.js"') &&
+    agentTaskSupervisorSource.includes("createAgentTaskSupervisor") &&
+    backgroundSource.includes("taskSupervisor.recordModelStep") &&
+    backgroundSource.includes("supervisor.push"),
+  "TaskSupervisor is not the shared task-stack mutation boundary"
+);
+requireCondition(
+  backgroundSource.includes('from "./agent-service.js"') &&
+    backgroundSource.includes("agentService.run") &&
+    agentServiceSource.includes("sessionTails") &&
+    agentServiceSource.includes("activeRuns"),
+  "AgentService must serialize external runs by session"
 );
 requireCondition(
   backgroundSource.includes('"opencode": {') &&
@@ -232,9 +330,22 @@ requireCondition(
 );
 requireCondition(
   backgroundSource.includes('"context_compacted"') &&
-    backgroundSource.includes("planHistoryCompaction(messages") &&
+    backgroundSource.includes("compactAgentContext({") &&
+    backgroundSource.includes("projectAgentContext({") &&
+    agentContextCompactorSource.includes("planHistoryCompaction") &&
+    agentContextCompactorSource.includes("toolObservations") &&
+    agentContextProjectorSource.includes("systemPrompt") &&
+    backgroundSource.includes('case "agent_artifact_read"') &&
     readText("src/sidepanel.js").includes('event.type === "context_compacted"'),
   "context compaction is not wired through the unified Agent event stream"
+);
+requireCondition(
+  backgroundSource.includes('case "WEBCLAW_RESUME_AGENT_RUN"') &&
+    backgroundSource.includes("restoreRecoveredChannelApproval") &&
+    backgroundSource.includes("resumeStoredRunInBackground") &&
+    readText("src/sidepanel.js").includes("checkRecoverableAgentApprovals") &&
+    readText("src/sidepanel.js").includes('event.type === "run_state_changed"'),
+  "recoverable approvals, background run recovery, or live state UI is incomplete"
 );
 requireCondition(
   !backgroundSource.includes("TOOL_DECISION_SYSTEM_PROMPT") &&

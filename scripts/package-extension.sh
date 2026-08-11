@@ -6,6 +6,7 @@ cd "$ROOT_DIR"
 
 ./scripts/check-syntax.sh
 node scripts/test-agent-runtime.mjs
+./scripts/test-agent-loop.sh
 node scripts/test-provider-client-metadata.mjs
 node scripts/test-openai-compatible-structured-output.mjs
 node scripts/validate-release.mjs

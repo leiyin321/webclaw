@@ -2,6 +2,37 @@
 
 All notable changes to WebClaw will be documented in this file.
 
+## 0.6.0
+
+- Replace the monolithic execution loop with one provider-independent AgentRunner,
+  explicit state machine, normalized ModelTurn contract, bounded recovery policy,
+  shared budgets, progress detection, and terminal-outcome mapping.
+- Keep Provider-specific authentication, wire formats, streaming, media encoding,
+  context limits, structured output, and Tool transport behind Provider Adapters.
+- Add AgentService session serialization so Side Panel, Channel, Schedule, and
+  recovery requests cannot advance the same session concurrently.
+- Add a resource-aware ToolScheduler with argument validation, safe parallel reads,
+  write barriers, operation-key deduplication, cooperative timeouts, cancellation
+  before side effects, and conservative handling of unknown external effects.
+- Add an IndexedDB Agent RunStore for redacted events, boundary checkpoints, Tool
+  operation intent/results, leases, and large Tool-result artifacts, with session
+  cleanup and an `agent_artifact_read` Tool for bounded result retrieval.
+- Resume deterministic runs after interruption with their original budgets,
+  recovery counters, progress state, task state, and model context. Reuse completed
+  Tool observations, replay only safe or retry-safe calls, and require manual review
+  for operations whose external effects are unknown.
+- Restore pending approvals in the Side Panel or originating Channel and expose live
+  state, Tool, Task, recovery, failure, and `stuck` progress without duplicating the
+  final assistant response.
+- Route task-stack mutations through TaskSupervisor, preserve task budgets across
+  recovery, and report non-completed Agent outcomes consistently to Channels and
+  Schedules.
+- Serialize and merge background/session writes so Channel activity is not lost when
+  the Side Panel saves concurrently; retain active Turn records when bounded history
+  is trimmed and delete RunStore data when a session is cleared or removed.
+- Add focused Agent Loop tests, a production-path IndexedDB test harness, CI and
+  packaging gates, architecture documentation, and matching privacy disclosures.
+
 ## 0.5.3
 
 - Align Codex and GitHub Copilot model discovery with the current compatible CLI client identities so server-side minimum-client-version gates do not hide newly available models.

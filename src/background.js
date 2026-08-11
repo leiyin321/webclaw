@@ -26,23 +26,33 @@ import {
 } from "./knowledge-base.js";
 import {
   CONTEXT_SUMMARY_PREFIX,
-  buildCompactionSource,
   createAgentId,
   inferToolInputSchema,
-  normalizeAgentPlan,
-  planHistoryCompaction
+  normalizeAgentPlan
 } from "./agent-runtime.js";
 import {
-  completeRootTask,
-  completeTask,
+  modelTurnFinalValue,
+  normalizeAgentModelTurn
+} from "./agent-model-turn.js";
+import { runAgentLoop } from "./agent-runner.js";
+import { createAgentRecoveryPolicy } from "./agent-recovery-policy.js";
+import { compactAgentContext } from "./agent-context-compactor.js";
+import { projectAgentContext } from "./agent-context-projector.js";
+import {
+  createAgentRunJournal,
+  createAgentRunStore,
+  resolveAgentRunRecovery as resolveStoredAgentRunRecovery
+} from "./agent-run-store.js";
+import {
   createTaskRun,
-  failTask,
   normalizeTaskSpec,
-  pushTask,
-  recordTaskModelStep,
   taskStackSnapshot,
   validateTaskOutput
 } from "./task-stack.js";
+import { createAgentTaskSupervisor } from "./agent-task-supervisor.js";
+import { createAgentService } from "./agent-service.js";
+import { resolveAgentTerminalOutcome } from "./agent-terminal-outcome.js";
+import { mergeAgentSessionState } from "./agent-session-store.js";
 import { DISTRIBUTION_OAUTH_CLIENT_IDS } from "./oauth-clients.js";
 import {
   CODEX_CLIENT_VERSION,
@@ -68,6 +78,8 @@ import {
 } from "./openai-compatible-api.js";
 
 const PRODUCT_DISCLOSURE_VERSION = 1;
+const agentRunStore = createAgentRunStore();
+const agentService = createAgentService({ execute: runAgent });
 
 const PROVIDER_DEFAULTS = {
   ollama: {
@@ -379,6 +391,11 @@ const BUILTIN_TOOLS = [
     example: { tool: { name: "knowledge_status", args: {} } }
   },
   {
+    name: "agent_artifact_read",
+    description: "Read a bounded character range from a large Agent Tool Result referenced by FULL_RESULT_REF.",
+    example: { tool: { name: "agent_artifact_read", args: { artifactId: "artifact-id", offset: 0, maxChars: 8000 } } }
+  },
+  {
     name: "list_webclaw_config",
     description: "Read a redacted summary of WebClaw tools, skills, schedules, providers, channels, and pending self-management patches.",
     example: { tool: { name: "list_webclaw_config", args: {} } }
@@ -439,6 +456,7 @@ const BUILTIN_TOOL_REQUIRED_ARGS = Object.freeze({
   knowledge_search: ["query"],
   knowledge_read: ["documentId"],
   knowledge_forget: ["path"],
+  agent_artifact_read: ["artifactId"],
   propose_webclaw_config_patch: ["operations"],
   apply_webclaw_config_patch: ["patchId"],
   rollback_webclaw_config_patch: ["changeId"]
@@ -497,6 +515,7 @@ const WECHAT_BRIDGE_ALARM = "WEBCLAW_WECHAT_BRIDGE_ALARM";
 const CODEX_DEVICE_ALARM = "WEBCLAW_CODEX_DEVICE_ALARM";
 const GITHUB_COPILOT_DEVICE_ALARM = "WEBCLAW_GITHUB_COPILOT_DEVICE_ALARM";
 const SCHEDULE_ALARM = "WEBCLAW_SCHEDULE_ALARM";
+const AGENT_RECOVERY_ALARM = "WEBCLAW_AGENT_RECOVERY_ALARM";
 const SCHEDULE_CHECK_PERIOD_MINUTES = 1;
 const CHROME_AI_PAGE_CONTEXT_TEXT_CHARS = 4000;
 const CHROME_AI_PAGE_CONTEXT_SUMMARY_SOURCE_CHARS = 12000;
@@ -539,6 +558,8 @@ const wechatAgentQueue = [];
 const wechatAgentHistoryByPeer = new Map();
 const wechatAgentEvents = [];
 const pendingChannelApprovals = new Map();
+const restoredChannelApprovalRuns = new Set();
+const resumedBackgroundAgentRuns = new Set();
 const codexAuthorizationFlows = new Map();
 const codexDevicePollRequests = new Map();
 const githubCopilotDevicePollRequests = new Map();
@@ -585,12 +606,13 @@ const REPLACEABLE_DEFAULT_KNOWLEDGE_MANUAL_HASHES = new Set([
   "qmON25C52Otm3zxd8xOE_dlGJ9DX-j61ECdtgLwChHA",
   "kcQOQB5In4knHBpRgUGlvN7AVp-W6I435HqezmffziU",
   "XAX46BXypQ1LE7DWmgpSqdw78M-Tw_JjPFRkRPSb4yw",
-  "04RN_x4Yj49RriWSQGBAn7Wqh1UaDHM0iq395QmQb30"
+  "04RN_x4Yj49RriWSQGBAn7Wqh1UaDHM0iq395QmQb30",
+  "AUoWZDFRlU1yysJ_EojdS8ROqAgFMuvXzZz5yYheR8g"
 ]);
-const DEFAULT_KNOWLEDGE_MANUAL = `<!-- webclaw-default-manual: 0.5.3-r1 -->
+const DEFAULT_KNOWLEDGE_MANUAL = `<!-- webclaw-default-manual: 0.6.0-r1 -->
 # WebClaw Operation Manual
 
-Built-in operating reference for WebClaw 0.5.3. The file is stored in VFS and indexed into the local knowledge base. WebClaw upgrades an unchanged historical default copy, but preserves a copy that the user has edited.
+Built-in operating reference for WebClaw 0.6.0. The file is stored in VFS and indexed into the local knowledge base. WebClaw upgrades an unchanged historical default copy, but preserves a copy that the user has edited.
 
 ## 1. What WebClaw is
 WebClaw is a Chrome extension AI agent. It can converse in the side panel and through connected WeChat or Telegram channels, use configured model providers, operate the active browser tab, use a browser-backed virtual filesystem (VFS), run schedules, and retain durable workspace context.
@@ -612,6 +634,15 @@ WebClaw is user controlled:
 - When history exceeds the active model adapter's budget, WebClaw compacts older messages into bounded factual execution state while retaining recent context. The summary must preserve goals, constraints, verified Tool results, relevant errors, identifiers, and unfinished work.
 - Create a new session for unrelated work. Clear a session to remove its conversation history; durable workspace files and the knowledge index are separate.
 - Switching providers does not erase the session. Reuse prior verified tool results, but re-check current browser state before acting.
+
+## 2.1 Agent execution and recovery
+- Every Provider uses the same AgentRunner state machine. Visible states include model sampling, response normalization, action validation, Tool execution, observation recording, progress evaluation, bounded recovery, completion, failure, interruption, and stuck detection.
+- AgentService serializes work for one session across the Side Panel, Channels, Schedules, and interruption recovery. A second request cannot advance the same session at the same time.
+- Stop prevents a Tool from starting when cancellation has already been requested and passes an AbortSignal to a running Tool. A Tool that ignores cancellation may still have an unknown external effect, so do not assume a timed-out or interrupted write failed.
+- RunStore keeps redacted events, deterministic boundary checkpoints, Tool operation state, and large-result artifacts in browser IndexedDB. Clearing or deleting a session also removes its related Agent run records.
+- After interruption, WebClaw restores the saved model context, budgets, retry counters, no-progress state, task state, and working directory. A completed Tool result is reused; a started Tool is replayed only when marked safe or retry-safe. Unknown side effects stay pending for manual review.
+- Pending approvals can reappear in the Side Panel or original Channel. Never bypass an approval by changing Provider or asking the model to claim the operation already ran.
+- Large Tool results may be replaced in context by a FULL_RESULT_REF artifact. Call agent_artifact_read with artifactId, offset, and maxChars to retrieve only the range needed for the task.
 
 ## 3. Model providers
 WebClaw supports local Ollama, OpenAI-compatible endpoints, OpenCode Zen, Codex/ChatGPT OAuth, GitHub Copilot OAuth, and Chrome AI when available.
@@ -830,7 +861,7 @@ function buildAgentSystemPrompt(settings) {
     .join("\n\n");
   return `You are WebClaw, a browser extension AI agent.
 
-Use the enabled tools when they are needed to complete the user's request. The WebClaw runtime supplies the available Tool definitions and handles their transport format. Call one Tool at a time, wait for its result, and continue until the task is complete. If no Tool is needed, answer directly.
+Use the enabled tools when they are needed to complete the user's request. The WebClaw runtime supplies the available Tool definitions and handles their transport format. You may call multiple independent read-only Tools in one response; WebClaw schedules conflicting or mutating Tools safely. Wait for all returned TOOL_RESULT observations before continuing. If no Tool is needed, answer directly.
 
 Do not include a final answer in the same response as a tool call. After using a tool, wait for the TOOL_RESULT before answering the user.${runJsNote}
 If a TOOL_RESULT reports ok:false, read its error, correct the tool arguments or choose another approach, and then continue. Do not repeat the same invalid call unchanged.
@@ -1027,6 +1058,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   syncWechatBridge(settings);
   ensureWechatBridgeAlarm(settings);
   ensureScheduleAlarm(settings);
+  chrome.alarms.create(AGENT_RECOVERY_ALARM, { periodInMinutes: 1 });
   if (chrome.sidePanel?.setPanelBehavior) {
     await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
   }
@@ -1034,11 +1066,13 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 chrome.runtime.onStartup.addListener(async () => {
   await markStoredTaskRunsInterrupted();
+  reportRecoverableAgentRuns().catch(() => {});
   const settings = await ensureSettings();
   await initializeWorkspaceDefaults();
   syncWechatBridge(settings);
   ensureWechatBridgeAlarm(settings);
   ensureScheduleAlarm(settings);
+  chrome.alarms.create(AGENT_RECOVERY_ALARM, { periodInMinutes: 1 });
 });
 
 // Service workers can be created by opening the file manager rather than a chat turn.
@@ -1046,6 +1080,10 @@ chrome.runtime.onStartup.addListener(async () => {
 initializeWorkspaceDefaults();
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === AGENT_RECOVERY_ALARM) {
+    await reportRecoverableAgentRuns();
+    return;
+  }
   const settings = await ensureSettings();
   if (alarm.name === WECHAT_BRIDGE_ALARM) {
     if (hasAcceptedProductDisclosure(settings) && enabledChannels(settings).length > 0) syncWechatBridge(settings);
@@ -1148,7 +1186,7 @@ function handleAgentStreamPort(port) {
     };
     const task = message.type === "start_schedule"
       ? runScheduleNow(message.scheduleId, streamOptions)
-      : runAgent(message.messages || [], streamOptions);
+      : agentService.run(message.messages || [], streamOptions);
     task
       .then((result) => safePortPost(port, {
         type: "final",
@@ -1309,8 +1347,27 @@ async function handleMessage(message, sender) {
     case "WEBCLAW_CLEAR_OPERATION_APPROVAL_GRANTS":
       await clearOperationApprovalGrants();
       return { ok: true };
+    case "WEBCLAW_LIST_RECOVERABLE_AGENT_RUNS":
+      return {
+        ok: true,
+        result: await Promise.all((await agentRunStore.listRecoverableRuns()).map(async (run) => ({
+          ...run,
+          recovery: await resolveAgentRunRecovery(run)
+        })))
+      };
+    case "WEBCLAW_GET_AGENT_RUN":
+      return { ok: true, result: await agentRunStore.getRun(String(message.runId || "")) };
+    case "WEBCLAW_DELETE_AGENT_RUNS_FOR_SESSION":
+      return { ok: true, result: await agentRunStore.deleteRunsForSession(String(message.sessionId || "")) };
+    case "WEBCLAW_SAVE_CHAT_SESSIONS":
+      return {
+        ok: true,
+        result: await saveChatSessionsFromClient(message.state, message.options || {})
+      };
+    case "WEBCLAW_RESUME_AGENT_RUN":
+      return { ok: true, result: await resumeRecoverableAgentRun(message.runId, message.options || {}) };
     case "WEBCLAW_AGENT_MESSAGE":
-      return { ok: true, result: await runAgent(message.messages || []) };
+      return { ok: true, result: await agentService.run(message.messages || [], message.options || {}) };
     default:
       throw new Error(`Unknown message type: ${message?.type}`);
   }
@@ -2010,7 +2067,7 @@ async function runDueSchedules(baseSettings) {
       try {
         const result = await executeSchedule(schedule, settings);
         schedule.lastResult = truncateText(result.final || "", 4000);
-        schedule.lastError = "";
+        schedule.lastError = result.status === "completed" ? "" : truncateText(result.final || result.status || "Agent failed", 2000);
       } catch (error) {
         schedule.lastError = normalizeError(error);
       } finally {
@@ -2044,11 +2101,12 @@ async function executeSchedule(schedule, settings, options = {}) {
   ].join("\n");
   const sessionId = options.sessionId || await activeChatSessionIdForBackground();
   const workingDirectory = options.workingDirectory || await getBackgroundSessionWorkingDirectory(sessionId);
-  return runAgent([{ role: "user", content }], {
+  return agentService.run([{ role: "user", content }], {
     ...authorizationOptions,
     settingsOverride: settings,
     workingDirectory,
     sessionId,
+    source: "schedule",
     authorizationScope: {
       type: "schedule",
       id: String(schedule.id || schedule.name),
@@ -2073,10 +2131,11 @@ async function runScheduleNow(scheduleId, options = {}) {
       ? schedule.nextRunAt
       : nextScheduleRun(schedule.expression, Date.now());
     schedule.lastResult = truncateText(result.final || "", 4000);
-    schedule.lastError = "";
+    schedule.lastError = result.status === "completed" ? "" : truncateText(result.final || result.status || "Agent failed", 2000);
     await persistSchedules(settings, schedules);
     return {
       final: result.final,
+      status: result.status,
       schedule
     };
   } catch (error) {
@@ -2752,7 +2811,6 @@ async function processWechatAgentQueue() {
       peerId,
       messageId: payload.messageId
     });
-    const history = await loadChannelSessionAgentHistory(payload, { sessionId });
     emitWechatAgentEvent({
       role: "status",
       text: `Channel agent running for ${channelId}/${peerId}`,
@@ -2765,7 +2823,15 @@ async function processWechatAgentQueue() {
       sessionId
     };
     channelOptions.onEvent = (event) => handleBackgroundAgentEvent(sessionId, payload, event);
-    const result = await runAgent(history, channelOptions);
+    let history = [];
+    const result = await agentService.run(async () => {
+      history = await loadChannelSessionAgentHistory(payload, { sessionId });
+      return history;
+    }, {
+      ...channelOptions,
+      source: "channel",
+      channelRoute: channelAuthorizationRoute(payload)
+    });
     await applyBackgroundContextCompaction(sessionId, result.contextCompaction);
     if (result.toolTrajectory) {
       await appendChannelSessionMessage(payload, "tool", result.toolTrajectory.display, {
@@ -2786,7 +2852,10 @@ async function processWechatAgentQueue() {
       contextToken: payload.contextToken,
       text: result.final
     });
-    await appendChannelSessionMessage(payload, "assistant", result.final, { sessionId });
+    await appendChannelSessionMessage(payload, "assistant", result.final, {
+      sessionId,
+      status: result.status
+    });
     ackPendingWechatMessage(payload.queueId);
     emitWechatAgentEvent({
       role: "assistant",
@@ -2897,43 +2966,43 @@ function dataUrlToBlob(dataUrl, fallbackMime = "application/octet-stream") {
 }
 
 async function appendChannelSessionMessage(payload, role, content, options = {}) {
-  const stored = await chrome.storage.local.get(CHAT_SESSIONS_KEY);
-  const sessionsState = normalizeChatSessionsForBackground(stored[CHAT_SESSIONS_KEY]);
-  const sessionId = String(options.sessionId || sessionsState.activeSessionId || "");
-  let session = sessionsState.sessions.find((item) => item.id === sessionId);
-  if (!session) {
-    session = createBackgroundSession();
-    sessionsState.sessions.unshift(session);
-    sessionsState.activeSessionId = session.id;
-  }
-  session.messages.push({
-    id: crypto.randomUUID(),
-    role: normalizeBackgroundMessageRole(role),
-    content: String(content || ""),
-    modelContent: String(options.modelContent || content || ""),
-    hidden: Boolean(options.hidden),
-    excludedFromContext: Boolean(options.excludedFromContext),
-    contextSummary: Boolean(options.contextSummary),
-    turnId: String(options.turnId || ""),
-    itemId: String(options.itemId || ""),
-    kind: String(options.kind || ""),
-    status: String(options.status || ""),
-    tool: String(options.tool || ""),
-    args: options.args,
-    result: options.result,
-    durationMs: Number(options.durationMs || 0),
-    plan: options.plan,
-    media: Array.isArray(options.media) ? options.media : [],
-    time: Date.now()
+  return queueBackgroundSessionsMutation((sessionsState) => {
+    const sessionId = String(options.sessionId || sessionsState.activeSessionId || "");
+    let session = sessionsState.sessions.find((item) => item.id === sessionId);
+    if (!session) {
+      session = createBackgroundSession();
+      sessionsState.sessions.unshift(session);
+      sessionsState.activeSessionId = session.id;
+    }
+    session.messages.push({
+      id: crypto.randomUUID(),
+      role: normalizeBackgroundMessageRole(role),
+      content: String(content || ""),
+      modelContent: String(options.modelContent || content || ""),
+      hidden: Boolean(options.hidden),
+      excludedFromContext: Boolean(options.excludedFromContext),
+      contextSummary: Boolean(options.contextSummary),
+      turnId: String(options.turnId || ""),
+      itemId: String(options.itemId || ""),
+      kind: String(options.kind || ""),
+      status: String(options.status || ""),
+      tool: String(options.tool || ""),
+      args: options.args,
+      result: options.result,
+      durationMs: Number(options.durationMs || 0),
+      plan: options.plan,
+      media: Array.isArray(options.media) ? options.media : [],
+      time: Date.now()
+    });
+    session.messages = session.messages.filter((message) => message.content).slice(-MAX_STORED_CHAT_MESSAGES);
+    session.updatedAt = Date.now();
+    sessionsState.sessions = [
+      session,
+      ...sessionsState.sessions.filter((item) => item.id !== session.id)
+    ].slice(0, MAX_STORED_SESSIONS);
+    if (!sessionsState.activeSessionId) sessionsState.activeSessionId = session.id;
+    return session.id;
   });
-  session.messages = session.messages.filter((message) => message.content).slice(-MAX_STORED_CHAT_MESSAGES);
-  session.updatedAt = Date.now();
-  sessionsState.sessions = [
-    session,
-    ...sessionsState.sessions.filter((item) => item.id !== session.id)
-  ].slice(0, MAX_STORED_SESSIONS);
-  if (!sessionsState.activeSessionId) sessionsState.activeSessionId = session.id;
-  await chrome.storage.local.set({ [CHAT_SESSIONS_KEY]: sessionsState });
 }
 
 async function loadChannelSessionAgentHistory(payload, options = {}) {
@@ -3068,23 +3137,46 @@ function handleBackgroundAgentEvent(sessionId, payload, event) {
 }
 
 function queueBackgroundSessionMutation(sessionId, mutate) {
+  return queueBackgroundSessionsMutation((state) => {
+    const session = state.sessions.find((item) => item.id === String(sessionId || ""));
+    if (!session) return;
+    mutate(session);
+    session.messages = session.messages.filter((message) => message.content).slice(-MAX_STORED_CHAT_MESSAGES);
+    session.updatedAt = Date.now();
+    state.sessions = [
+      session,
+      ...state.sessions.filter((item) => item.id !== session.id)
+    ].slice(0, MAX_STORED_SESSIONS);
+  });
+}
+
+function queueBackgroundSessionsMutation(mutate) {
   backgroundAgentEventWriteQueue = backgroundAgentEventWriteQueue
     .catch(() => {})
     .then(async () => {
       const stored = await chrome.storage.local.get(CHAT_SESSIONS_KEY);
       const state = normalizeChatSessionsForBackground(stored[CHAT_SESSIONS_KEY]);
-      const session = state.sessions.find((item) => item.id === String(sessionId || ""));
-      if (!session) return;
-      mutate(session);
-      session.messages = session.messages.filter((message) => message.content).slice(-MAX_STORED_CHAT_MESSAGES);
-      session.updatedAt = Date.now();
-      state.sessions = [
-        session,
-        ...state.sessions.filter((item) => item.id !== session.id)
-      ].slice(0, MAX_STORED_SESSIONS);
+      const result = await mutate(state);
       await chrome.storage.local.set({ [CHAT_SESSIONS_KEY]: state });
+      return result;
     });
   return backgroundAgentEventWriteQueue;
+}
+
+function saveChatSessionsFromClient(value, options = {}) {
+  const incoming = normalizeChatSessionsForBackground(value);
+  return queueBackgroundSessionsMutation((state) => {
+    const merged = mergeAgentSessionState(state, incoming, {
+      deletedSessionIds: options.deletedSessionIds,
+      replaceSessionIds: options.replaceSessionIds,
+      maxSessions: MAX_STORED_SESSIONS,
+      maxMessages: MAX_STORED_CHAT_MESSAGES,
+      maxTurns: 100
+    });
+    state.activeSessionId = merged.activeSessionId;
+    state.sessions = merged.sessions;
+    return merged;
+  });
 }
 
 async function applyBackgroundContextCompaction(sessionId, value) {
@@ -3131,14 +3223,13 @@ function normalizeChatSessionsForBackground(value) {
 }
 
 async function activeChatSessionIdForBackground() {
-  const stored = await chrome.storage.local.get(CHAT_SESSIONS_KEY);
-  const sessionsState = normalizeChatSessionsForBackground(stored[CHAT_SESSIONS_KEY]);
-  if (sessionsState.activeSessionId) return sessionsState.activeSessionId;
-  const session = createBackgroundSession();
-  sessionsState.sessions.unshift(session);
-  sessionsState.activeSessionId = session.id;
-  await chrome.storage.local.set({ [CHAT_SESSIONS_KEY]: sessionsState });
-  return session.id;
+  return queueBackgroundSessionsMutation((sessionsState) => {
+    if (sessionsState.activeSessionId) return sessionsState.activeSessionId;
+    const session = createBackgroundSession();
+    sessionsState.sessions.unshift(session);
+    sessionsState.activeSessionId = session.id;
+    return session.id;
+  });
 }
 
 async function getBackgroundSessionWorkingDirectory(sessionId) {
@@ -3383,7 +3474,7 @@ function rootTaskTitle(messages) {
 }
 
 function parseTaskOutput(response) {
-  const candidate = response?.value !== undefined ? response.value : response?.text;
+  const candidate = modelTurnFinalValue(response);
   if (typeof candidate !== "string") return candidate;
   const text = stripMarkdownFence(candidate.trim());
   try {
@@ -3469,8 +3560,8 @@ async function runAgent(uiMessages, options = {}) {
   const turnId = String(options.turnId || createAgentId("turn"));
   const turnStartedAt = Date.now();
   const steps = [];
-  let contextCompaction = null;
-  const ownsTaskRun = !options.taskRun;
+  let contextCompaction = options.contextCompaction || null;
+  const ownsTaskRun = options.ownsTaskRun === undefined ? !options.taskRun : options.ownsTaskRun === true;
   const taskRun = options.taskRun || createTaskRun({
     sessionId: options.sessionId,
     providerId: settings.activeProviderId,
@@ -3482,10 +3573,38 @@ async function runAgent(uiMessages, options = {}) {
     maxModelSteps: settings.taskMaxModelSteps
   });
   const taskFrameId = String(options.taskFrameId || taskRun.rootTaskId);
+  const taskSupervisor = options.taskSupervisor || createAgentTaskSupervisor(taskRun, {
+    persist: () => persistTaskRuns()
+  });
   options = {
     ...options,
     taskRun,
-    taskFrameId
+    taskFrameId,
+    taskSupervisor
+  };
+  const runJournal = await startAgentRunJournal({
+    runId: turnId,
+    sessionId: String(options.sessionId || ""),
+    providerId: String(settings.activeProviderId || ""),
+    taskRunId: taskRun.id,
+    taskId: taskFrameId,
+    source: String(options.source || options.authorizationMode || "sidepanel"),
+    channelRoute: options.channelRoute || null,
+    authorizationScope: options.authorizationScope || null,
+    nested: options.nested === true,
+    createdAt: turnStartedAt
+  });
+  options = {
+    ...options,
+    runJournal,
+    requestApproval: createJournaledApprovalRequester(options.requestApproval, {
+      runJournal,
+      turnId,
+      taskRun,
+      taskFrameId,
+      recoveredApproval: options.recoveredApproval,
+      emitOptions: { ...options, runJournal }
+    })
   };
   if (ownsTaskRun) {
     activeTaskRuns.set(taskRun.id, taskRun);
@@ -3508,282 +3627,462 @@ async function runAgent(uiMessages, options = {}) {
     step: Number(startedTask?.step || 0),
     maxSteps: Number(startedTask?.maxSteps || settings.maxSteps || 8)
   });
+  const runHeartbeat = setInterval(() => runJournal?.heartbeat(), 10000);
+  let taskRunFinalized = false;
 
-  const finish = async (final, metadata = {}) => {
+  const finish = async (outcome) => {
+    clearInterval(runHeartbeat);
     const completedAt = Date.now();
-    emitAgentEvent(options, "turn_completed", {
+    emitAgentEvent(options, outcome.eventType, {
       turnId,
-      status: "completed",
+      status: outcome.status,
+      error: outcome.status === "completed" ? "" : outcome.final,
       completedAt,
       durationMs: completedAt - turnStartedAt,
       taskRunId: taskRun.id,
       taskId: taskFrameId
     });
     if (ownsTaskRun) {
-      completeRootTask(taskRun, "completed");
+      await taskSupervisor.completeRoot(outcome.taskStatus, {
+        status: outcome.status,
+        reason: outcome.metadata?.reason || ""
+      });
       activeTaskRuns.delete(taskRun.id);
-      await persistTaskRuns(taskRunSummary(taskRun, "completed"));
+      await persistTaskRuns(taskRunSummary(taskRun, outcome.taskStatus));
+      taskRunFinalized = true;
     }
-    return agentResult(final, steps, {
+    await closeAgentRunJournal(runJournal, outcome.runStatus, {
+      final: outcome.final,
+      status: outcome.status,
+      metadata: outcome.metadata,
+      workingDirectory
+    });
+    return agentResult(outcome.final, steps, {
       turnId,
-      status: "completed",
+      status: outcome.status,
       startedAt: turnStartedAt,
       completedAt,
       contextCompaction,
       workingDirectory,
       taskRunId: taskRun.id,
       taskId: taskFrameId,
-      ...metadata
+      ...outcome.metadata
     });
   };
 
   try {
-    const prepared = await prepareAgentHistory(settings, uiMessages, options, turnId);
-    contextCompaction = prepared.contextCompaction;
-    let workspaceBootstrap = "";
-    try {
-      workspaceBootstrap = await loadWorkspaceBootstrapContext(settings);
-    } catch (error) {
-      console.warn("WebClaw workspace bootstrap load failed", error);
+    let messages;
+    if (Array.isArray(options.resumeMessages) && options.resumeMessages.length > 0) {
+      messages = structuredClone(options.resumeMessages);
+      if (messages[0]?.role !== "system") {
+        throw new Error("Recoverable Agent context must start with a system message.");
+      }
+    } else {
+      const prepared = await prepareAgentHistory(settings, uiMessages, options, turnId);
+      contextCompaction = prepared.contextCompaction;
+      let workspaceBootstrap = "";
+      try {
+        workspaceBootstrap = await loadWorkspaceBootstrapContext(settings);
+      } catch (error) {
+        console.warn("WebClaw workspace bootstrap load failed", error);
+      }
+      const projection = projectAgentContext({
+        systemPrompt: buildAgentSystemPrompt(settings),
+        workingDirectory,
+        workspaceBootstrap,
+        tokenBudget: agentHistoryTokenBudget(settings),
+        messages: prepared.messages.map(({ id, role, content, media, nativeItem }) => ({ id, role, content, media, nativeItem }))
+      });
+      messages = projection.messages;
+      if (contextCompaction) contextCompaction.contextRevision = projection.revision;
     }
-    const systemPrompt = [
-      buildAgentSystemPrompt(settings),
-      `Current virtual filesystem working directory: ${workingDirectory}`,
-      workspaceBootstrap
-    ].filter(Boolean).join("\n\n");
-    const messages = [
-      { role: "system", content: systemPrompt },
-      ...prepared.messages.map(({ id, role, content, media }) => ({ id, role, content, media }))
-    ];
+    const recoveryPolicy = createAgentRecoveryPolicy({
+      counters: options.runtimeState?.recovery?.counters,
+      maxProtocolRetries: options.runtimeState?.recovery?.limits?.protocol,
+      maxEmptyResponseRetries: options.runtimeState?.recovery?.limits?.emptyResponse,
+      maxFinalValidationRetries: options.runtimeState?.recovery?.limits?.finalValidation,
+      maxModelRetries: options.runtimeState?.recovery?.limits?.model
+    });
 
-    for (let step = 0; step < Number(settings.maxSteps || 8); step += 1) {
-      throwIfAborted(options.signal);
-      recordTaskModelStep(taskRun, taskFrameId);
-      persistTaskRuns().catch(() => {});
-      emitAgentEvent(options, "task_progress", {
+    const loopResult = await runAgentLoop({
+      runId: turnId,
+      signal: options.signal,
+      toolOperationStore: {
+        get: (key) => agentRunStore.getOperation(key),
+        start: (key, value) => agentRunStore.startOperation(key, value, runJournal.ownerId),
+        complete: (key, value) => agentRunStore.completeOperation(key, value, runJournal.ownerId)
+      },
+      validateToolCall: (toolCall) => validateAgentToolCall(settings, toolCall),
+      maxSteps: Number(settings.maxSteps || 8),
+      messages,
+      recoveryPolicy,
+      runtimeState: options.runtimeState,
+      pendingToolCalls: options.pendingToolCalls,
+      pendingToolStep: options.pendingToolStep,
+      shouldRecoverEmptyAssistant: () => !options.outputSchema,
+      assertCanContinue: () => throwIfAborted(options.signal),
+      onStateTransition: (transition) => emitAgentEvent(options, "run_state_changed", {
         turnId,
         taskRunId: taskRun.id,
         taskId: taskFrameId,
-        phase: "model",
-        step: Number(taskRun.tasks[taskFrameId]?.step || step + 1),
-        maxSteps: Number(taskRun.tasks[taskFrameId]?.maxSteps || settings.maxSteps || 8)
-      });
-      const modelItemId = createAgentId("item");
-      emitAgentEvent(options, "item_started", {
-        turnId,
-        item: {
-          id: modelItemId,
-          type: "agent_message",
-          status: "in_progress"
-        }
-      });
-      const response = await callAgentModel(settings, messages, {
+        ...transition
+      }),
+      beforeModelStep: async ({ step, messages: modelMessages, runtimeState }) => {
+        await taskSupervisor.recordModelStep(taskFrameId);
+        emitAgentEvent(options, "task_progress", {
+          turnId,
+          taskRunId: taskRun.id,
+          taskId: taskFrameId,
+          phase: "model",
+          step: Number(taskRun.tasks[taskFrameId]?.step || step + 1),
+          maxSteps: Number(taskRun.tasks[taskFrameId]?.maxSteps || settings.maxSteps || 8)
+        });
+        const modelItemId = createAgentId("item");
+        emitAgentEvent(options, "item_started", {
+          turnId,
+          item: {
+            id: modelItemId,
+            type: "agent_message",
+            status: "in_progress"
+          }
+        });
+        await checkpointAgentRun(runJournal, {
+          phase: "before_model",
+          pendingApproval: null,
+          step,
+          taskRunId: taskRun.id,
+          taskId: taskFrameId,
+          workingDirectory,
+          messages: modelMessages,
+          taskRun,
+          contextCompaction,
+          runtimeState,
+          taskStack: taskStackSnapshot(taskRun)
+        });
+        return { modelItemId };
+      },
+      sampleModel: ({ messages: modelMessages, stepContext }) => callAgentModel(settings, modelMessages, {
         signal: options.signal,
         requestApproval: options.requestApproval,
         authorizationMode: options.authorizationMode,
         onAuthorizationChallenge: options.onAuthorizationChallenge,
         onDelta: (delta) => {
+          runJournal?.heartbeat();
           options.onDelta?.(delta);
           emitAgentEvent(options, "agent_message_delta", {
             turnId,
-            itemId: modelItemId,
+            itemId: stepContext.modelItemId,
             delta
           });
         }
-      });
-      steps.push({
-        type: "model",
-        content: response.kind === "assistant"
-          ? response.text
-          : response.kind === "tool_call"
-            ? JSON.stringify({ tool: response.tool })
-            : response.raw
-      });
-      emitAgentEvent(options, "item_completed", {
-        turnId,
-        item: {
-          id: modelItemId,
-          type: "agent_message",
-          status: "completed",
-          text: response.kind === "assistant" ? response.text : ""
-        }
-      });
-
-      if (response.kind === "protocol_error") {
-        return finish(`${response.text}\n\n原始输出：\n\n${truncateText(response.raw, 6000)}`);
-      }
-      if (response.kind === "assistant") {
-        if (options.outputSchema) {
-          const output = parseTaskOutput(response);
-          const validation = validateTaskOutput(output, options.outputSchema);
-          const outputChars = safeJsonLength(output);
-          if (
-            validation.valid &&
-            Number(options.outputMaxChars || 0) > 0 &&
-            outputChars > Number(options.outputMaxChars)
-          ) {
-            validation.valid = false;
-            validation.errors.push({
-              path: "$",
-              message: `serialized output is ${outputChars} characters; limit is ${Number(options.outputMaxChars)}`
-            });
-          }
-          if (!validation.valid) {
-            const validationResult = {
-              ok: false,
-              errorType: "task_output_validation_error",
-              errors: validation.errors
-            };
-            steps.push({
-              type: "task_output_validation_error",
-              result: validationResult
-            });
-            messages.push({
-              role: "assistant",
-              content: response.text
-            });
-            messages.push({
-              role: "user",
-              content: [
-                "TASK_OUTPUT_VALIDATION_ERROR",
-                JSON.stringify(validationResult),
-                "Return a corrected final JSON value matching the required output schema. Do not claim completion until it validates."
-              ].join("\n")
-            });
-            emitAgentEvent(options, "task_output_invalid", {
-              turnId,
-              taskRunId: taskRun.id,
-              taskId: taskFrameId,
-              errors: validation.errors
-            });
-            continue;
-          }
-          return finish(JSON.stringify(output), { taskOutput: output });
-        }
-        return finish(response.text);
-      }
-      if (response.kind !== "tool_call" || !response.tool?.name) {
-        return finish(String(response.text || response.raw || ""));
-      }
-
-      const toolName = canonicalToolName(response.tool.name);
-      const toolArgs = response.tool.args || {};
-      const toolCallId = String(response.tool.callId || createAgentId("call"));
-      const toolItemId = createAgentId("item");
-      options.onToolCall?.({
-        name: toolName,
-        args: toolArgs
-      });
-      emitAgentEvent(options, "item_started", {
-        turnId,
-        item: {
-          id: toolItemId,
-          type: "tool_call",
-          status: "in_progress",
-          tool: toolName,
-          args: toolArgs,
-          callId: toolCallId,
-          startedAt: Date.now()
-        }
-      });
-      emitAgentEvent(options, "task_progress", {
-        turnId,
-        taskRunId: taskRun.id,
-        taskId: taskFrameId,
-        phase: "tool",
-        tool: toolName,
-        step: Number(taskRun.tasks[taskFrameId]?.step || step + 1),
-        maxSteps: Number(taskRun.tasks[taskFrameId]?.maxSteps || settings.maxSteps || 8)
-      });
-
-      let toolResult;
-      const toolStartedAt = Date.now();
-      try {
-        options.onStatus?.(`Running ${toolName}`);
-        toolResult = await dispatchTool(toolName, toolArgs, settings, {
-          ...options,
+      }),
+      onModelTurn: ({ stepContext, assistantText, toolCalls, protocolError }) => {
+        steps.push({
+          type: "model",
+          content: protocolError
+            ? protocolError.raw
+            : toolCalls.length > 0
+              ? JSON.stringify({ tools: toolCalls })
+              : assistantText
+        });
+        emitAgentEvent(options, "item_completed", {
           turnId,
-          toolItemId,
-          workingDirectory,
-          onWorkingDirectoryChange: (nextPath) => {
-            workingDirectory = normalizeWorkingDirectory(nextPath);
-            options.onWorkingDirectoryChange?.(workingDirectory);
-            if (options.sessionId) {
-              queueBackgroundSessionMutation(options.sessionId, (session) => {
-                session.workingDirectory = workingDirectory;
-              }).catch(() => {});
-            }
-          },
-          onPlan: (plan) => {
-            options.onPlan?.(plan);
-            emitAgentEvent(options, "plan_updated", {
-              turnId,
-              itemId: toolItemId,
-              ...plan
-            });
+          item: {
+            id: stepContext.modelItemId,
+            type: "agent_message",
+            status: "completed",
+            text: protocolError ? protocolError.raw : assistantText
           }
         });
-      } catch (error) {
-        if (options.signal?.aborted || error?.name === "AbortError" || normalizeError(error) === "Stopped") {
-          throw new Error("Stopped");
+      },
+      handleAssistant: ({ turn, assistantText }) => {
+        if (!options.outputSchema) return { final: assistantText };
+        const output = parseTaskOutput(turn);
+        const validation = validateTaskOutput(output, options.outputSchema);
+        const outputChars = safeJsonLength(output);
+        if (
+          validation.valid &&
+          Number(options.outputMaxChars || 0) > 0 &&
+          outputChars > Number(options.outputMaxChars)
+        ) {
+          validation.valid = false;
+          validation.errors.push({
+            path: "$",
+            message: `serialized output is ${outputChars} characters; limit is ${Number(options.outputMaxChars)}`
+          });
         }
-        toolResult = {
+        if (validation.valid) {
+          return {
+            final: JSON.stringify(output),
+            metadata: { taskOutput: output }
+          };
+        }
+        const validationResult = {
           ok: false,
-          error: normalizeError(error),
-          errorType: "tool_execution_error"
+          errorType: "task_output_validation_error",
+          errors: validation.errors
+        };
+        steps.push({
+          type: "task_output_validation_error",
+          result: validationResult
+        });
+        emitAgentEvent(options, "task_output_invalid", {
+          turnId,
+          taskRunId: taskRun.id,
+          taskId: taskFrameId,
+          errors: validation.errors
+        });
+        const recovery = recoveryPolicy.recoverFinalValidation({
+          assistantText,
+          validationResult,
+          instruction: "Return a corrected final JSON value matching the required output schema. Do not claim completion until it validates."
+        });
+        if (recovery.action !== "retry") {
+          return {
+            final: `Task output remained invalid after ${recovery.limits.finalValidation} correction attempts.`
+          };
+        }
+        return {
+          continue: true,
+          messages: recovery.messages
+        };
+      },
+      onToolBatchCompleted: ({ batch }) => {
+        for (const entry of batch.results) {
+          const toolName = canonicalToolName(entry?.call?.name);
+          const toolArgs = entry?.call?.args || {};
+          if (Array.isArray(entry?.result?.messages)) {
+            const summarized = summarizeToolResult(entry.result.toolResult);
+            steps.push({
+              type: "tool",
+              tool: toolName,
+              args: toolArgs,
+              result: summarized
+            });
+            if (entry.deduplicated) {
+              const toolItemId = createAgentId("item");
+              options.onToolCall?.({ name: toolName, args: toolArgs });
+              emitAgentEvent(options, "item_started", {
+                turnId,
+                item: {
+                  id: toolItemId,
+                  type: "tool_call",
+                  status: "in_progress",
+                  tool: toolName,
+                  args: toolArgs,
+                  callId: entry?.call?.callId || ""
+                }
+              });
+              emitAgentEvent(options, "item_completed", {
+                turnId,
+                item: {
+                  id: toolItemId,
+                  type: "tool_call",
+                  status: summarized?.ok === false ? "failed" : "completed",
+                  tool: toolName,
+                  args: toolArgs,
+                  result: summarized,
+                  callId: entry?.call?.callId || "",
+                  durationMs: 0,
+                  deduplicated: true
+                }
+              });
+            }
+            continue;
+          }
+          const toolResult = entry?.result || {
+            ok: false,
+            error: "Tool execution produced no result.",
+            errorType: "tool_execution_error"
+          };
+          const toolItemId = createAgentId("item");
+          options.onToolCall?.({ name: toolName, args: toolArgs });
+          steps.push({ type: "tool_rejected", tool: toolName, args: toolArgs, reason: toolResult.error });
+          emitAgentEvent(options, "item_started", {
+            turnId,
+            item: {
+              id: toolItemId,
+              type: "tool_call",
+              status: "in_progress",
+              tool: toolName,
+              args: toolArgs,
+              callId: entry?.call?.callId || ""
+            }
+          });
+          emitAgentEvent(options, "item_completed", {
+            turnId,
+            item: {
+              id: toolItemId,
+              type: "tool_call",
+              status: "failed",
+              tool: toolName,
+              args: toolArgs,
+              result: toolResult,
+              callId: entry?.call?.callId || "",
+              durationMs: Number(entry?.durationMs || 0)
+            }
+          });
+        }
+      },
+      onBoundary: ({ phase, step, messages: modelMessages, toolCalls, recovery, progress, runtimeState }) => checkpointAgentRun(
+        runJournal,
+        {
+          phase,
+          step,
+          taskRunId: taskRun.id,
+          taskId: taskFrameId,
+          workingDirectory,
+          messages: modelMessages,
+          taskRun,
+          contextCompaction,
+          runtimeState,
+          toolCalls,
+          recovery: recovery
+            ? {
+                type: recovery.type,
+                attempt: recovery.attempt,
+                limit: recovery.limit,
+                reason: recovery.reason
+              }
+            : undefined,
+          progress,
+          taskStack: taskStackSnapshot(taskRun)
+        }
+      ),
+      executeTool: async ({ step, messages: modelMessages, toolCall, runtimeState, signal: toolSignal }) => {
+        const toolName = canonicalToolName(toolCall.name);
+        const toolArgs = toolCall.args || {};
+        const toolCallId = String(toolCall.callId || createAgentId("call"));
+        const toolItemId = createAgentId("item");
+        options.onToolCall?.({ name: toolName, args: toolArgs });
+        emitAgentEvent(options, "item_started", {
+          turnId,
+          item: {
+            id: toolItemId,
+            type: "tool_call",
+            status: "in_progress",
+            tool: toolName,
+            args: toolArgs,
+            callId: toolCallId,
+            startedAt: Date.now()
+          }
+        });
+        emitAgentEvent(options, "task_progress", {
+          turnId,
+          taskRunId: taskRun.id,
+          taskId: taskFrameId,
+          phase: "tool",
+          tool: toolName,
+          step: Number(taskRun.tasks[taskFrameId]?.step || step + 1),
+          maxSteps: Number(taskRun.tasks[taskFrameId]?.maxSteps || settings.maxSteps || 8)
+        });
+        await checkpointAgentRun(runJournal, {
+          phase: "before_tool",
+          step,
+          taskRunId: taskRun.id,
+          taskId: taskFrameId,
+          workingDirectory,
+          messages: modelMessages,
+          taskRun,
+          contextCompaction,
+          runtimeState,
+          toolBudgetConsumed: true,
+          toolCall: {
+            callId: toolCallId,
+            name: toolName,
+            args: toolArgs
+          },
+          taskStack: taskStackSnapshot(taskRun)
+        });
+
+        let toolResult;
+        const toolStartedAt = Date.now();
+        try {
+          options.onStatus?.(`Running ${toolName}`);
+          toolResult = await dispatchTool(toolName, toolArgs, settings, {
+            ...options,
+            signal: toolSignal,
+            turnId,
+            toolItemId,
+            workingDirectory,
+            onWorkingDirectoryChange: (nextPath) => {
+              workingDirectory = normalizeWorkingDirectory(nextPath);
+              options.onWorkingDirectoryChange?.(workingDirectory);
+              if (options.sessionId) {
+                queueBackgroundSessionMutation(options.sessionId, (session) => {
+                  session.workingDirectory = workingDirectory;
+                }).catch(() => {});
+              }
+            },
+            onPlan: (plan) => {
+              options.onPlan?.(plan);
+              emitAgentEvent(options, "plan_updated", {
+                turnId,
+                itemId: toolItemId,
+                ...plan
+              });
+            }
+          });
+        } catch (error) {
+          if (options.signal?.aborted || error?.name === "AbortError" || normalizeError(error) === "Stopped") {
+            throw new Error("Stopped");
+          }
+          toolResult = {
+            ok: false,
+            error: normalizeError(error),
+            errorType: "tool_execution_error"
+          };
+        }
+        const summarizedResult = summarizeToolResult(toolResult);
+        emitAgentEvent(options, "item_completed", {
+          turnId,
+          item: {
+            id: toolItemId,
+            type: "tool_call",
+            status: toolResult?.ok === false ? "failed" : "completed",
+            tool: toolName,
+            args: toolArgs,
+            result: summarizedResult,
+            callId: toolCallId,
+            durationMs: Date.now() - toolStartedAt
+          }
+        });
+        options.onStatus?.("Thinking");
+        const resultContent = await toolResultMessageContent(settings, toolName, toolResult, {
+          runId: turnId,
+          callId: toolCallId,
+          sessionId: options.sessionId
+        });
+        return {
+          toolResult,
+          messages: [
+            {
+              role: "assistant",
+              content: JSON.stringify({ tool: { name: toolName, args: toolArgs } }),
+              nativeItem: {
+                type: "function_call",
+                call_id: toolCallId,
+                name: toolName,
+                arguments: JSON.stringify(toolArgs)
+              }
+            },
+            {
+              role: "user",
+              content: resultContent,
+              nativeItem: {
+                type: "function_call_output",
+                call_id: toolCallId,
+                output: resultContent
+              }
+            }
+          ]
         };
       }
-      steps.push({
-        type: "tool",
-        tool: toolName,
-        args: toolArgs,
-        result: summarizeToolResult(toolResult)
-      });
-      emitAgentEvent(options, "item_completed", {
-        turnId,
-        item: {
-          id: toolItemId,
-          type: "tool_call",
-          status: toolResult?.ok === false ? "failed" : "completed",
-          tool: toolName,
-          args: toolArgs,
-          result: summarizeToolResult(toolResult),
-          callId: toolCallId,
-          durationMs: Date.now() - toolStartedAt
-        }
-      });
+    });
 
-      const canonicalToolContent = JSON.stringify({
-        tool: {
-          name: toolName,
-          args: toolArgs
-        }
-      });
-      messages.push({
-        role: "assistant",
-        content: canonicalToolContent,
-        nativeItem: {
-          type: "function_call",
-          call_id: toolCallId,
-          name: toolName,
-          arguments: JSON.stringify(toolArgs)
-        }
-      });
-      const resultContent = toolResultMessageContent(settings, toolName, toolResult);
-      messages.push({
-        role: "user",
-        content: resultContent,
-        nativeItem: {
-          type: "function_call_output",
-          call_id: toolCallId,
-          output: JSON.stringify(toolResult)
-        }
-      });
-      options.onStatus?.("Thinking");
-    }
-
-    return finish(maximumStepLimitMessage(steps));
+    return await finish(resolveAgentTerminalOutcome(loopResult, steps));
   } catch (error) {
+    clearInterval(runHeartbeat);
     const interrupted = options.signal?.aborted || normalizeError(error) === "Stopped";
     const completedAt = Date.now();
     emitAgentEvent(options, interrupted ? "turn_interrupted" : "turn_failed", {
@@ -3795,8 +4094,14 @@ async function runAgent(uiMessages, options = {}) {
       taskRunId: taskRun.id,
       taskId: taskFrameId
     });
-    if (ownsTaskRun) {
-      completeRootTask(taskRun, interrupted ? "cancelled" : "failed");
+    await closeAgentRunJournal(runJournal, interrupted ? "interrupted" : "failed", {
+      error: interrupted ? "Stopped" : normalizeError(error),
+      workingDirectory
+    });
+    if (ownsTaskRun && !taskRunFinalized) {
+      await taskSupervisor.completeRoot(interrupted ? "cancelled" : "failed", {
+        error: interrupted ? "Stopped" : normalizeError(error)
+      });
       activeTaskRuns.delete(taskRun.id);
       await persistTaskRuns(taskRunSummary(taskRun, interrupted ? "cancelled" : "failed", error));
     }
@@ -3806,11 +4111,303 @@ async function runAgent(uiMessages, options = {}) {
 }
 
 function emitAgentEvent(options, type, payload = {}) {
-  options.onEvent?.({
+  const event = {
     type,
     timestamp: Date.now(),
     ...payload
+  };
+  options.onEvent?.(event);
+  options.runJournal?.append(type, event);
+}
+
+async function startAgentRunJournal(metadata) {
+  const journal = createAgentRunJournal(agentRunStore, metadata);
+  await journal.start();
+  return journal;
+}
+
+async function reportRecoverableAgentRuns() {
+  try {
+    const runs = await agentRunStore.listRecoverableRuns();
+    if (runs.length > 0) {
+      console.info(`WebClaw found ${runs.length} recoverable Agent run checkpoint(s).`);
+    }
+    for (const run of runs) {
+      const recovery = await resolveAgentRunRecovery(run);
+      if (run.source === "channel" && recovery.action === "wait_approval") {
+        restoreRecoveredChannelApproval(run).catch((error) => {
+          console.warn("WebClaw could not restore Channel approval", error);
+        });
+      } else if (["resume_model", "resume_tool"].includes(recovery.action)) {
+        resumeStoredRunInBackground(run).catch((error) => {
+          console.warn("WebClaw could not resume Agent run", error);
+        });
+      }
+    }
+    return runs;
+  } catch (error) {
+    console.warn("WebClaw could not inspect recoverable Agent runs", error);
+    return [];
+  }
+}
+
+async function resumeStoredRunInBackground(run) {
+  if (resumedBackgroundAgentRuns.has(run.runId)) return;
+  resumedBackgroundAgentRuns.add(run.runId);
+  const route = run.source === "channel" ? await recoverStoredChannelRoute(run.channelRoute) : null;
+  try {
+    const result = await resumeRecoverableAgentRun(run.runId, {
+      onEvent: route
+        ? (event) => handleBackgroundAgentEvent(run.sessionId, route, event)
+        : undefined
+    });
+    if (route?.channelId && route?.peerId) {
+      await sendWechatBridgeMessage({
+        type: "agent_result",
+        channelId: route.channelId,
+        peerId: route.peerId,
+        contextToken: route.contextToken,
+        text: result.final
+      });
+      await appendChannelSessionMessage(route, "assistant", result.final, {
+        sessionId: run.sessionId,
+        status: result.status
+      });
+    } else if (run.sessionId) {
+      await queueBackgroundSessionMutation(run.sessionId, (session) => {
+        session.messages.push({
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: result.final,
+          modelContent: result.final,
+          hidden: false,
+          excludedFromContext: false,
+          contextSummary: false,
+          turnId: result.turnId,
+          kind: "agent_message",
+          status: result.status,
+          media: [],
+          time: Date.now()
+        });
+      });
+    }
+  } finally {
+    resumedBackgroundAgentRuns.delete(run.runId);
+  }
+}
+
+async function restoreRecoveredChannelApproval(run) {
+  if (restoredChannelApprovalRuns.has(run.runId)) return;
+  const route = await recoverStoredChannelRoute(run.channelRoute);
+  const approval = run.checkpoint?.pendingApproval;
+  if (!route.channelId || !route.peerId || !approval) return;
+  restoredChannelApprovalRuns.add(run.runId);
+  const code = createRemoteApprovalCode();
+  const timer = setTimeout(() => {
+    const pending = pendingChannelApprovals.get(code);
+    if (!pending) return;
+    pendingChannelApprovals.delete(code);
+    restoredChannelApprovalRuns.delete(run.runId);
+  }, REMOTE_APPROVAL_TIMEOUT_MS);
+  pendingChannelApprovals.set(code, {
+    code,
+    route,
+    approval,
+    timer,
+    resolve: async (decision) => {
+      try {
+        const result = await resumeRecoverableAgentRun(run.runId, {
+          recoveredApprovalDecision: decision,
+          onEvent: (event) => handleBackgroundAgentEvent(run.sessionId, route, event)
+        });
+        await sendWechatBridgeMessage({
+          type: "agent_result",
+          channelId: route.channelId,
+          peerId: route.peerId,
+          contextToken: route.contextToken,
+          text: result.final
+        });
+        await appendChannelSessionMessage(route, "assistant", result.final, {
+          sessionId: run.sessionId,
+          status: result.status
+        });
+      } catch (error) {
+        await sendAuthorizationChannelText(route, `WebClaw 恢复执行失败：${normalizeError(error)}`);
+      } finally {
+        restoredChannelApprovalRuns.delete(run.runId);
+      }
+    }
   });
+  await sendAuthorizationChannelText(route, [
+    "WebClaw 已恢复一个等待授权的任务",
+    "",
+    formatChannelApprovalPrompt(code, approval)
+  ].join("\n"));
+}
+
+async function recoverStoredChannelRoute(value) {
+  const route = channelAuthorizationRoute(value || {});
+  if (!route.channelId || !route.peerId) return route;
+  try {
+    const stored = await chrome.storage.local.get(CHANNEL_AUTH_ROUTES_KEY);
+    const current = normalizeChannelAuthorizationRoutes(stored[CHANNEL_AUTH_ROUTES_KEY])
+      .find((candidate) => candidate.channelId === route.channelId && candidate.peerId === route.peerId);
+    return current ? channelAuthorizationRoute({ ...route, ...current }) : route;
+  } catch {
+    return route;
+  }
+}
+
+async function resumeRecoverableAgentRun(runId, runtimeOptions = {}) {
+  const storedRun = await agentRunStore.getRun(String(runId || ""), { includeEvents: false });
+  if (!storedRun) throw new Error(`Recoverable Agent run not found: ${runId || "unknown"}`);
+  const recovery = await resolveAgentRunRecovery(storedRun);
+  const recoveredDecision = runtimeOptions.recoveredApprovalDecision;
+  if (recovery.action === "wait_approval" && typeof recoveredDecision?.approved !== "boolean") {
+    throw new Error("Recoverable Agent run is waiting for an approval decision.");
+  }
+  if (!["resume_model", "resume_tool", "wait_approval"].includes(recovery.action)) {
+    throw new Error(`Agent run cannot resume automatically from ${recovery.phase || "unknown"}: ${recovery.action}`);
+  }
+  const checkpoint = storedRun.checkpoint || {};
+  if (!Array.isArray(checkpoint.messages) || checkpoint.messages.length === 0) {
+    throw new Error("Recoverable Agent run has no model context checkpoint.");
+  }
+  const settings = await ensureSettings();
+  if (!findProvider(settings, storedRun.providerId)) {
+    throw new Error(`Recoverable Agent run Provider no longer exists: ${storedRun.providerId || "unknown"}`);
+  }
+  const taskRun = checkpoint.taskRun;
+  if (!taskRun?.id || !checkpoint.taskId) {
+    throw new Error("Recoverable Agent run has no durable task state.");
+  }
+  const resumeMessages = structuredClone(checkpoint.messages);
+  if (recovery.action === "wait_approval") {
+    resumeMessages.push({
+      role: "user",
+      content: recoveredDecision.approved
+        ? "RECOVERED_APPROVAL_DECISION\nThe user approved the previously pending operation. Reissue that exact Tool Call once so WebClaw can execute it under the recovered one-time approval. Do not change its target or arguments."
+        : "RECOVERED_APPROVAL_DECISION\nThe user denied the previously pending operation. Do not execute it. Continue with a safe alternative or explain that it was denied."
+    });
+  }
+  return agentService.run([], {
+    ...runtimeOptions,
+    turnId: storedRun.runId,
+    sessionId: storedRun.sessionId,
+    source: storedRun.source || "recovery",
+    channelRoute: storedRun.channelRoute || null,
+    settingsOverride: { ...settings, activeProviderId: storedRun.providerId },
+    workingDirectory: checkpoint.workingDirectory || "/workspace",
+    resumeMessages,
+    contextCompaction: checkpoint.contextCompaction || null,
+    runtimeState: checkpoint.runtimeState || null,
+    pendingToolCalls: recovery.action === "resume_tool" ? [checkpoint.toolCall] : [],
+    pendingToolStep: Number(checkpoint.step || 0),
+    taskRun,
+    taskFrameId: checkpoint.taskId,
+    taskSupervisor: null,
+    ownsTaskRun: true,
+    recoveredApproval: recovery.action === "wait_approval"
+      ? {
+          approval: checkpoint.pendingApproval,
+          approved: recoveredDecision.approved,
+          remember: recoveredDecision.remember === true
+        }
+      : null
+  });
+}
+
+async function resolveAgentRunRecovery(run) {
+  return resolveStoredAgentRunRecovery(run, (key) => agentRunStore.getOperation(key));
+}
+
+function createJournaledApprovalRequester(requestApproval, context) {
+  let recoveredApproval = context.recoveredApproval || null;
+  return async (approval) => {
+    const approvalId = createAgentId("approval");
+    const safeApproval = {
+      id: approvalId,
+      kind: String(approval?.kind || "operation"),
+      title: String(approval?.title || "Approval required"),
+      reason: String(approval?.reason || ""),
+      description: String(approval?.description || ""),
+      details: String(approval?.details || ""),
+      allowLabel: String(approval?.allowLabel || "Allow once"),
+      rememberByDefault: approval?.rememberByDefault === true,
+      grantKey: String(approval?.grantKey || ""),
+      origins: uniqueStrings(approval?.origins)
+    };
+    if (recoveredApproval && approvalFingerprintMatches(recoveredApproval.approval, safeApproval)) {
+      const decision = {
+        approved: recoveredApproval.approved === true,
+        remember: recoveredApproval.remember === true,
+        error: recoveredApproval.approved === true ? "" : "Recovered approval was denied by the user."
+      };
+      recoveredApproval = null;
+      return decision;
+    }
+    emitAgentEvent(context.emitOptions, "approval_requested", {
+      turnId: context.turnId,
+      taskRunId: context.taskRun.id,
+      taskId: context.taskFrameId,
+      approval: safeApproval
+    });
+    await checkpointAgentRun(context.runJournal, {
+      phase: "waiting_approval",
+      taskRunId: context.taskRun.id,
+      taskId: context.taskFrameId,
+      taskRun: context.taskRun,
+      pendingApproval: safeApproval
+    });
+    const result = typeof requestApproval === "function"
+      ? await requestApproval(approval)
+      : { approved: false, error: "Interactive approval is unavailable for this Agent run." };
+    emitAgentEvent(context.emitOptions, "approval_decided", {
+      turnId: context.turnId,
+      taskRunId: context.taskRun.id,
+      taskId: context.taskFrameId,
+      approvalId,
+      approved: result?.approved === true,
+      remembered: result?.remember === true
+    });
+    await checkpointAgentRun(context.runJournal, {
+      phase: "approval_decided",
+      taskRunId: context.taskRun.id,
+      taskId: context.taskFrameId,
+      taskRun: context.taskRun,
+      pendingApproval: null,
+      approvalDecision: {
+        approvalId,
+        approved: result?.approved === true,
+        remembered: result?.remember === true
+      }
+    });
+    return result;
+  };
+}
+
+function approvalFingerprintMatches(expected, actual) {
+  if (!expected || !actual) return false;
+  return String(expected.kind || "") === String(actual.kind || "") &&
+    String(expected.title || "") === String(actual.title || "") &&
+    String(expected.grantKey || "") === String(actual.grantKey || "") &&
+    JSON.stringify(uniqueStrings(expected.origins)) === JSON.stringify(uniqueStrings(actual.origins));
+}
+
+async function checkpointAgentRun(journal, checkpoint) {
+  if (!journal) return;
+  await journal.checkpoint(checkpoint);
+}
+
+async function closeAgentRunJournal(journal, status, summary) {
+  if (!journal) return;
+  try {
+    await journal.close(status, summary);
+    await journal.flush();
+  } catch (error) {
+    if (!journal.terminalCommitted) throw error;
+    console.warn("WebClaw Agent RunStore completed with event log write failures", error);
+  }
 }
 
 async function prepareAgentHistory(settings, uiMessages, options, turnId) {
@@ -3818,70 +4415,28 @@ async function prepareAgentHistory(settings, uiMessages, options, turnId) {
     .map(({ id, role, content, media }) => ({ id, role, content, media }))
     .filter((message) => message.content);
   if (options.disableCompaction) return { messages, contextCompaction: null };
-  const plan = planHistoryCompaction(messages, agentHistoryTokenBudget(settings));
-  if (!plan) return { messages, contextCompaction: null };
-
-  options.onStatus?.("Compacting context");
-  const source = buildCompactionSource(plan.compacted, compactionSourceLimit(settings));
-  let summary = "";
-  try {
-    summary = await callModel(settings, [
-      {
-        role: "system",
-        content: `You compact conversation history for a browser AI agent. Return a concise factual summary in plain text. Preserve the user's goal, constraints, decisions, verified Tool results, exact identifiers and paths, errors that affect the next step, and unfinished work. Exclude secrets and redundant prose. Do not call tools.`
-      },
-      {
-        role: "user",
-        content: source
-      }
-    ], {
+  const result = await compactAgentContext({
+    messages,
+    tokenBudget: agentHistoryTokenBudget(settings),
+    sourceLimit: compactionSourceLimit(settings),
+    createSummaryId: () => createAgentId("summary"),
+    onCompacting: () => options.onStatus?.("Compacting context"),
+    isInterrupted: (error) => options.signal?.aborted || normalizeError(error) === "Stopped",
+    onFallback: (error) => console.warn("WebClaw model context compaction failed; using bounded extractive fallback", error),
+    summarize: (compactionMessages) => callModel(settings, compactionMessages, {
       signal: options.signal,
       requestApproval: options.requestApproval,
       authorizationMode: options.authorizationMode,
       onAuthorizationChallenge: options.onAuthorizationChallenge
-    });
-    summary = normalizeCompactionSummary(summary);
-  } catch (error) {
-    if (options.signal?.aborted || normalizeError(error) === "Stopped") throw error;
-    console.warn("WebClaw model context compaction failed; using bounded extractive fallback", error);
-    summary = boundedCompactionFallback(source);
-  }
-
-  const contextCompaction = {
-    summary,
-    compactedMessageIds: plan.compactedMessageIds,
-    compactedCount: plan.compacted.length,
-    estimatedTokens: plan.estimatedTokens,
-    tokenBudget: plan.tokenBudget
-  };
-  emitAgentEvent(options, "context_compacted", {
-    turnId,
-    ...contextCompaction
+    })
   });
-  return {
-    messages: [
-      {
-        id: createAgentId("summary"),
-        role: "user",
-        content: `${CONTEXT_SUMMARY_PREFIX}${summary}`
-      },
-      ...plan.retained
-    ],
-    contextCompaction
-  };
-}
-
-function normalizeCompactionSummary(value) {
-  const text = String(value || "").trim();
-  const parsed = parseJsonObject(text);
-  if (typeof parsed?.final === "string") return parsed.final.trim();
-  return text || "Earlier conversation compacted without a generated summary.";
-}
-
-function boundedCompactionFallback(source) {
-  const text = String(source || "");
-  if (text.length <= 12_000) return text;
-  return `${text.slice(0, 4000)}\n\n[earlier details compacted]\n\n${text.slice(-8000)}`;
+  if (result.contextCompaction) {
+    emitAgentEvent(options, "context_compacted", {
+      turnId,
+      ...result.contextCompaction
+    });
+  }
+  return result;
 }
 
 async function loadWorkspaceBootstrapContext(settings) {
@@ -3975,7 +4530,7 @@ async function ensureDefaultKnowledgeManual() {
   }
   await knowledgeIngestVfsFile(DEFAULT_KNOWLEDGE_MANUAL_PATH, {
     title: "WebClaw Operation Manual",
-    tags: ["webclaw", "manual", "operations", "0.5.3"]
+    tags: ["webclaw", "manual", "operations", "0.6.0"]
   });
 }
 
@@ -3986,14 +4541,6 @@ function workspaceMemoryDate(dayOffset) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
-}
-
-function maximumStepLimitMessage(steps) {
-  const lastFailedTool = [...steps].reverse().find((step) => step?.type === "tool" && step?.result?.ok === false);
-  if (lastFailedTool) {
-    return `Reached the maximum number of agent steps before finishing. Last tool error (${lastFailedTool.tool}): ${lastFailedTool.result.error || "unknown error"}`;
-  }
-  return "Reached the maximum number of agent steps before finishing.";
 }
 
 function agentResult(final, steps, metadata = {}) {
@@ -4080,16 +4627,31 @@ function isToolTrajectoryContent(content) {
   return String(content || "").startsWith(TOOL_TRAJECTORY_PREFIX);
 }
 
-function toolResultMessageContent(settings, toolName, toolResult) {
+async function toolResultMessageContent(settings, toolName, toolResult, options = {}) {
   const limit = providerAdapterFor(getActiveProvider(settings)).capabilities.toolResultChars;
   const json = JSON.stringify(toolResult);
+  let artifactRef = "";
+  if (json.length > limit) {
+    try {
+      artifactRef = await agentRunStore.putArtifact({
+        runId: String(options.runId || ""),
+        callId: String(options.callId || ""),
+        sessionId: String(options.sessionId || ""),
+        kind: "tool_result",
+        value: toolResult
+      });
+    } catch (error) {
+      console.warn("WebClaw could not persist large Tool Result artifact", error);
+    }
+  }
   const suffix = json.length > limit
     ? `\n\n... truncated ${json.length - limit} chars for the active provider context limit`
     : "";
+  const artifactNote = artifactRef ? `\nFULL_RESULT_REF: ${artifactRef}` : "";
   const failureGuidance = toolResult?.ok === false
     ? buildToolRecoveryGuidance(settings, toolName)
     : "";
-  return `TOOL_RESULT ${toolName}: ${json.slice(0, limit)}${suffix}${failureGuidance}`;
+  return `TOOL_RESULT ${toolName}: ${json.slice(0, limit)}${suffix}${artifactNote}${failureGuidance}`;
 }
 
 function buildToolRecoveryGuidance(settings, toolName) {
@@ -4106,7 +4668,10 @@ function buildToolRecoveryGuidance(settings, toolName) {
 async function callAgentModel(settings, messages, options = {}) {
   const provider = getActiveProvider(settings);
   await ensureProviderDataAccess(settings, provider, options);
-  return providerAdapterFor(provider).generateAgent(settings, messages, options);
+  const response = await providerAdapterFor(provider).sample(settings, messages, options);
+  return normalizeAgentModelTurn(response, {
+    createCallId: () => createAgentId("call")
+  });
 }
 
 async function callTextProtocolAgent(provider, settings, messages, options = {}) {
@@ -4189,6 +4754,14 @@ function providerAdapterFor(provider) {
       definition.generateAgent
         ? definition.generateAgent(provider, settings, messages, options)
         : callTextProtocolAgent(provider, settings, messages, options)
+    ),
+    sample: (settings, messages, options = {}) => (
+      definition.generateAgent
+        ? definition.generateAgent(provider, settings, messages, options)
+        : callTextProtocolAgent(provider, settings, messages, options)
+    ),
+    compact: (settings, messages, options = {}) => (
+      definition.generateText(provider, settings, messages, options)
     )
   };
 }
@@ -4313,35 +4886,90 @@ function providerAdapterCapabilities(provider) {
         summarizer: "chrome-ai"
       }
     : defaultPageContextCapabilities();
+  let contextCapabilities;
   if (Number.isFinite(declaredContextWindow) && declaredContextWindow >= 4000) {
-    return {
+    contextCapabilities = {
       historyTokenBudget: Math.max(3000, Math.min(60_000, Math.floor(declaredContextWindow * 0.55))),
       compactionSourceChars: Math.max(12_000, Math.min(120_000, Math.floor(declaredContextWindow * 1.8))),
       toolResultChars: Math.max(6000, Math.min(24_000, Math.floor(declaredContextWindow * 0.2))),
       pageContext
     };
-  }
-  if (provider?.type === "chrome-ai") {
-    return {
+  } else if (provider?.type === "chrome-ai") {
+    contextCapabilities = {
       historyTokenBudget: 5000,
       compactionSourceChars: 16_000,
       toolResultChars: 6000,
       pageContext
     };
-  }
-  if (provider?.type === "ollama") {
-    return {
+  } else if (provider?.type === "ollama") {
+    contextCapabilities = {
       historyTokenBudget: 16_000,
       compactionSourceChars: 48_000,
       toolResultChars: 16_000,
       pageContext
     };
+  } else {
+    contextCapabilities = {
+      historyTokenBudget: 48_000,
+      compactionSourceChars: 80_000,
+      toolResultChars: 16_000,
+      pageContext
+    };
   }
   return {
-    historyTokenBudget: 48_000,
-    compactionSourceChars: 80_000,
-    toolResultChars: 16_000,
-    pageContext
+    ...contextCapabilities,
+    ...providerProtocolCapabilities(provider),
+    contextWindow: declaredContextWindow || null
+  };
+}
+
+function providerProtocolCapabilities(provider) {
+  const type = String(provider?.type || "");
+  if (type === "codex-oauth") {
+    return {
+      nativeTools: true,
+      multipleToolCalls: true,
+      parallelToolCalls: true,
+      structuredOutput: "native",
+      streaming: true,
+      imageInput: true,
+      fileInput: true,
+      compaction: "model"
+    };
+  }
+  if (type === "chrome-ai") {
+    return {
+      nativeTools: false,
+      multipleToolCalls: false,
+      parallelToolCalls: false,
+      structuredOutput: "native",
+      streaming: true,
+      imageInput: true,
+      fileInput: false,
+      compaction: "provider"
+    };
+  }
+  if (["ollama", "openai-compatible", "opencode"].includes(type)) {
+    return {
+      nativeTools: false,
+      multipleToolCalls: false,
+      parallelToolCalls: false,
+      structuredOutput: "json",
+      streaming: true,
+      imageInput: type === "ollama",
+      fileInput: false,
+      compaction: "model"
+    };
+  }
+  return {
+    nativeTools: false,
+    multipleToolCalls: false,
+    parallelToolCalls: false,
+    structuredOutput: "prompt",
+    streaming: true,
+    imageInput: true,
+    fileInput: true,
+    compaction: "model"
   };
 }
 
@@ -4895,7 +5523,7 @@ function requestCodexResponse(codex, instructions, input, options = {}) {
   if (Array.isArray(options.nativeTools) && options.nativeTools.length > 0) {
     body.tools = options.nativeTools;
     body.tool_choice = "auto";
-    body.parallel_tool_calls = false;
+    body.parallel_tool_calls = true;
   }
   if (supportsReasoningEffort(codex.model)) {
     body.reasoning = { effort: codex.thinking === false ? "low" : "medium" };
@@ -5558,7 +6186,7 @@ async function dispatchTool(name, args, settings, options = {}) {
     case "task_push":
       return runTaskPush(args, settings, options);
     case "task_stack":
-      return taskStackSnapshot(options.taskRun);
+      return options.taskSupervisor?.snapshot() || taskStackSnapshot(options.taskRun);
     case "fs_shell": {
       const result = await runVirtualFileSystemShell(required(args.command, "command"), {
         cwd: args.cwd || options.workingDirectory || "/workspace"
@@ -5609,6 +6237,8 @@ async function dispatchTool(name, args, settings, options = {}) {
       return knowledgeForget(args);
     case "knowledge_status":
       return knowledgeStatus();
+    case "agent_artifact_read":
+      return readAgentArtifact(args, options);
     case "chrome_api":
       return runChromeApi(args);
     case "list_webclaw_config":
@@ -5627,6 +6257,37 @@ async function dispatchTool(name, args, settings, options = {}) {
 function findEnabledTool(settings, name) {
   const normalizedName = canonicalToolName(name);
   return enabledTools(settings).find((tool) => tool.name === normalizedName) || null;
+}
+
+function validateAgentToolCall(settings, toolCall) {
+  const name = canonicalToolName(toolCall?.name);
+  const tool = findEnabledTool(settings, name);
+  if (!tool) throw new Error(`Tool is disabled or not configured: ${name || "unknown"}`);
+  validateToolArgs(name, toolCall?.args || {}, nativeToolInputSchema(tool));
+}
+
+async function readAgentArtifact(args, options = {}) {
+  const artifactId = required(args.artifactId, "artifactId");
+  const artifact = await agentRunStore.getArtifact(artifactId);
+  if (!artifact) throw new Error(`Agent artifact not found: ${artifactId}`);
+  const sameRun = artifact.runId && artifact.runId === String(options.turnId || "");
+  const sameSession = artifact.sessionId && artifact.sessionId === String(options.sessionId || "");
+  if (!sameRun && !sameSession) throw new Error("Agent artifact is not available in the current session.");
+  const text = typeof artifact.value === "string"
+    ? artifact.value
+    : JSON.stringify(artifact.value, null, 2);
+  const offset = clampNumber(args.offset, 0, Math.max(0, text.length), 0);
+  const maxChars = clampNumber(args.maxChars, 500, 12000, 8000);
+  const content = text.slice(offset, offset + maxChars);
+  return {
+    ok: true,
+    artifactId,
+    kind: artifact.kind || "artifact",
+    offset,
+    nextOffset: offset + content.length < text.length ? offset + content.length : null,
+    totalChars: text.length,
+    content
+  };
 }
 
 function pageContextRequestForAdapter(settings, args = {}) {
@@ -5781,8 +6442,9 @@ async function runCustomTool(tool, args, settings, options = {}) {
 
 async function runTaskPush(args, settings, options = {}) {
   const run = options.taskRun;
+  const supervisor = options.taskSupervisor;
   const parentTaskId = String(options.taskFrameId || "");
-  if (!run || !parentTaskId) {
+  if (!run || !supervisor || !parentTaskId) {
     throw new Error("task_push requires an active WebClaw task run.");
   }
   const spec = normalizeTaskSpec(args, {
@@ -5794,8 +6456,7 @@ async function runTaskPush(args, settings, options = {}) {
   if (unavailableTools.length > 0) {
     throw new Error(`task_push allowedTools are disabled or unknown: ${unavailableTools.join(", ")}`);
   }
-  const task = pushTask(run, parentTaskId, spec);
-  await persistTaskRuns();
+  const task = await supervisor.push(parentTaskId, spec);
   emitAgentEvent(options, "task_pushed", {
     taskRunId: run.id,
     taskId: task.id,
@@ -5823,6 +6484,11 @@ async function runTaskPush(args, settings, options = {}) {
       [{ role: "user", content: taskPrompt }],
       {
         ...options,
+        turnId: createAgentId("turn"),
+        resumeMessages: null,
+        runtimeState: null,
+        contextCompaction: null,
+        recoveredApproval: null,
         settingsOverride: childSettings,
         taskRun: run,
         taskFrameId: task.id,
@@ -5856,8 +6522,7 @@ async function runTaskPush(args, settings, options = {}) {
       }
     );
     if (result.taskOutput === undefined) {
-      const failedTask = failTask(run, task.id);
-      await persistTaskRuns();
+      const failedTask = await supervisor.fail(task.id, result.final || "Child task ended without a valid structured output.");
       const failure = {
         ok: false,
         taskId: task.id,
@@ -5879,8 +6544,7 @@ async function runTaskPush(args, settings, options = {}) {
       return failure;
     }
 
-    const completedTask = completeTask(run, task.id);
-    await persistTaskRuns();
+    const completedTask = await supervisor.complete(task.id, result.taskOutput);
     const envelope = {
       ok: true,
       taskId: task.id,
@@ -5904,8 +6568,7 @@ async function runTaskPush(args, settings, options = {}) {
     return envelope;
   } catch (error) {
     if (run.tasks[task.id] && run.stack.at(-1) === task.id) {
-      failTask(run, task.id);
-      await persistTaskRuns();
+      await supervisor.fail(task.id, normalizeError(error));
     }
     emitAgentEvent(options, "task_failed", {
       taskRunId: run.id,
@@ -6000,6 +6663,11 @@ async function runWorkflowTool(tool, args, settings, options = {}) {
     ],
     {
       ...options,
+      turnId: createAgentId("turn"),
+      resumeMessages: null,
+      runtimeState: null,
+      contextCompaction: null,
+      recoveredApproval: null,
       settingsOverride: workflowSettings,
       nested: true,
       disableCompaction: true,
@@ -6013,10 +6681,11 @@ async function runWorkflowTool(tool, args, settings, options = {}) {
     }
   );
   return {
-    ok: true,
+    ok: result.status === "completed",
     tool: tool.name,
     type: "workflow",
     final: result.final,
+    status: result.status,
     steps: result.steps
   };
 }
@@ -8531,15 +9200,15 @@ function responseStreamError(status, response) {
 async function readCodexAgentResponseStream(response, onDelta) {
   const state = {
     text: "",
-    tool: null,
-    argumentsText: "",
+    tools: new Map(),
+    currentToolId: "",
     raw: ""
   };
   if (!response.body?.getReader) {
     const text = await response.text();
     state.raw = text;
     for (const event of parseSseEvents(text)) consumeCodexAgentEvent(state, event, onDelta);
-    if (!state.text && !state.tool) {
+    if (!state.text && state.tools.size === 0) {
       try {
         consumeCodexCompletedResponse(state, JSON.parse(text), onDelta);
       } catch {
@@ -8591,11 +9260,13 @@ function consumeCodexAgentEvent(state, event, onDelta) {
     return;
   }
   if (event.type === "response.function_call_arguments.delta" && typeof event.delta === "string") {
-    state.argumentsText += event.delta;
+    const tool = codexToolState(state, event.item_id || event.call_id || state.currentToolId);
+    tool.argumentsText += event.delta;
     return;
   }
   if (event.type === "response.function_call_arguments.done" && typeof event.arguments === "string") {
-    state.argumentsText = event.arguments;
+    const tool = codexToolState(state, event.item_id || event.call_id || state.currentToolId);
+    tool.argumentsText = event.arguments;
     return;
   }
   if (event.type === "response.output_item.added" || event.type === "response.output_item.done") {
@@ -8623,34 +9294,40 @@ function consumeCodexCompletedResponse(state, response, onDelta) {
 
 function consumeCodexOutputItem(state, item) {
   if (item?.type !== "function_call") return;
-  state.tool = {
-    name: String(item.name || state.tool?.name || ""),
-    callId: String(item.call_id || item.id || state.tool?.callId || createAgentId("call"))
-  };
+  const key = String(item.id || item.call_id || state.currentToolId || createAgentId("item"));
+  const tool = codexToolState(state, key);
+  tool.name = String(item.name || tool.name || "");
+  tool.callId = String(item.call_id || item.id || tool.callId || createAgentId("call"));
+  state.currentToolId = key;
   if (typeof item.arguments === "string" && item.arguments) {
-    state.argumentsText = item.arguments;
+    tool.argumentsText = item.arguments;
   }
 }
 
 function finalizeCodexAgentResponse(state) {
-  if (state.tool?.name) {
-    let args = {};
+  const tools = [];
+  for (const tool of state.tools.values()) {
+    if (!tool.name) continue;
+    let args;
     try {
-      args = state.argumentsText ? JSON.parse(state.argumentsText) : {};
+      args = tool.argumentsText ? JSON.parse(tool.argumentsText) : {};
     } catch {
       return {
         kind: "protocol_error",
-        text: "Codex returned invalid function-call arguments.",
-        raw: state.argumentsText || state.raw
+        text: `Codex returned invalid function-call arguments for ${tool.name}.`,
+        raw: tool.argumentsText || state.raw
       };
     }
+    tools.push({
+      name: canonicalToolName(tool.name),
+      args,
+      callId: tool.callId
+    });
+  }
+  if (tools.length > 0) {
     return {
-      kind: "tool_call",
-      tool: {
-        name: canonicalToolName(state.tool.name),
-        args,
-        callId: state.tool.callId
-      },
+      kind: "tool_calls",
+      tools,
       raw: state.raw
     };
   }
@@ -8659,6 +9336,19 @@ function finalizeCodexAgentResponse(state) {
     text: state.text || extractResponseText(state.raw),
     raw: state.raw
   };
+}
+
+function codexToolState(state, key) {
+  const normalizedKey = String(key || state.currentToolId || createAgentId("item"));
+  if (!state.tools.has(normalizedKey)) {
+    state.tools.set(normalizedKey, {
+      name: "",
+      callId: "",
+      argumentsText: ""
+    });
+  }
+  state.currentToolId = normalizedKey;
+  return state.tools.get(normalizedKey);
 }
 
 function parseSseEvents(text) {

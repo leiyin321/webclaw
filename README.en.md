@@ -37,6 +37,8 @@ or message channels.
 
 WebClaw maintains one outer Agent Runtime. A request is represented as a `Turn`; model output, Tool calls, Tool results, and plans are stateful `Item` records. Streaming, interruption, approvals, error feedback, history persistence, and context compaction are handled once for the Side Panel, WeChat, Telegram, and Schedules.
 
+The core loop uses an explicit state machine and AgentService serializes work per session. ToolScheduler provides JSON Schema argument validation, native multi-call execution for Codex, adjacent read-only parallelism, write barriers, operation-key deduplication, and protection for unknown external side effects. A dedicated IndexedDB RunStore persists redacted events, checkpoints, Tool operations, and large-result artifacts; run leases and write owners are checked atomically, and checkpoint or lease failures stop execution. Deterministic boundaries resume with their original budgets, retry counters, and no-progress state: completed Tool observations are reused, safe or retry-safe calls can continue from the original call, and unknown side effects are never replayed automatically. Pending approvals are presented again in the Side Panel or original Channel. Repeated identical calls and observations trigger a correction nudge and eventually a `stuck` stop instead of looping indefinitely.
+
 Model-specific behavior is isolated in Provider Adapters. An adapter owns authentication, message and media encoding, endpoints, stream parsing, context capabilities, and conversion of native function calling or JSON Tool transport into the same assistant/tool-call response. Switching Providers therefore does not switch the Agent workflow. Codex currently uses native function calling; Providers without a usable native Tool response use the adapter-level JSON transport fallback.
 
 For substantial work, the model can call `update_plan` to publish and update a plan. When a conversation exceeds the active adapter's context budget, the runtime compacts older history while retaining recent messages, goals, constraints, verified Tool results, relevant errors, and unfinished work. The resulting summary is WebClaw-generated execution state, not a user instruction.
@@ -64,6 +66,7 @@ A Workflow remains a persistent reusable custom Tool, while a Task is an ephemer
 - [OAuth configuration and release guidance](OAUTH.md)
 - [Release checklist](RELEASE.md)
 - [Chrome Web Store listing material](STORE_LISTING.md)
+- [Agent Loop architecture and recovery semantics](docs/agent-loop-architecture.md)
 - [License](LICENSE)
 
 ## Load in Chrome
@@ -76,11 +79,14 @@ A Workflow remains a persistent reusable custom Tool, while a Task is an ephemer
 
 ## Development Checks
 
-Run the same syntax checks used by CI:
+Run the same syntax, Agent Loop, and release checks used by CI:
 
 ```bash
 ./scripts/check-syntax.sh
 node scripts/test-agent-runtime.mjs
+./scripts/test-agent-loop.sh
+node scripts/test-provider-client-metadata.mjs
+node scripts/test-openai-compatible-structured-output.mjs
 node scripts/validate-release.mjs
 ```
 

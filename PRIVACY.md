@@ -12,6 +12,7 @@ WebClaw 可在 Chrome 扩展存储和浏览器 IndexedDB 中保存：
 
 - Provider 配置、模型选项、API key、OAuth access/refresh token 和登录状态；
 - 会话消息、模型回复和受控长度的 Tool 轨迹；
+- 为中断恢复和排错保存的脱敏 Agent 事件、边界 checkpoint、Tool operation 状态及大型 Tool Result artifact；这些记录按会话关联，清空或删除会话时同步删除；
 - 活动临时任务栈的元数据和近期任务运行状态摘要；状态摘要不重复保存最终回答，已完成子任务的完整上下文会从活动栈删除；
 - Tools、Skills、Schedules、Channels 及其启用状态；
 - Telegram bot token、企业微信机器人 webhook、微信登录凭证和通道状态；
@@ -24,6 +25,7 @@ WebClaw may store the following in Chrome extension storage and browser IndexedD
 
 - provider configuration, model choices, API keys, OAuth access/refresh tokens, and sign-in state;
 - conversations, model replies, and length-limited Tool trajectories;
+- redacted Agent events, boundary checkpoints, Tool-operation state, and large Tool-result artifacts used for interruption recovery and diagnostics; these records are tied to a session and deleted when that session is cleared or removed;
 - active ephemeral task-stack metadata and recent task-run status summaries; status summaries do not duplicate final answers, and completed child-task contexts are removed from the active stack;
 - Tools, Skills, Schedules, Channels, and their enabled state;
 - Telegram bot tokens, enterprise WeChat robot webhooks, WeChat credentials, and channel state;
