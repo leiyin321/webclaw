@@ -31,4 +31,16 @@ assert.deepEqual(transitions.map((event) => event.type), [
   "task_root_completed"
 ]);
 
+const budgetedRun = createTaskRun({ title: "Budgeted", maxModelSteps: 1 });
+const budgetedSupervisor = createAgentTaskSupervisor(budgetedRun);
+await budgetedSupervisor.recordModelStep(budgetedRun.rootTaskId);
+await assert.rejects(
+  budgetedSupervisor.recordModelStep(budgetedRun.rootTaskId),
+  /model-step budget reached/
+);
+await budgetedSupervisor.recordModelStep(budgetedRun.rootTaskId, {
+  allowReservedContinuation: true
+});
+assert.equal(budgetedRun.budget.usedModelSteps, 2);
+
 console.log("Agent TaskSupervisor tests passed.");

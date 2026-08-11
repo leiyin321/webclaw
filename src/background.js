@@ -4,10 +4,14 @@ import {
 import {
   runVirtualFileSystemShell,
   vfsApplyPatch,
+  vfsCopy,
   vfsDelete,
   vfsEditFile,
   vfsEmptyTrash,
+  vfsGetFileBlob,
   vfsGetUsage,
+  vfsGlob,
+  vfsHash,
   vfsList,
   vfsMkdir,
   vfsMove,
@@ -15,21 +19,31 @@ import {
   vfsReadFile,
   vfsRestore,
   vfsSearch,
+  vfsStat,
+  vfsTouch,
+  vfsDiff,
   vfsWriteFile
 } from "./virtual-file-system.js";
 import {
   knowledgeForget,
   knowledgeIngestVfsFile,
   knowledgeRead,
+  knowledgeReindex,
   knowledgeSearch,
   knowledgeStatus
 } from "./knowledge-base.js";
 import {
   CONTEXT_SUMMARY_PREFIX,
   createAgentId,
-  inferToolInputSchema,
   normalizeAgentPlan
 } from "./agent-runtime.js";
+import {
+  builtinToolDefinition,
+  builtinToolDefinitions,
+  builtinToolInputSchema,
+  isRemovedBuiltinToolName
+} from "./tool-registry.js";
+import { validateJsonSchema } from "./json-schema-validator.js";
 import {
   modelTurnFinalValue,
   normalizeAgentModelTurn
@@ -186,281 +200,8 @@ const DEFAULT_SETTINGS = {
 };
 
 const QIYEWECHAT_NOTIFICATION_TOOL_NAME = "qiyewechat_notification";
-const LEGACY_QIYEWECHAT_NOTIFICATION_TOOL_NAME = "send_wecom_message";
 
-const BUILTIN_TOOLS = [
-  {
-    name: "get_page_context",
-    description: "Read the active page URL, title, selected text, visible text, and interactive elements. Supports compact mode with maxChars and maxInteractive.",
-    example: { tool: { name: "get_page_context", args: { mode: "compact", maxChars: 4000, maxInteractive: 35 } } }
-  },
-  {
-    name: "click",
-    description: "Click an element on the active page by CSS selector.",
-    example: { tool: { name: "click", args: { selector: "button[type=submit]" } } }
-  },
-  {
-    name: "type_text",
-    description: "Type text into an element on the active page by CSS selector.",
-    example: { tool: { name: "type_text", args: { selector: "input[name=q]", text: "hello", clear: true } } }
-  },
-  {
-    name: "navigate",
-    description: "Navigate the active tab to a URL.",
-    example: { tool: { name: "navigate", args: { url: "https://example.com" } } }
-  },
-  {
-    name: "run_js",
-    description: "Execute inline JavaScript or a .js, .mjs, or .cjs file from the virtual filesystem in the active page. Requires the setting plus explicit approval. Ad-hoc calls require approval every time; an exact scheduled operation can reuse a saved approval. Provide exactly one of code or vfsPath.",
-    example: { tool: { name: "run_js", args: { vfsPath: "/workspace/test.js" } } }
-  },
-  {
-    name: "translate_page",
-    description: "Translate visible text on the active page and replace it in-place.",
-    example: { tool: { name: "translate_page", args: { targetLanguage: "Chinese" } } }
-  },
-  {
-    name: "search_web",
-    description: "Open a search page and read the search results context.",
-    example: { tool: { name: "search_web", args: { query: "today Beijing weather" } } }
-  },
-  {
-    name: "get_weather",
-    description: "Fetch current weather from Open-Meteo.",
-    example: { tool: { name: "get_weather", args: { location: "Beijing", language: "zh" } } }
-  },
-  {
-    name: "http_request",
-    description: "Send an HTTP or HTTPS request from the extension background.",
-    example: { tool: { name: "http_request", args: { url: "https://example.com/webhook", method: "POST", json: { text: "hello" } } } }
-  },
-  {
-    name: "qiyewechat_notification",
-    description: "Send a text or markdown notification through the enterprise WeChat robot webhook configured on this tool.",
-    example: { tool: { name: "qiyewechat_notification", args: { content: "hello from WebClaw", msgtype: "text" } } }
-  },
-  {
-    name: "chrome_api",
-    description: "Call a limited set of Chrome tab APIs.",
-    example: { tool: { name: "chrome_api", args: { operation: "get_current_tab" } } }
-  },
-  {
-    name: "wait",
-    description: "Wait for a short period, up to 10 seconds.",
-    example: { tool: { name: "wait", args: { ms: 1000 } } }
-  },
-  {
-    name: "update_plan",
-    description: "Create or update the current turn plan for substantial multi-step work. Keep at most one step in_progress.",
-    example: {
-      tool: {
-        name: "update_plan",
-        args: {
-          explanation: "Initial implementation plan",
-          plan: [
-            { step: "Inspect the current state", status: "in_progress" },
-            { step: "Implement the change", status: "pending" },
-            { step: "Verify the result", status: "pending" }
-          ]
-        }
-      }
-    }
-  },
-  {
-    name: "task_push",
-    description: "Create and synchronously execute an ephemeral child task with an independent model context. The child may push deeper tasks. Define its result contract with outputSchema; the task is removed from the active stack after returning.",
-    example: {
-      tool: {
-        name: "task_push",
-        args: {
-          title: "Verify sources",
-          instruction: "Check the supplied sources and report which are reliable.",
-          context: { sources: ["https://example.com"] },
-          outputSchema: {
-            type: "object",
-            properties: {
-              reliable: { type: "array", items: { type: "string" } },
-              summary: { type: "string" }
-            },
-            required: ["reliable", "summary"],
-            additionalProperties: false
-          },
-          maxSteps: 6
-        }
-      }
-    }
-  },
-  {
-    name: "task_stack",
-    description: "Inspect the current ephemeral task stack, active task frames, and remaining run budget.",
-    example: { tool: { name: "task_stack", args: {} } }
-  },
-  {
-    name: "fs_shell",
-    description: "Run one safe virtual filesystem command. Supported commands: pwd, cd, ls, stat, mkdir, touch, cat, cp, mv, rm. cd changes the current session working directory. This never runs a real OS shell and only operates on WebClaw's virtual filesystem. Default directory: /workspace.",
-    example: { tool: { name: "fs_shell", args: { command: "cd notes" } } }
-  },
-  {
-    name: "fs_list",
-    description: "List a virtual filesystem directory or inspect one file.",
-    example: { tool: { name: "fs_list", args: { path: "/workspace" } } }
-  },
-  {
-    name: "fs_read",
-    description: "Read a virtual filesystem file. For text files, optional startLine and endLine limit the returned range.",
-    example: { tool: { name: "fs_read", args: { path: "/workspace/notes/today.md", startLine: 1, endLine: 80 } } }
-  },
-  {
-    name: "fs_write",
-    description: "Create or replace a text file in the virtual filesystem. Use expectedVersion after reading an existing file to prevent overwrites.",
-    example: { tool: { name: "fs_write", args: { path: "/workspace/notes/today.md", content: "# Today", createParents: true } } }
-  },
-  {
-    name: "fs_edit",
-    description: "Safely replace exact text in a virtual text file. Use oldText as context and expectedVersion from fs_read.",
-    example: { tool: { name: "fs_edit", args: { path: "/workspace/notes/today.md", oldText: "# Today", newText: "# Today\n\n- Review tasks", expectedVersion: 1 } } }
-  },
-  {
-    name: "fs_search",
-    description: "Search text files in a virtual filesystem directory and return matching lines.",
-    example: { tool: { name: "fs_search", args: { query: "TODO", path: "/workspace" } } }
-  },
-  {
-    name: "fs_apply_patch",
-    description: "Apply a validated batch of virtual filesystem mkdir, write, edit, move, or delete operations.",
-    example: { tool: { name: "fs_apply_patch", args: { operations: [{ op: "write", path: "/workspace/README.md", content: "# Project", createParents: true }] } } }
-  },
-  {
-    name: "fs_mkdir",
-    description: "Create a virtual filesystem directory.",
-    example: { tool: { name: "fs_mkdir", args: { path: "/workspace/notes", parents: true } } }
-  },
-  {
-    name: "fs_move",
-    description: "Move or rename a virtual filesystem file or directory.",
-    example: { tool: { name: "fs_move", args: { from: "/workspace/draft.md", to: "/workspace/final.md" } } }
-  },
-  {
-    name: "fs_delete",
-    description: "Move a virtual filesystem file or directory to /.trash.",
-    example: { tool: { name: "fs_delete", args: { path: "/workspace/old.md", recursive: true } } }
-  },
-  {
-    name: "fs_restore",
-    description: "Restore an item from /.trash. By default a conflicting destination fails; use onConflict=rename, or onConflict=overwrite with confirmOverwrite=true.",
-    example: { tool: { name: "fs_restore", args: { trashPath: "/.trash/example-old.md", destination: "/workspace/old.md", onConflict: "rename" } } }
-  },
-  {
-    name: "fs_purge",
-    description: "Permanently delete an item from /.trash. This cannot be undone.",
-    example: { tool: { name: "fs_purge", args: { path: "/.trash/example-old.md", recursive: true, confirm: true } } }
-  },
-  {
-    name: "fs_empty_trash",
-    description: "Permanently delete every item in /.trash. This cannot be undone.",
-    example: { tool: { name: "fs_empty_trash", args: { confirm: true } } }
-  },
-  {
-    name: "fs_usage",
-    description: "Get virtual filesystem file count and browser storage usage.",
-    example: { tool: { name: "fs_usage", args: {} } }
-  },
-  {
-    name: "knowledge_ingest",
-    description: "Index a text file from the virtual filesystem for local knowledge search. The original file remains in VFS; only local chunks and metadata are indexed.",
-    example: { tool: { name: "knowledge_ingest", args: { path: "/workspace/knowledge/product-notes.md", tags: ["product", "notes"] } } }
-  },
-  {
-    name: "knowledge_search",
-    description: "Search the local knowledge base with keywords and return small cited chunks. Use knowledge_read for more source context.",
-    example: { tool: { name: "knowledge_search", args: { query: "product launch decision", limit: 5 } } }
-  },
-  {
-    name: "knowledge_read",
-    description: "Read indexed knowledge chunks by documentId and optional chunk range.",
-    example: { tool: { name: "knowledge_read", args: { documentId: "vfs:/workspace/knowledge/product-notes.md", chunkStart: 0, chunkEnd: 1 } } }
-  },
-  {
-    name: "knowledge_forget",
-    description: "Remove a document from the local knowledge index. It does not delete the original VFS file.",
-    example: { tool: { name: "knowledge_forget", args: { path: "/workspace/knowledge/product-notes.md" } } }
-  },
-  {
-    name: "knowledge_status",
-    description: "Show local knowledge base document, chunk, and source-size status.",
-    example: { tool: { name: "knowledge_status", args: {} } }
-  },
-  {
-    name: "agent_artifact_read",
-    description: "Read a bounded character range from a large Agent Tool Result referenced by FULL_RESULT_REF.",
-    example: { tool: { name: "agent_artifact_read", args: { artifactId: "artifact-id", offset: 0, maxChars: 8000 } } }
-  },
-  {
-    name: "list_webclaw_config",
-    description: "Read a redacted summary of WebClaw tools, skills, schedules, providers, channels, and pending self-management patches.",
-    example: { tool: { name: "list_webclaw_config", args: {} } }
-  },
-  {
-    name: "propose_webclaw_config_patch",
-    description: "Propose validated changes to WebClaw tools, skills, schedules, or the active Provider. Use set_active_provider with a providerId returned by list_webclaw_config. This returns a patchId and preview diff but does not write the final config.",
-    example: {
-      tool: {
-        name: "propose_webclaw_config_patch",
-        args: {
-          operations: [
-            {
-              op: "set_active_provider",
-              providerId: "provider_id_from_list_webclaw_config"
-            }
-          ]
-        }
-      }
-    }
-  },
-  {
-    name: "apply_webclaw_config_patch",
-    description: "Apply a patch previously returned by propose_webclaw_config_patch. An active Provider switch takes effect on the next agent run.",
-    example: { tool: { name: "apply_webclaw_config_patch", args: { patchId: "patch_id_from_propose" } } }
-  },
-  {
-    name: "rollback_webclaw_config_patch",
-    description: "Rollback the latest applied self-management patch by changeId.",
-    example: { tool: { name: "rollback_webclaw_config_patch", args: { changeId: "change_id_from_apply" } } }
-  }
-];
-
-const BUILTIN_TOOL_REQUIRED_ARGS = Object.freeze({
-  click: ["selector"],
-  type_text: ["selector", "text"],
-  navigate: ["url"],
-  search_web: ["query"],
-  get_weather: ["location"],
-  http_request: ["url"],
-  qiyewechat_notification: ["content"],
-  chrome_api: ["operation"],
-  update_plan: ["plan"],
-  task_push: ["instruction"],
-  fs_shell: ["command"],
-  fs_read: ["path"],
-  fs_write: ["path", "content"],
-  fs_edit: ["path", "oldText", "newText"],
-  fs_search: ["query"],
-  fs_apply_patch: ["operations"],
-  fs_mkdir: ["path"],
-  fs_move: ["from", "to"],
-  fs_delete: ["path"],
-  fs_restore: ["trashPath"],
-  fs_purge: ["path", "confirm"],
-  fs_empty_trash: ["confirm"],
-  knowledge_ingest: ["path"],
-  knowledge_search: ["query"],
-  knowledge_read: ["documentId"],
-  knowledge_forget: ["path"],
-  agent_artifact_read: ["artifactId"],
-  propose_webclaw_config_patch: ["operations"],
-  apply_webclaw_config_patch: ["patchId"],
-  rollback_webclaw_config_patch: ["changeId"]
-});
+const BUILTIN_TOOLS = builtinToolDefinitions();
 
 const FALLBACK_MODEL_OPTIONS = {
   "codex-oauth": ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5-mini"],
@@ -500,10 +241,9 @@ const PROTECTED_BUILTIN_TOOLS = new Set([
   "rollback_webclaw_config_patch"
 ]);
 const SELF_MANAGEMENT_TOOLS = new Set(PROTECTED_BUILTIN_TOOLS);
-const DEFAULT_DISABLED_BUILTIN_TOOLS = new Set([
-  ...SELF_MANAGEMENT_TOOLS,
-  QIYEWECHAT_NOTIFICATION_TOOL_NAME
-]);
+const DEFAULT_DISABLED_BUILTIN_TOOLS = new Set(
+  BUILTIN_TOOLS.filter((tool) => !tool.defaultEnabled).map((tool) => tool.name)
+);
 
 const CHROME_AI_OFFSCREEN_URL = "src/chrome-ai-offscreen.html";
 const WECHAT_BRIDGE_RECONNECT_MS = 3000;
@@ -589,7 +329,7 @@ const WORKSPACE_BOOTSTRAP_LEGACY_TEMPLATES = {
 const WORKSPACE_BOOTSTRAP_TEMPLATES = {
   "AGENTS.md": `# WebClaw Workspace\n\n## Operating model\nWebClaw is a browser AI agent. It works through enabled Tools, Skills, Channels, Schedules, the local knowledge base, the ephemeral task stack, and the virtual filesystem (VFS). Core system policy and tool permissions always take precedence over workspace instructions.\n\n## Workflow\n1. Understand the current user goal and inspect the relevant page or VFS file before acting.\n2. Prefer existing Tools and Skills. Use a Skill for reusable guidance; use a Tool for deterministic actions.\n3. Use task_push only for a genuinely separable subtask. Pass minimal structured context and a precise outputSchema, then wait for its verified result.\n4. For questions about imported material, use knowledge_search then knowledge_read. Cite the returned VFS path and do not claim support from a source you did not retrieve.\n5. Verify tool results. Never claim a browser action, message delivery, file change, or network request succeeded without a confirming result.\n6. Keep the active session coherent across side panel and connected channels. Use prior successful tool trajectories as verified examples, especially after switching providers.\n\n## Workspace discipline\n- Read a file before changing it. Use fs_edit or expectedVersion for existing files.\n- Put durable facts, decisions, constraints, and open loops in MEMORY.md. Put dated working notes in memory/YYYY-MM-DD.md.\n- Put source files in /workspace/knowledge and index text material with knowledge_ingest. The index is local metadata and chunks; the original source remains in VFS.\n- Put reusable website or task instructions in Skills; put stable page parsing logic in VFS JavaScript only when normal Tools are insufficient.\n- Never store passwords, OAuth tokens, cookies, API keys, private message contents, or other secrets in workspace memory.`,
   "SOUL.md": `# Soul\n\nWebClaw is calm, practical, precise, and honest about uncertainty. It acts only when an action clearly follows from the user request and reports outcomes grounded in tool results.\n\nUse the user's language when practical. Prefer concise answers with concrete next steps. Avoid inventing page state, external facts, completed actions, or capabilities. When an action is risky, irreversible, public, or sends a message, verify the target and content first.\n\nLearn from successful work without blindly repeating it: reuse verified tool argument patterns, and use errors to correct the next call.`,
-  "TOOLS.md": `# Tool Notes\n\n## Browser\nUse get_page_context before unfamiliar page interaction. Prefer click/type_text/navigate over run_js. Use run_js only for logic normal Tools cannot express; it can execute inline code or a VFS .js file in the active page. Ad-hoc run_js calls require approval every time. An exact scheduled run_js operation can reuse a saved approval only while its Schedule, target URL, execution world, and code remain unchanged.\n\n## Tasks\nUse task_push for a separable child task that benefits from an independent model context. Provide complete instruction, minimal JSON context, a precise outputSchema, and a reasonable maxSteps value. The parent waits for the validated output. Use task_stack to inspect active frames and budget. Tasks are ephemeral and do not replace reusable Workflow Tools.\n\n## VFS and knowledge\n/workspace is durable agent context. /workspace/knowledge holds source files, while the local knowledge index stores only chunks and metadata. Use knowledge_ingest for text sources, knowledge_search for retrieval, and knowledge_read for additional context. /inbox stores channel media, /skills stores reusable scripts or references, and /exports stores output. fs_delete and rm move items to /.trash; restore or permanently purge them deliberately.\n\n## Network and messaging\nUse search_web for current facts, get_weather for weather, and background http_request for cross-origin requests. qiyewechat_notification uses the webhook configured on that Tool. Connected Channels receive and reply through the active chat session.\n\n## Configuration\nTools, Skills, Schedules, Providers, and Channels are configuration-managed. Self-management and Schedules are optional advanced features. Inspect configuration first, propose a validated patch, then apply it. Do not invent direct chrome.storage writes.\n\n## Recovery\nFor TOOL_RESULT ok:false, read the error and supplied valid example, then correct arguments or choose another approach. Never repeat an invalid call unchanged.`,
+  "TOOLS.md": `# Tool Notes\n\n## Discovery\nOnly a compact core Tool set is initially visible. Call tool_search with a task description, category, or bundle before using an enabled capability that is not loaded in the current run. Loading is run-scoped and never changes global settings.\n\n## Browser\nUse page_snapshot before unfamiliar page interaction. Use page_action for click, type, select, check, hover, focus, keypress, scroll, and submit; use page_wait to verify asynchronous state. Use page_extract for bounded links, tables, forms, metadata, JSON-LD, text, or selector data. Use browser_tabs for tab lifecycle, page_screenshot to save the visible tab to VFS, and page_file_input to place a VFS file in a page file input. page_storage accesses only the active origin's localStorage/sessionStorage, never cookies. Optional browser-personal-data Tools require their matching Chrome permission. Use browser_clipboard_read for clipboard reads and browser_clipboard_write for writes; never request write access for a read-only task. Use run_js only for logic normal Tools cannot express; ad-hoc calls require approval every time.\n\n## Tasks\nUse task_push for a separable child task that benefits from an independent model context. Provide complete instruction, minimal JSON context, a precise outputSchema, and a reasonable maxSteps value. The parent waits for the validated output. Use task_stack to inspect active frames and budget. Tasks are ephemeral and do not replace reusable Workflow Tools.\n\n## VFS and knowledge\n/workspace is durable agent context. Use fs_stat for metadata, fs_glob to discover paths, fs_hash to verify content identity, and fs_diff to compare text files. Use fs_manage for mkdir, move, copy, touch, and recoverable trash operations; use fs_trash for list, restore, purge, and empty. The fs_shell rm command also moves items to /.trash. Use fs_archive for portable VFS archives and fs_preview_open for static-site previews. /workspace/knowledge holds source files, while the local knowledge index stores only chunks and metadata. Use knowledge_ingest for text sources, knowledge_search for retrieval, knowledge_read for additional context, and knowledge_reindex after source changes. /inbox stores channel media, /skills stores reusable scripts or references, and /exports stores output.\n\n## Network and messaging\nUse search_web for current facts, get_weather for weather, and background http_request for cross-origin requests. http_request can send JSON, URL-encoded forms, and multipart VFS files, and can save bounded binary responses to VFS. qiyewechat_notification uses the webhook configured on that Tool. Connected Channels receive and reply through the active chat session.\n\n## Configuration\nTools, Skills, Schedules, Providers, and Channels are configuration-managed. Self-management and Schedules are optional advanced features. Inspect configuration first, propose a validated patch, then apply it. Do not invent direct chrome.storage writes.\n\n## Recovery\nTool results use an ok/data/error/meta envelope in model context. For ok:false, read the error and supplied valid example, then correct arguments or choose another approach. Never repeat an invalid call unchanged.`,
   "IDENTITY.md": `# Identity\n\nName: WebClaw\nRole: A Chrome extension AI agent with browser tools, connected chat channels, model providers, schedules, and a virtual filesystem.\n\nWebClaw operates within Chrome extension permissions and configured services. VFS scripts and Skills can extend reusable workflows, but they cannot grant permissions that the extension does not have.`,
   "USER.md": `# User Preferences\n\nRecord only durable preferences that the user explicitly states or repeatedly demonstrates. Examples: preferred language, preferred output format, notification conventions, recurring project context, and risk tolerance.\n\nDo not infer sensitive personal data. Do not store credentials, access tokens, cookies, private media, or temporary one-off requests.`,
   "MEMORY.md": `# Long-Term Memory\n\n## What belongs here\n- Stable user preferences and working conventions\n- Confirmed project facts, decisions, constraints, and unresolved tasks\n- Reusable provider, channel, or workflow conventions that remain valid\n\n## What does not belong here\n- Raw chat transcripts, large page captures, tool dumps, secrets, tokens, cookies, passwords, or transient details\n\nKeep entries short, dated when useful, and remove stale information. Use daily files under memory/ for temporary execution notes before promoting durable facts here.`
@@ -607,12 +347,14 @@ const REPLACEABLE_DEFAULT_KNOWLEDGE_MANUAL_HASHES = new Set([
   "kcQOQB5In4knHBpRgUGlvN7AVp-W6I435HqezmffziU",
   "XAX46BXypQ1LE7DWmgpSqdw78M-Tw_JjPFRkRPSb4yw",
   "04RN_x4Yj49RriWSQGBAn7Wqh1UaDHM0iq395QmQb30",
-  "AUoWZDFRlU1yysJ_EojdS8ROqAgFMuvXzZz5yYheR8g"
+  "AUoWZDFRlU1yysJ_EojdS8ROqAgFMuvXzZz5yYheR8g",
+  "ebvLDmJq-nzX4Kn5D2uASmSHK55uO-X6VMG8Fhg6Rwo",
+  "8Q4-Lrp4wlIcHOAUmRZJZXbY-hxxTEOPi4HUEYIWegw"
 ]);
-const DEFAULT_KNOWLEDGE_MANUAL = `<!-- webclaw-default-manual: 0.6.0-r1 -->
+const DEFAULT_KNOWLEDGE_MANUAL = `<!-- webclaw-default-manual: 0.6.1-r2 -->
 # WebClaw Operation Manual
 
-Built-in operating reference for WebClaw 0.6.0. The file is stored in VFS and indexed into the local knowledge base. WebClaw upgrades an unchanged historical default copy, but preserves a copy that the user has edited.
+Built-in operating reference for WebClaw 0.6.1. The file is stored in VFS and indexed into the local knowledge base. WebClaw upgrades an unchanged historical default copy, but preserves a copy that the user has edited.
 
 ## 1. What WebClaw is
 WebClaw is a Chrome extension AI agent. It can converse in the side panel and through connected WeChat or Telegram channels, use configured model providers, operate the active browser tab, use a browser-backed virtual filesystem (VFS), run schedules, and retain durable workspace context.
@@ -682,18 +424,23 @@ Example:
 ## 4. Browser operations
 Use normal browser tools before run_js. Ad-hoc run_js calls require approval every time. An exact scheduled operation may reuse a saved approval until its Schedule, target URL, execution world, or code changes.
 
-1. get_page_context: inspect URL, title, selected/visible text, and interactive selectors. Use compact mode for small-context models. Page limits come from the active Provider Adapter; Chrome AI can additionally use the built-in Summarizer API when available.
-2. click: click a CSS selector.
-3. type_text: fill a selector; set clear=false to append.
-4. navigate: open a URL in the active tab.
-5. wait: wait briefly for a page to update.
-6. translate_page: translate visible page text in place.
+Only a compact core set is initially exposed to the model. Use tool_search to find and load another enabled Tool into the current run. A loaded Tool does not become globally enabled, and optional Chrome permissions still require user approval.
+
+1. page_snapshot: inspect URL, title, selected/visible text, and interactive selectors. Use compact mode for small-context models.
+2. page_action: click, type, select, check, hover, focus, keypress, scroll, or submit through structured arguments.
+3. page_wait: wait for selector visibility, hidden state, text, URL, readiness, or a bounded timeout.
+4. page_extract: extract bounded text, links, tables, forms, metadata, JSON-LD, or selector values.
+5. browser_tabs: list, inspect, open, activate, navigate, reload, duplicate, move, pin, mute, or close tabs.
+6. page_screenshot: capture the visible tab to a VFS image. page_storage accesses only localStorage/sessionStorage for the active origin.
+7. page_file_input: attach one VFS file to a page file input and dispatch input/change events.
+8. translate_page: translate visible page text in place.
+9. Optional browser Tools cover tab groups, sessions, downloads, bookmarks, history, clipboard, and local notifications. They are disabled by default and are hidden until enabled and granted their matching Chrome optional permission. Clipboard access uses separate browser_clipboard_read and browser_clipboard_write Tools so read-only work never requires write permission.
 
 Example:
-{"tool":{"name":"get_page_context","args":{"mode":"compact","maxChars":4000}}}
+{"tool":{"name":"page_snapshot","args":{"mode":"compact","maxChars":4000}}}
 
 Then use a selector returned by the context:
-{"tool":{"name":"click","args":{"selector":"button[type=submit]"}}}
+{"tool":{"name":"page_action","args":{"action":"click","selector":"button[type=submit]"}}}
 
 Do not claim a page was changed unless the tool result confirms it. Re-read page context after important navigation or submission.
 
@@ -712,7 +459,7 @@ run_js requires the Allow agent JavaScript execution setting.
 ## 6. Web search, weather, and HTTP
 - search_web: use for current facts, then inspect results and reliable pages before answering.
 - get_weather: direct weather lookup for a location.
-- http_request: request HTTP/HTTPS from the extension background. Use it for APIs or webhooks instead of page fetch when CORS would block page JavaScript.
+- http_request: request HTTP/HTTPS from the extension background. It supports timeout, JSON, URL-encoded forms, multipart VFS files, response-size limits, and saving binary responses to VFS.
 - qiyewechat_notification: send text or markdown through the enterprise WeChat robot webhook configured on that Tool.
 - The canonical Tool name and Display name are both qiyewechat_notification. Always call exactly this identifier.
 
@@ -734,13 +481,13 @@ Important directories:
 - /skills: reusable script and reference material.
 - /.trash: recoverable deleted VFS items.
 
-Use fs_list, fs_read, fs_write, fs_edit, fs_search, fs_mkdir, fs_move, fs_delete, fs_restore, fs_purge, fs_empty_trash, fs_usage, or fs_shell.
+Use fs_list, fs_stat, fs_read, fs_write, fs_edit, fs_search, fs_glob, fs_hash, fs_diff, fs_apply_patch, fs_manage, fs_trash, fs_usage, fs_archive, fs_preview_open, or fs_shell. fs_manage performs mkdir, move, copy, touch, and recoverable trash operations. fs_trash lists, restores, permanently purges, or empties trash; destructive actions require confirm=true.
 
 In the file manager, HTML, HTM, XHTML, and SVG files have a Preview button. It opens an isolated VFS static-site preview in a separate Chrome tab and resolves relative CSS, JavaScript, image, font, and JSON resources without modifying the source files. The preview provides a project-scoped localStorage compatibility layer persisted in browser storage; it is not the website's real origin storage. This is a browser preview runtime, not a real localhost HTTP server; server-side code and backend routes are not executed.
 
 fs_shell is deliberately limited to pwd, cd, ls, stat, mkdir, touch, cat, cp, mv, and rm. cd validates the target directory and updates the current session working directory for later Tool calls. It never runs an operating system shell.
 
-For existing files, read first and pass expectedVersion to fs_write or fs_edit when possible. fs_delete and rm move items to /.trash. Trash items can only be restored or permanently purged. Use fs_restore with onConflict=rename when the destination already exists.
+For existing files, read first and pass expectedVersion to fs_write or fs_edit when possible. fs_manage action=trash and fs_shell rm move items to /.trash. Trash items can only be restored or permanently purged with fs_trash. Use fs_trash action=restore with onConflict=rename when the destination already exists.
 
 Listing / shows the VFS root directories. Text reads support startLine and endLine. Binary images and files can be preserved as original Blob data, downloaded through the file manager, or attached to supported model requests; they are not operating-system paths.
 
@@ -761,8 +508,8 @@ The knowledge base is local to the browser profile. Original sources stay in VFS
 
 Workflow:
 1. Save a text source under /workspace/knowledge.
-2. Call knowledge_ingest with its path and optional title/tags.
-3. Call knowledge_search with the question.
+2. Call knowledge_ingest with its path and optional title, tags, and collection.
+3. Call knowledge_search with the question and optional path, tags, collection, or update-time filters.
 4. Call knowledge_read with documentId and chunk range only when more context is needed.
 5. Cite the returned VFS path in the final answer.
 
@@ -770,7 +517,7 @@ Example:
 {"tool":{"name":"knowledge_ingest","args":{"path":"/workspace/knowledge/project-notes.md","tags":["project"]}}}
 {"tool":{"name":"knowledge_search","args":{"query":"What was the release decision?","limit":5}}}
 
-knowledge_forget removes only the index; it does not delete the source file. knowledge_status lists indexed documents and size. Current ingestion supports text files. For PDF or images, first obtain usable text through an appropriate model or workflow, save that text to VFS, then ingest it.
+knowledge_forget removes only the index; it does not delete the source file. knowledge_status lists and filters indexed documents and size. knowledge_reindex rebuilds matching VFS-backed entries after source files change. Current ingestion supports text files. For PDF or images, first obtain usable text through an appropriate model or workflow, save that text to VFS, then ingest it.
 
 The built-in manual is /workspace/knowledge/WEBCLAW_MANUAL.md. On extension startup, a missing copy is created and indexed. An unchanged historical default copy is upgraded and re-indexed; a user-edited copy is preserved.
 
@@ -784,6 +531,7 @@ The built-in manual is /workspace/knowledge/WEBCLAW_MANUAL.md. On extension star
 - Use propose_webclaw_config_patch for a validated preview, then apply_webclaw_config_patch with the returned patchId. Use rollback_webclaw_config_patch with a changeId to undo the latest supported applied change.
 - To change the default model Provider, propose {"op":"set_active_provider","providerId":"existing-provider-id"}. The ID must come from list_webclaw_config. The switch takes effect on the next Agent, Channel, or Schedule run; the request applying the patch finishes with its original Provider.
 - Self-management can add, update, enable, disable, or delete Tools, Skills, and Schedules, but it cannot create or edit Provider credentials, OAuth tokens, API keys, endpoints, or Channels.
+- Built-in Tool definitions, JSON Schemas, risk/effect metadata, UI metadata, and scheduler metadata come from one registry. Removed legacy Tool names are invalid and are not aliases; use tool_search or the Tools settings page to inspect current names.
 
 For reusable page logic, store a small JavaScript file in VFS and call it through run_js after testing. This can extend workflows without granting new Chrome permissions.
 
@@ -814,8 +562,8 @@ Internal Tool trajectories are hidden from the chat UI but retained in controlle
 If an operation lacks a website or Provider origin permission, explain why it is needed and request it through Chrome. A remote Channel approval cannot grant a new Chrome optional host permission. If OAuth is missing or expired, start the supported device flow and continue only after the background poll confirms the token.
 
 ## 14. Practical patterns
-- Research current news: search_web -> inspect reliable source -> get_page_context -> summarize with links.
-- Work with a webpage: get_page_context -> click/type_text/navigate -> re-check context -> report confirmed result.
+- Research current news: search_web -> inspect reliable source -> page_snapshot/page_extract -> summarize with links.
+- Work with a webpage: page_snapshot -> page_action/browser_tabs -> page_wait -> re-check state -> report confirmed result.
 - Build a local report: fs_write under /workspace -> fs_read to verify -> optionally export to /exports.
 - Answer from documents: knowledge_search -> knowledge_read -> answer with source path.
 - Delegate a separable subtask: task_push with minimal context and outputSchema -> read validated output -> continue the parent task.
@@ -844,8 +592,8 @@ function buildAgentSystemPrompt(settings) {
     hasTool("search_web") ? "For current or recent facts, search the web first with search_web." : "",
     hasTool("get_weather") ? "For weather, get_weather is available as a faster direct source." : "",
     hasTool("knowledge_search") ? "For questions about imported workspace material, use knowledge_search first and knowledge_read only for the needed chunks; cite the returned VFS path." : "",
-    hasTool("translate_page") ? "When the user asks to translate the current page, call translate_page directly without calling get_page_context first." : "",
-    hasTool("get_page_context") ? "Use get_page_context before interacting with an unfamiliar page for non-translation tasks." : "",
+    hasTool("translate_page") ? "When the user asks to translate the current page, call translate_page directly without calling page_snapshot first." : "",
+    hasTool("page_snapshot") ? "Use page_snapshot before interacting with an unfamiliar page for non-translation tasks. Prefer page_action and page_wait over run_js for normal interaction." : "",
     hasTool("run_js") ? "Prefer selectors and normal tools for page operations. Use run_js only when normal tools are insufficient. run_js accepts exactly one of inline code or vfsPath for a virtual .js file." : "",
     hasTool("task_push") ? "For a genuinely separable part of a large task, task_push creates an ephemeral child task with an independent context. Pass only the needed context and a precise outputSchema, wait for its structured result, and keep simple sequential work in the current task. A child task may use task_push again within the task-stack budget." : "",
     hasTool("fs_shell") ? "The current virtual filesystem working directory is provided in the system context; fs_shell resolves relative paths from it. When the user asks to change directories, call fs_shell with command `cd <path>` and wait for its result; do not merely claim that the directory changed. Use an explicit cwd only when intentionally operating elsewhere." : "",
@@ -946,6 +694,109 @@ function enabledTools(settings) {
   return normalizeTools(settings.tools).filter((tool) => tool.enabled);
 }
 
+const INITIAL_AGENT_TOOL_NAMES = new Set([
+  "update_plan", "task_push", "task_stack", "agent_artifact_read", "tool_search",
+  "page_snapshot", "page_action", "page_wait", "browser_tabs", "http_request",
+  "fs_list", "fs_read", "fs_write", "fs_edit", "fs_search", "fs_glob", "fs_apply_patch", "fs_manage", "fs_trash",
+  "knowledge_search", "knowledge_read", "knowledge_status"
+]);
+
+async function createToolExposure(settings, options = {}) {
+  const exposure = new Set();
+  const pendingNames = new Set((Array.isArray(options.pendingToolCalls) ? options.pendingToolCalls : []).map((call) => String(call?.name || "")));
+  for (const tool of enabledTools(settings)) {
+    const definition = tool.builtin ? builtinToolDefinition(tool.name) : null;
+    const initiallyVisible = !tool.builtin || INITIAL_AGENT_TOOL_NAMES.has(tool.name) || pendingNames.has(tool.name);
+    if (!initiallyVisible) continue;
+    if (definition?.optionalPermissions?.length && !(await hasAllOptionalPermissions(definition.optionalPermissions))) continue;
+    exposure.add(tool.name);
+  }
+  return exposure;
+}
+
+function settingsWithToolExposure(settings, exposure) {
+  return {
+    ...settings,
+    tools: normalizeTools(settings.tools).map((tool) => ({ ...tool, enabled: tool.enabled && exposure.has(tool.name) }))
+  };
+}
+
+async function searchAndLoadTools(args, settings, options = {}) {
+  const exposure = options.toolExposure;
+  if (!(exposure instanceof Set)) throw new Error("tool_search is unavailable outside an active Agent run.");
+  const query = required(args.query, "query");
+  const terms = String(query).toLowerCase().split(/[^a-z0-9_\u4e00-\u9fff]+/).filter(Boolean);
+  const category = String(args.category || "").trim();
+  const bundle = String(args.bundle || "").trim();
+  const limit = Math.max(1, Math.min(12, Number(args.limit || 6)));
+  const enabledByName = new Map(enabledTools(settings).map((tool) => [tool.name, tool]));
+  const matches = builtinToolDefinitions()
+    .filter((definition) => enabledByName.has(definition.name) && definition.name !== "tool_search")
+    .filter((definition) => !category || definition.category === category)
+    .filter((definition) => !bundle || definition.bundle === bundle)
+    .map((definition) => ({ definition, score: toolSearchScore(definition, terms) }))
+    .filter((item) => item.score > 0 || category || bundle)
+    .sort((left, right) => right.score - left.score || left.definition.name.localeCompare(right.definition.name))
+    .slice(0, limit);
+  const permissionStates = [];
+  for (const item of matches) {
+    const missing = [];
+    for (const permission of uniqueStrings(item.definition.optionalPermissions || [])) {
+      if (!(await chrome.permissions.contains({ permissions: [permission] }))) missing.push(permission);
+    }
+    permissionStates.push({ item, missing });
+  }
+  const permissionCandidate = permissionStates.find(({ missing }) => missing.length > 0);
+  if (permissionCandidate) {
+    const { definition } = permissionCandidate.item;
+    const approval = await requestInteractiveApproval(options, {
+      kind: "optional_permission", title: "Load optional Tool capabilities",
+      reason: `${definition.name} needs its optional Chrome permission before it can be exposed to the active model.`,
+      details: `${definition.name}: ${permissionCandidate.missing.join(", ")}`,
+      permissions: permissionCandidate.missing, allowLabel: `Grant and load ${definition.name}`
+    });
+    if (!approval.approved) throw new Error(approval.error || "Optional Tool permissions were denied.");
+    if (!(await hasAllOptionalPermissions(permissionCandidate.missing))) {
+      throw new Error(`Chrome did not grant the requested permission for ${definition.name}.`);
+    }
+  }
+  const loadedMatches = [];
+  const skippedMatches = [];
+  for (const { definition } of matches) {
+    if (await hasAllOptionalPermissions(definition.optionalPermissions || [])) {
+      exposure.add(definition.name);
+      loadedMatches.push(definition);
+    } else {
+      skippedMatches.push({ name: definition.name, reason: "optional_permission_required" });
+    }
+  }
+  return {
+    ok: true,
+    query,
+    loaded: loadedMatches.map((definition) => ({
+      name: definition.name,
+      category: definition.category,
+      bundle: definition.bundle,
+      description: definition.description,
+      inputSchema: definition.inputSchema
+    })),
+    skipped: skippedMatches,
+    activeToolCount: exposure.size
+  };
+}
+
+function toolSearchScore(definition, terms) {
+  const haystack = `${definition.name} ${definition.category} ${definition.bundle} ${definition.description}`.toLowerCase();
+  return terms.reduce((score, term) => score + (definition.name.includes(term) ? 5 : haystack.includes(term) ? 1 : 0), 0);
+}
+
+async function hasAllOptionalPermissions(permissions) {
+  for (const permission of uniqueStrings(permissions)) {
+    if (!(await chrome.permissions.contains({ permissions: [permission] }))) return false;
+  }
+  return true;
+}
+
 function enabledSkills(settings) {
   return normalizeSkills(settings.skills).filter((skill) => skill.enabled);
 }
@@ -976,50 +827,11 @@ function nativeToolInputSchema(tool) {
   if (!tool.builtin) {
     return normalizeInputSchema(normalizeCustomToolConfig(tool.config || {}).inputSchema);
   }
-  if (tool.name === "run_js") {
-    return {
-      type: "object",
-      properties: {
-        code: { type: "string", description: "Inline JavaScript source. Provide code or vfsPath, not both." },
-        vfsPath: { type: "string", description: "VFS path to a .js, .mjs, or .cjs file. Provide code or vfsPath, not both." },
-        world: { type: "string", enum: ["user_script", "main"] }
-      },
-      additionalProperties: false
-    };
-  }
-  if (tool.name === "task_push") {
-    return {
-      type: "object",
-      properties: {
-        title: { type: "string", description: "Short child-task title." },
-        instruction: { type: "string", description: "Complete instruction for the independent child task." },
-        context: {
-          type: "object",
-          description: "Only the structured parent context needed by the child.",
-          additionalProperties: true
-        },
-        outputSchema: {
-          type: "object",
-          description: "JSON Schema for the child task output object.",
-          additionalProperties: true
-        },
-        outputInstructions: { type: "string", description: "Semantic requirements not expressible in JSON Schema." },
-        maxSteps: { type: "integer", minimum: 1 },
-        allowedTools: {
-          type: "array",
-          items: { type: "string" },
-          description: "Optional subset of the parent's enabled tools."
-        },
-        workingDirectory: { type: "string" }
-      },
-      required: ["instruction"],
-      additionalProperties: false
-    };
-  }
-  return inferToolInputSchema(
-    toolExample(tool)?.tool?.args || {},
-    BUILTIN_TOOL_REQUIRED_ARGS[tool.name] || []
-  );
+  return structuredClone(builtinToolInputSchema(tool.name) || {
+    type: "object",
+    properties: {},
+    additionalProperties: false
+  });
 }
 
 function exampleArgsFromSchema(schema) {
@@ -1111,6 +923,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "WEBCLAW_CLIPBOARD") return false;
   if (handleChromeAIRuntimeMessage(message)) {
     sendResponse({ ok: true });
     return false;
@@ -1661,7 +1474,7 @@ function normalizeConfigPatchOperation(operation) {
   }
   const normalizedName = normalizeSelfConfigName(operation.name);
   const name = op.endsWith("_tool") ? canonicalToolName(normalizedName) : normalizedName;
-  if (!name) return null;
+  if (!name || (op.endsWith("_tool") && isRemovedBuiltinToolName(name))) return null;
   return {
     ...operation,
     op,
@@ -1709,7 +1522,7 @@ function normalizeTools(value, options = {}) {
   for (const raw of rawTools) {
     const name = canonicalToolName(normalizeToolName(raw?.name));
     if (!raw || raw.type === "builtin" || BUILTIN_TOOLS.some((tool) => tool.name === name)) continue;
-    if (!name) continue;
+    if (!name || isRemovedBuiltinToolName(name)) continue;
     tools.push({
       id: String(raw.id || name),
       name,
@@ -3556,6 +3369,8 @@ async function markStoredTaskRunsInterrupted() {
 async function runAgent(uiMessages, options = {}) {
   await taskRuntimeReady;
   const settings = options.settingsOverride ? normalizeSettings(options.settingsOverride) : await ensureSettings();
+  const toolExposure = await createToolExposure(settings, options);
+  const initialModelSettings = settingsWithToolExposure(settings, toolExposure);
   let workingDirectory = normalizeWorkingDirectory(options.workingDirectory || "/workspace");
   const turnId = String(options.turnId || createAgentId("turn"));
   const turnStartedAt = Date.now();
@@ -3687,7 +3502,7 @@ async function runAgent(uiMessages, options = {}) {
         console.warn("WebClaw workspace bootstrap load failed", error);
       }
       const projection = projectAgentContext({
-        systemPrompt: buildAgentSystemPrompt(settings),
+        systemPrompt: buildAgentSystemPrompt(initialModelSettings),
         workingDirectory,
         workspaceBootstrap,
         tokenBudget: agentHistoryTokenBudget(settings),
@@ -3712,7 +3527,11 @@ async function runAgent(uiMessages, options = {}) {
         start: (key, value) => agentRunStore.startOperation(key, value, runJournal.ownerId),
         complete: (key, value) => agentRunStore.completeOperation(key, value, runJournal.ownerId)
       },
-      validateToolCall: (toolCall) => validateAgentToolCall(settings, toolCall),
+      validateToolCall: (toolCall) => {
+        const name = canonicalToolName(toolCall?.name);
+        if (!toolExposure.has(name)) throw new Error(`Tool is not loaded in this run: ${name}. Use tool_search first.`);
+        validateAgentToolCall(settings, toolCall);
+      },
       maxSteps: Number(settings.maxSteps || 8),
       messages,
       recoveryPolicy,
@@ -3727,15 +3546,20 @@ async function runAgent(uiMessages, options = {}) {
         taskId: taskFrameId,
         ...transition
       }),
-      beforeModelStep: async ({ step, messages: modelMessages, runtimeState }) => {
-        await taskSupervisor.recordModelStep(taskFrameId);
+      beforeModelStep: async ({ step, messages: modelMessages, runtimeState, taskContinuation }) => {
+        await taskSupervisor.recordModelStep(taskFrameId, {
+          allowReservedContinuation: taskContinuation === true
+        });
         emitAgentEvent(options, "task_progress", {
           turnId,
           taskRunId: taskRun.id,
           taskId: taskFrameId,
-          phase: "model",
+          phase: taskContinuation ? "integrating_child_result" : "model",
           step: Number(taskRun.tasks[taskFrameId]?.step || step + 1),
-          maxSteps: Number(taskRun.tasks[taskFrameId]?.maxSteps || settings.maxSteps || 8)
+          maxSteps: Math.max(
+            Number(taskRun.tasks[taskFrameId]?.maxSteps || settings.maxSteps || 8),
+            Number(taskRun.tasks[taskFrameId]?.step || step + 1)
+          )
         });
         const modelItemId = createAgentId("item");
         emitAgentEvent(options, "item_started", {
@@ -3761,7 +3585,7 @@ async function runAgent(uiMessages, options = {}) {
         });
         return { modelItemId };
       },
-      sampleModel: ({ messages: modelMessages, stepContext }) => callAgentModel(settings, modelMessages, {
+      sampleModel: ({ messages: modelMessages, stepContext }) => callAgentModel(settingsWithToolExposure(settings, toolExposure), modelMessages, {
         signal: options.signal,
         requestApproval: options.requestApproval,
         authorizationMode: options.authorizationMode,
@@ -4005,6 +3829,7 @@ async function runAgent(uiMessages, options = {}) {
             turnId,
             toolItemId,
             workingDirectory,
+            toolExposure,
             onWorkingDirectoryChange: (nextPath) => {
               workingDirectory = normalizeWorkingDirectory(nextPath);
               options.onWorkingDirectoryChange?.(workingDirectory);
@@ -4051,7 +3876,8 @@ async function runAgent(uiMessages, options = {}) {
         const resultContent = await toolResultMessageContent(settings, toolName, toolResult, {
           runId: turnId,
           callId: toolCallId,
-          sessionId: options.sessionId
+          sessionId: options.sessionId,
+          durationMs: Date.now() - toolStartedAt
         });
         return {
           toolResult,
@@ -4530,7 +4356,7 @@ async function ensureDefaultKnowledgeManual() {
   }
   await knowledgeIngestVfsFile(DEFAULT_KNOWLEDGE_MANUAL_PATH, {
     title: "WebClaw Operation Manual",
-    tags: ["webclaw", "manual", "operations", "0.6.0"]
+    tags: ["webclaw", "manual", "operations", "0.6.1"]
   });
 }
 
@@ -4629,7 +4455,8 @@ function isToolTrajectoryContent(content) {
 
 async function toolResultMessageContent(settings, toolName, toolResult, options = {}) {
   const limit = providerAdapterFor(getActiveProvider(settings)).capabilities.toolResultChars;
-  const json = JSON.stringify(toolResult);
+  const envelope = normalizedToolResultEnvelope(toolName, toolResult, options);
+  const json = JSON.stringify(envelope);
   let artifactRef = "";
   if (json.length > limit) {
     try {
@@ -4638,7 +4465,7 @@ async function toolResultMessageContent(settings, toolName, toolResult, options 
         callId: String(options.callId || ""),
         sessionId: String(options.sessionId || ""),
         kind: "tool_result",
-        value: toolResult
+        value: envelope
       });
     } catch (error) {
       console.warn("WebClaw could not persist large Tool Result artifact", error);
@@ -4651,7 +4478,30 @@ async function toolResultMessageContent(settings, toolName, toolResult, options 
   const failureGuidance = toolResult?.ok === false
     ? buildToolRecoveryGuidance(settings, toolName)
     : "";
-  return `TOOL_RESULT ${toolName}: ${json.slice(0, limit)}${suffix}${artifactNote}${failureGuidance}`;
+  const taskContinuation = toolName === "task_push"
+    ? "\nPARENT_TASK_CONTINUATION: Consume this child-task result, integrate it into the parent goal, and continue the parent Agent loop. Do not treat child completion as completion of the parent task."
+    : "";
+  return `TOOL_RESULT ${toolName}: ${json.slice(0, limit)}${suffix}${artifactNote}${failureGuidance}${taskContinuation}`;
+}
+
+function normalizedToolResultEnvelope(toolName, toolResult, options = {}) {
+  const failed = toolResult?.ok === false;
+  return {
+    ok: !failed,
+    data: failed ? null : toolResult,
+    error: failed ? {
+      code: String(toolResult.errorType || "tool_execution_error"),
+      message: String(toolResult.error || "Tool execution failed."),
+      retryable: !["operation_state_unknown", "permission_denied", "irreversible_error"].includes(String(toolResult.errorType || "")),
+      details: toolResult.details && typeof toolResult.details === "object" ? toolResult.details : {}
+    } : null,
+    meta: {
+      tool: toolName,
+      durationMs: Number(options.durationMs || 0),
+      runId: String(options.runId || ""),
+      callId: String(options.callId || "")
+    }
+  };
 }
 
 function buildToolRecoveryGuidance(settings, toolName) {
@@ -5453,8 +5303,8 @@ async function ensureChromeAIOffscreenDocument() {
   try {
     await chrome.offscreen.createDocument({
       url: CHROME_AI_OFFSCREEN_URL,
-      reasons: ["DOM_SCRAPING"],
-      justification: "Call Chrome built-in Prompt API from an extension document because MV3 service workers cannot use it."
+      reasons: ["DOM_SCRAPING", "CLIPBOARD"],
+      justification: "Call Chrome built-in AI and user-approved clipboard APIs from an extension document because MV3 service workers cannot use them."
     });
   } catch (error) {
     if (!String(error?.message || error).includes("Only a single offscreen document")) {
@@ -6143,21 +5993,24 @@ async function dispatchTool(name, args, settings, options = {}) {
     return runCustomTool(toolConfig, args, settings, options);
   }
   switch (name) {
-    case "get_page_context":
+    case "page_snapshot":
       return await compactPageContextForAdapter(
         await sendToActiveTab(pageContextRequestForAdapter(settings, args), options),
         settings,
         args
       );
-    case "click":
-      return sendToActiveTab({ type: "WEBCLAW_CONTENT_CLICK", selector: required(args.selector, "selector") }, options);
-    case "type_text":
-      return sendToActiveTab({
-        type: "WEBCLAW_CONTENT_TYPE_TEXT",
-        selector: required(args.selector, "selector"),
-        text: String(args.text ?? ""),
-        clear: args.clear !== false
-      }, options);
+    case "page_action":
+      return sendToActiveTab({ type: "WEBCLAW_CONTENT_PAGE_ACTION", ...args }, options);
+    case "page_wait":
+      return sendToActiveTab({ type: "WEBCLAW_CONTENT_PAGE_WAIT", ...args }, options);
+    case "page_extract":
+      return sendToActiveTab({ type: "WEBCLAW_CONTENT_PAGE_EXTRACT", ...args }, options);
+    case "page_storage":
+      return sendToActiveTab({ type: "WEBCLAW_CONTENT_PAGE_STORAGE", ...args }, options);
+    case "page_screenshot":
+      return capturePageScreenshot(args, options);
+    case "page_file_input":
+      return setPageFileInput(args, options);
     case "run_js":
       if (!settings.allowUnsafePageJs) {
         throw new Error("JavaScript execution is disabled. Enable it in WebClaw settings first.");
@@ -6173,11 +6026,6 @@ async function dispatchTool(name, args, settings, options = {}) {
       return httpRequest(args, options);
     case QIYEWECHAT_NOTIFICATION_TOOL_NAME:
       return sendQiyeWechatNotification(toolConfig, args, options);
-    case "navigate":
-      return navigate(required(args.url, "url"), options);
-    case "wait":
-      await sleep(Math.min(Number(args.ms || 1000), 10000));
-      return { ok: true, waitedMs: Math.min(Number(args.ms || 1000), 10000) };
     case "update_plan": {
       const plan = normalizeAgentPlan(args);
       options.onPlan?.(plan);
@@ -6187,6 +6035,8 @@ async function dispatchTool(name, args, settings, options = {}) {
       return runTaskPush(args, settings, options);
     case "task_stack":
       return options.taskSupervisor?.snapshot() || taskStackSnapshot(options.taskRun);
+    case "tool_search":
+      return searchAndLoadTools(args, settings, options);
     case "fs_shell": {
       const result = await runVirtualFileSystemShell(required(args.command, "command"), {
         cwd: args.cwd || options.workingDirectory || "/workspace"
@@ -6198,6 +6048,8 @@ async function dispatchTool(name, args, settings, options = {}) {
     }
     case "fs_list":
       return vfsList(args.path || "/workspace");
+    case "fs_stat":
+      return vfsStat(required(args.path, "path"));
     case "fs_read":
       return vfsReadFile(required(args.path, "path"), args);
     case "fs_write":
@@ -6206,27 +6058,24 @@ async function dispatchTool(name, args, settings, options = {}) {
       return vfsEditFile(required(args.path, "path"), args);
     case "fs_search":
       return vfsSearch(required(args.query, "query"), args);
+    case "fs_glob":
+      return vfsGlob(required(args.pattern, "pattern"), args);
+    case "fs_hash":
+      return vfsHash(required(args.path, "path"), args);
+    case "fs_diff":
+      return vfsDiff(required(args.from, "from"), required(args.to, "to"), args);
     case "fs_apply_patch":
       return vfsApplyPatch(args.operations);
-    case "fs_mkdir":
-      return vfsMkdir(required(args.path, "path"), { parents: args.parents === true });
-    case "fs_move":
-      return vfsMove(required(args.from, "from"), required(args.to, "to"));
-    case "fs_delete":
-      return vfsDelete(required(args.path, "path"), { recursive: args.recursive !== false });
-    case "fs_restore":
-      return vfsRestore(required(args.trashPath, "trashPath"), args.destination, {
-        onConflict: args.onConflict,
-        confirmOverwrite: args.confirmOverwrite === true
-      });
-    case "fs_purge":
-      if (args.confirm !== true) throw new Error("fs_purge requires confirm=true.");
-      return vfsPurge(required(args.path, "path"), { recursive: args.recursive !== false });
-    case "fs_empty_trash":
-      if (args.confirm !== true) throw new Error("fs_empty_trash requires confirm=true.");
-      return vfsEmptyTrash();
+    case "fs_manage":
+      return runFsManage(args);
+    case "fs_trash":
+      return runFsTrash(args);
     case "fs_usage":
       return vfsGetUsage();
+    case "fs_archive":
+      return runFsArchive(args);
+    case "fs_preview_open":
+      return openVfsPreview(args);
     case "knowledge_ingest":
       return knowledgeIngestVfsFile(required(args.path, "path"), args);
     case "knowledge_search":
@@ -6236,11 +6085,29 @@ async function dispatchTool(name, args, settings, options = {}) {
     case "knowledge_forget":
       return knowledgeForget(args);
     case "knowledge_status":
-      return knowledgeStatus();
+      return knowledgeStatus(args);
+    case "knowledge_reindex":
+      return knowledgeReindex(args);
     case "agent_artifact_read":
       return readAgentArtifact(args, options);
-    case "chrome_api":
-      return runChromeApi(args);
+    case "browser_tabs":
+      return runBrowserTabs(args);
+    case "browser_tab_groups":
+      return runBrowserTabGroups(args, options);
+    case "browser_sessions":
+      return runBrowserSessions(args, options);
+    case "browser_downloads":
+      return runBrowserDownloads(args, options);
+    case "browser_bookmarks":
+      return runBrowserBookmarks(args, options);
+    case "browser_history":
+      return runBrowserHistory(args, options);
+    case "browser_clipboard_read":
+      return runBrowserClipboardRead(options);
+    case "browser_clipboard_write":
+      return runBrowserClipboardWrite(args, options);
+    case "browser_notification":
+      return runBrowserNotification(args, options);
     case "list_webclaw_config":
       return listWebClawConfig(settings);
     case "propose_webclaw_config_patch":
@@ -6264,6 +6131,130 @@ function validateAgentToolCall(settings, toolCall) {
   const tool = findEnabledTool(settings, name);
   if (!tool) throw new Error(`Tool is disabled or not configured: ${name || "unknown"}`);
   validateToolArgs(name, toolCall?.args || {}, nativeToolInputSchema(tool));
+}
+
+async function runFsManage(args) {
+  const action = required(args.action, "action");
+  if (action === "mkdir") return vfsMkdir(required(args.path, "path"), { parents: args.parents === true });
+  if (action === "move") return vfsMove(required(args.from, "from"), required(args.to, "to"));
+  if (action === "copy") return vfsCopy(required(args.from, "from"), required(args.to, "to"));
+  if (action === "touch") return vfsTouch(required(args.path, "path"));
+  if (action === "trash") return vfsDelete(required(args.path, "path"), { recursive: args.recursive !== false });
+  throw new Error(`Unsupported fs_manage action: ${action}`);
+}
+
+async function runFsTrash(args) {
+  const action = required(args.action, "action");
+  if (action === "list") return vfsList("/.trash");
+  if (action === "restore") {
+    return vfsRestore(required(args.trashPath, "trashPath"), args.destination, {
+      onConflict: args.onConflict,
+      confirmOverwrite: args.confirmOverwrite === true
+    });
+  }
+  if (action === "purge") {
+    if (args.confirm !== true) throw new Error("fs_trash purge requires confirm=true.");
+    return vfsPurge(required(args.path || args.trashPath, "path"), { recursive: args.recursive !== false });
+  }
+  if (action === "empty") {
+    if (args.confirm !== true) throw new Error("fs_trash empty requires confirm=true.");
+    return vfsEmptyTrash();
+  }
+  throw new Error(`Unsupported fs_trash action: ${action}`);
+}
+
+async function runFsArchive(args) {
+  const action = required(args.action, "action");
+  if (action === "create") {
+    const source = required(args.source, "source");
+    const archivePath = required(args.archivePath, "archivePath");
+    const root = await vfsStat(source);
+    const entries = root.entry.type === "directory"
+      ? [root.entry, ...(await vfsGlob("**/*", { path: source, maxResults: 1000 })).matches]
+      : [root.entry];
+    let totalBytes = 0;
+    const archived = [];
+    const base = source.slice(0, Math.max(0, source.lastIndexOf("/"))) || "/";
+    for (const entry of entries) {
+      const relativePath = entry.path.slice(base === "/" ? 1 : base.length + 1);
+      if (!relativePath || relativePath.split("/").includes("..")) throw new Error(`Invalid archive path: ${entry.path}`);
+      if (entry.type === "directory") {
+        archived.push({ path: relativePath, type: "directory" });
+        continue;
+      }
+      totalBytes += Number(entry.size || 0);
+      if (totalBytes > 20 * 1024 * 1024) throw new Error("fs_archive create supports at most 20 MiB of file content.");
+      archived.push({
+        path: relativePath,
+        type: "file",
+        mimeType: entry.mimeType || "application/octet-stream",
+        dataUrl: await blobToMessageDataUrl(await vfsGetFileBlob(entry.path))
+      });
+    }
+    const payload = JSON.stringify({ format: "webclaw-vfs-archive", version: 1, source, createdAt: Date.now(), entries: archived });
+    const written = await vfsWriteFile(archivePath, payload, { mimeType: "application/json", createParents: true });
+    return { ok: true, archivePath: written.path, entries: archived.length, bytes: totalBytes };
+  }
+  const archivePath = required(args.archivePath, "archivePath");
+  const archiveBlob = await vfsGetFileBlob(archivePath);
+  if (archiveBlob.size > 30 * 1024 * 1024) throw new Error("fs_archive supports archive files up to 30 MiB.");
+  const archive = JSON.parse(await archiveBlob.text() || "null");
+  if (archive?.format !== "webclaw-vfs-archive" || !Array.isArray(archive.entries)) throw new Error("Invalid WebClaw VFS archive.");
+  if (action === "list") {
+    return { archivePath, source: archive.source || "", createdAt: archive.createdAt || 0, entries: archive.entries.map(({ path, type, mimeType }) => ({ path, type, mimeType })) };
+  }
+  if (action === "extract") {
+    const destination = required(args.destination, "destination");
+    const extractionEntries = [];
+    const targetPaths = new Set();
+    for (const entry of archive.entries) {
+      const relative = String(entry?.path || "");
+      if (!relative || relative.startsWith("/") || relative.split("/").includes("..")) {
+        throw new Error(`Unsafe archive entry path: ${relative}`);
+      }
+      if (!["directory", "file"].includes(entry.type)) {
+        throw new Error(`Unsupported archive entry type: ${entry.type}`);
+      }
+      const target = `${destination.replace(/\/$/, "")}/${relative}`;
+      if (targetPaths.has(target)) throw new Error(`Duplicate archive entry path: ${relative}`);
+      targetPaths.add(target);
+      extractionEntries.push({ entry, target });
+    }
+    if (!args.overwrite) {
+      for (const { entry, target } of extractionEntries) {
+        if (entry.type !== "file") continue;
+        try {
+          await vfsStat(target);
+          throw new Error(`Archive destination exists: ${target}`);
+        } catch (error) {
+          if (!String(error?.message || "").startsWith("No such file")) throw error;
+        }
+      }
+    }
+    let extractedCount = 0;
+    for (const { entry, target } of extractionEntries) {
+      if (entry.type === "directory") await vfsMkdir(target, { parents: true });
+      else {
+        await vfsWriteFile(target, dataUrlToBlob(required(entry.dataUrl, "archive entry dataUrl"), entry.mimeType), {
+          mimeType: entry.mimeType || "application/octet-stream", createParents: true
+        });
+      }
+      extractedCount += 1;
+    }
+    return { ok: true, archivePath, destination, extractedCount };
+  }
+  throw new Error(`Unsupported fs_archive action: ${action}`);
+}
+
+async function openVfsPreview(args) {
+  const path = required(args.path, "path");
+  if (!/\.(?:html?|xhtml|svg)$/i.test(path)) throw new Error("fs_preview_open supports HTML, HTM, XHTML, and SVG files.");
+  await vfsStat(path);
+  const tab = await chrome.tabs.create({
+    url: chrome.runtime.getURL(`src/preview-host.html?path=${encodeURIComponent(path)}`),
+    active: true
+  });
+  return { ok: true, path, tabId: tab.id };
 }
 
 async function readAgentArtifact(args, options = {}) {
@@ -7135,37 +7126,11 @@ function describeConfigDiff(before, after, operations) {
 
 function validateToolArgs(toolName, args, schema) {
   const normalized = normalizeInputSchema(schema);
-  if (normalized.type !== "object") return;
   const value = args && typeof args === "object" && !Array.isArray(args) ? args : {};
-  const errors = [];
-  for (const name of normalized.required || []) {
-    if (value[name] === undefined || value[name] === null || value[name] === "") {
-      errors.push(`missing required arg "${name}"`);
-    }
-  }
-  for (const [name, property] of Object.entries(normalized.properties || {})) {
-    if (value[name] === undefined || value[name] === null) continue;
-    const expected = String(property?.type || "");
-    if (expected && !schemaTypeMatches(value[name], expected)) {
-      errors.push(`arg "${name}" expected ${expected}, got ${Array.isArray(value[name]) ? "array" : typeof value[name]}`);
-    }
-    if (Array.isArray(property?.enum) && !property.enum.includes(value[name])) {
-      errors.push(`arg "${name}" must be one of ${JSON.stringify(property.enum)}`);
-    }
-  }
+  const errors = validateJsonSchema(value, normalized, { path: "args", requiredNonEmpty: true });
   if (errors.length > 0) {
     throw new Error(`Tool ${toolName} args failed schema validation: ${errors.join("; ")}`);
   }
-}
-
-function schemaTypeMatches(value, type) {
-  if (type === "array") return Array.isArray(value);
-  if (type === "integer") return Number.isInteger(value);
-  if (type === "number") return typeof value === "number" && Number.isFinite(value);
-  if (type === "object") return value && typeof value === "object" && !Array.isArray(value);
-  if (type === "boolean") return typeof value === "boolean";
-  if (type === "string") return typeof value === "string";
-  return true;
 }
 
 function renderTemplate(template, args) {
@@ -7293,6 +7258,30 @@ async function ensureUrlPermission(url, reason, options = {}, details = "") {
   return ensureUrlPermissions([url], reason, options, details);
 }
 
+async function ensureToolOptionalPermissions(toolName, options = {}, overridePermissions = null) {
+  const definition = builtinToolDefinition(toolName);
+  const requested = uniqueStrings(overridePermissions || definition?.optionalPermissions || []);
+  const missing = [];
+  for (const permission of requested) {
+    if (!(await chrome.permissions.contains({ permissions: [permission] }))) missing.push(permission);
+  }
+  if (missing.length === 0) return;
+  const approval = await requestInteractiveApproval(options, {
+    kind: "optional_permission",
+    title: "Enable optional browser capability",
+    reason: `${toolName} needs an optional Chrome permission for the requested action.`,
+    details: `Permissions: ${missing.join(", ")}`,
+    permissions: missing,
+    allowLabel: "Enable capability"
+  });
+  if (!approval.approved) throw new Error(approval.error || `Optional permissions were denied: ${missing.join(", ")}`);
+  const stillMissing = [];
+  for (const permission of missing) {
+    if (!(await chrome.permissions.contains({ permissions: [permission] }))) stillMissing.push(permission);
+  }
+  if (stillMissing.length > 0) throw new Error(`Chrome did not grant optional permissions: ${stillMissing.join(", ")}`);
+}
+
 async function ensureUrlPermissions(urls, reason, options = {}, details = "") {
   const origins = uniqueStrings((Array.isArray(urls) ? urls : [urls]).map(originPatternForUrl).filter(Boolean));
   if (origins.length === 0) return;
@@ -7391,6 +7380,64 @@ async function runPageJavaScript(args, options = {}) {
     ...(await runUserScriptJavaScript(tab, code, world)),
     source: source.label
   };
+}
+
+async function capturePageScreenshot(args, options = {}) {
+  const tab = await getActiveTab();
+  if (!tab?.id) throw new Error("No active page tab found. Select the page tab you want to capture.");
+  if (!isInjectableTab(tab)) throw new Error(`The active tab cannot be captured by WebClaw: ${tab.url || "unknown URL"}`);
+  await ensureUrlPermission(
+    tab.url,
+    "WebClaw needs access to this site to capture the visible tab for the current request.",
+    options,
+    `Target page: ${tab.url || "unknown"}`
+  );
+  const format = args.format === "jpeg" ? "jpeg" : "png";
+  const captureOptions = { format };
+  if (format === "jpeg" && Number.isFinite(Number(args.quality))) {
+    captureOptions.quality = Math.max(0, Math.min(100, Math.floor(Number(args.quality))));
+  }
+  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, captureOptions);
+  const blob = await (await fetch(dataUrl)).blob();
+  const extension = format === "jpeg" ? "jpg" : "png";
+  const path = String(args.path || `/workspace/screenshots/page-${Date.now()}.${extension}`);
+  const written = await vfsWriteFile(path, blob, {
+    mimeType: format === "jpeg" ? "image/jpeg" : "image/png",
+    createParents: true
+  });
+  return {
+    ok: true,
+    tabId: tab.id,
+    url: tab.url || "",
+    path: written.path,
+    mimeType: written.entry.mimeType,
+    size: written.entry.size,
+    version: written.entry.version
+  };
+}
+
+async function setPageFileInput(args, options = {}) {
+  const path = required(args.path, "path");
+  const blob = await vfsGetFileBlob(path);
+  if (blob.size > 10 * 1024 * 1024) {
+    throw new Error("page_file_input supports VFS files up to 10 MiB per call.");
+  }
+  return sendToActiveTab({
+    type: "WEBCLAW_CONTENT_PAGE_FILE_INPUT",
+    selector: required(args.selector, "selector"),
+    filename: String(args.filename || path.split("/").pop() || "file"),
+    mimeType: blob.type || "application/octet-stream",
+    dataUrl: await blobToMessageDataUrl(blob)
+  }, options);
+}
+
+async function blobToMessageDataUrl(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  }
+  return `data:${blob.type || "application/octet-stream"};base64,${btoa(binary)}`;
 }
 
 async function resolvePageJavaScriptSource(args) {
@@ -7747,17 +7794,6 @@ function normalizedSearchEngine(engine) {
   return "duckduckgo";
 }
 
-async function navigate(url, options = {}) {
-  await ensureUrlPermission(
-    url,
-    "WebClaw needs access to this destination before navigating the active tab for your request.",
-    options,
-    `Destination: ${url}`
-  );
-  const tab = await navigateTab(url);
-  return { ok: true, url, tabId: tab.id };
-}
-
 async function httpRequest(args, options = {}) {
   const url = required(args.url, "url");
   const parsedUrl = new URL(url);
@@ -7780,26 +7816,94 @@ async function httpRequest(args, options = {}) {
   if (args.json !== undefined) {
     headers["Content-Type"] = headers["Content-Type"] || "application/json";
     body = JSON.stringify(args.json);
+  } else if (args.form && typeof args.form === "object" && !Array.isArray(args.form)) {
+    headers["Content-Type"] = headers["Content-Type"] || "application/x-www-form-urlencoded;charset=UTF-8";
+    body = new URLSearchParams(Object.entries(args.form).map(([name, value]) => [name, String(value ?? "")]));
+  } else if (args.multipart && typeof args.multipart === "object") {
+    body = new FormData();
+    for (const [name, value] of Object.entries(args.multipart.fields || {})) body.append(name, String(value ?? ""));
+    for (const file of Array.isArray(args.multipart.files) ? args.multipart.files : []) {
+      const path = required(file?.path, "multipart.files[].path");
+      const blob = await vfsGetFileBlob(path);
+      const content = file?.contentType ? new Blob([blob], { type: String(file.contentType) }) : blob;
+      body.append(required(file?.field, "multipart.files[].field"), content, String(file?.filename || path.split("/").pop() || "file"));
+    }
   } else if (args.body !== undefined) {
     body = String(args.body);
   }
 
-  const response = await fetch(url, {
-    method,
-    headers,
-    body: method === "GET" ? undefined : body,
-    redirect: args.redirect === "manual" ? "manual" : "follow"
-  });
-  const text = await response.text();
-  return {
-    ok: response.ok,
-    status: response.status,
-    statusText: response.statusText,
-    url: response.url,
-    headers: Object.fromEntries(response.headers.entries()),
-    body: text.slice(0, 12000),
-    truncated: text.length > 12000
-  };
+  const timeoutMs = Math.floor(clampNumber(args.timeoutMs, 100, 120000, 30000));
+  const controller = new AbortController();
+  const abortFromParent = () => controller.abort(options.signal?.reason || new Error("Stopped"));
+  options.signal?.addEventListener("abort", abortFromParent, { once: true });
+  const timer = setTimeout(() => controller.abort(new Error(`http_request timed out after ${timeoutMs} ms.`)), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method,
+      headers,
+      body: method === "GET" ? undefined : body,
+      redirect: args.redirect === "manual" ? "manual" : "follow",
+      signal: controller.signal
+    });
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const maxBytes = Math.floor(clampNumber(args.maxBytes, 1000, 20 * 1024 * 1024, 2 * 1024 * 1024));
+    const contentType = response.headers.get("content-type") || "application/octet-stream";
+    const responseType = normalizedHttpResponseType(args.responseType, contentType);
+    const saveToVfs = String(args.saveToVfs || "").trim();
+    if (bytes.byteLength > maxBytes && (saveToVfs || responseType !== "text")) {
+      throw new Error(`http_request response is ${bytes.byteLength} bytes, above maxBytes=${maxBytes}. Increase maxBytes explicitly if the response is expected.`);
+    }
+    let savedFile = null;
+    if (saveToVfs) {
+      savedFile = await vfsWriteFile(saveToVfs, new Blob([bytes], { type: contentType }), {
+        mimeType: contentType,
+        createParents: true
+      });
+    }
+    if (responseType === "binary" && !saveToVfs) {
+      throw new Error("Binary http_request responses require saveToVfs to avoid returning unbounded encoded data.");
+    }
+    const selected = bytes.subarray(0, maxBytes);
+    const text = responseType === "binary" ? "" : new TextDecoder().decode(selected);
+    let json = null;
+    if (responseType === "json") {
+      try {
+        json = JSON.parse(text);
+      } catch (error) {
+        throw new Error(`http_request expected JSON but parsing failed: ${error?.message || String(error)}`);
+      }
+    }
+    return {
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      url: response.url,
+      headers: Object.fromEntries(response.headers.entries()),
+      responseType,
+      body: text,
+      ...(json !== null ? { json } : {}),
+      bytes: bytes.byteLength,
+      truncated: bytes.byteLength > maxBytes,
+      ...(savedFile ? { savedToVfs: savedFile.path, savedEntry: savedFile.entry } : {})
+    };
+  } catch (error) {
+    if (controller.signal.aborted && !options.signal?.aborted) {
+      throw new Error(`http_request timed out after ${timeoutMs} ms.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener("abort", abortFromParent);
+  }
+}
+
+function normalizedHttpResponseType(value, contentType) {
+  const requested = String(value || "auto").toLowerCase();
+  if (["text", "json", "binary"].includes(requested)) return requested;
+  const type = String(contentType || "").toLowerCase();
+  if (type.includes("json")) return "json";
+  if (type.startsWith("text/") || /(?:xml|javascript|yaml|csv|markdown)/.test(type)) return "text";
+  return "binary";
 }
 
 async function sendQiyeWechatNotification(tool, args, options = {}) {
@@ -7807,9 +7911,16 @@ async function sendQiyeWechatNotification(tool, args, options = {}) {
   if (!url) {
     throw new Error("企业微信机器人 webhook 未配置。请编辑 qiyewechat_notification Tool 后填写 Webhook URL。");
   }
+  return sendNotificationThroughAdapter("qiyewechat_robot", { url }, args, options);
+}
+
+async function sendNotificationThroughAdapter(adapter, target, args, options = {}) {
+  if (adapter !== "qiyewechat_robot") {
+    throw new Error(`Unsupported notification adapter: ${adapter}`);
+  }
   const payload = buildWeComPayload(args);
   const result = await httpRequest({
-    url,
+    url: target.url,
     method: "POST",
     json: payload
   }, options);
@@ -7827,9 +7938,6 @@ async function sendQiyeWechatNotification(tool, args, options = {}) {
 }
 
 function buildWeComPayload(args) {
-  if (args.payload && typeof args.payload === "object" && !Array.isArray(args.payload)) {
-    return args.payload;
-  }
   const msgtype = String(args.msgtype || "text").toLowerCase();
   const content = required(args.content, "content");
   if (msgtype === "markdown") {
@@ -7839,7 +7947,7 @@ function buildWeComPayload(args) {
     };
   }
   if (msgtype !== "text") {
-    throw new Error(`Unsupported qiyewechat_notification msgtype: ${msgtype}. Use text, markdown, or provide a raw payload.`);
+    throw new Error(`Unsupported qiyewechat_notification msgtype: ${msgtype}. Use text or markdown.`);
   }
   const text = { content: String(content) };
   if (Array.isArray(args.mentioned_list)) text.mentioned_list = args.mentioned_list.map(String);
@@ -7870,25 +7978,190 @@ async function navigateTab(url) {
   return updated || tab;
 }
 
-async function runChromeApi(args) {
-  const operation = required(args.operation, "operation");
-  if (operation === "get_current_tab") {
-    return getActiveTab();
+async function runBrowserTabs(args) {
+  const action = required(args.action, "action");
+  if (action === "list") {
+    return (await chrome.tabs.query({})).map(publicTab);
   }
-  if (operation === "list_tabs") {
-    const tabs = await chrome.tabs.query({});
-    return tabs.map(({ id, title, url, active, windowId }) => ({ id, title, url, active, windowId }));
+  if (action === "open") {
+    const createProperties = {
+      url: required(args.url, "url"),
+      active: args.active !== false
+    };
+    if (Number.isInteger(args.windowId)) createProperties.windowId = args.windowId;
+    if (Number.isInteger(args.index) && args.index >= 0) createProperties.index = args.index;
+    return publicTab(await chrome.tabs.create(createProperties));
   }
-  if (operation === "create_tab") {
-    const tab = await chrome.tabs.create({ url: required(args.url, "url"), active: args.active !== false });
-    return { id: tab.id, title: tab.title, url: tab.url };
+
+  const tab = Number.isInteger(args.tabId)
+    ? await chrome.tabs.get(args.tabId)
+    : await getActiveTab();
+  if (!tab?.id) throw new Error("No target tab found. Provide tabId or select a page tab.");
+
+  if (action === "get") return publicTab(tab);
+  if (action === "activate") {
+    await chrome.windows.update(tab.windowId, { focused: true });
+    return publicTab(await chrome.tabs.update(tab.id, { active: true }));
   }
-  if (operation === "reload_tab") {
-    const tab = await getActiveTab();
+  if (action === "navigate") {
+    const updated = await chrome.tabs.update(tab.id, { url: required(args.url, "url") });
+    await waitForTabComplete(tab.id, 12000);
+    return publicTab(updated || await chrome.tabs.get(tab.id));
+  }
+  if (action === "reload") {
     await chrome.tabs.reload(tab.id);
-    return { ok: true };
+    return { ok: true, tabId: tab.id };
   }
-  throw new Error(`Unsupported chrome_api operation: ${operation}`);
+  if (action === "duplicate") return publicTab(await chrome.tabs.duplicate(tab.id));
+  if (action === "move") {
+    const moveProperties = { index: Number.isInteger(args.index) ? args.index : -1 };
+    if (Number.isInteger(args.windowId)) moveProperties.windowId = args.windowId;
+    const moved = await chrome.tabs.move(tab.id, moveProperties);
+    return publicTab(Array.isArray(moved) ? moved[0] : moved);
+  }
+  if (action === "pin") {
+    return publicTab(await chrome.tabs.update(tab.id, { pinned: args.pinned !== false }));
+  }
+  if (action === "mute") {
+    return publicTab(await chrome.tabs.update(tab.id, { muted: args.muted !== false }));
+  }
+  if (action === "close") {
+    await chrome.tabs.remove(tab.id);
+    return { ok: true, closedTabId: tab.id };
+  }
+  throw new Error(`Unsupported browser_tabs action: ${action}`);
+}
+
+async function runBrowserTabGroups(args, options) {
+  await ensureToolOptionalPermissions("browser_tab_groups", options);
+  const action = required(args.action, "action");
+  if (action === "list") return chrome.tabGroups.query(Number.isInteger(args.windowId) ? { windowId: args.windowId } : {});
+  if (action === "create") {
+    const tabIds = requiredArray(args.tabIds, "tabIds");
+    const groupId = await chrome.tabs.group({ tabIds, ...(Number.isInteger(args.windowId) ? { createProperties: { windowId: args.windowId } } : {}) });
+    return chrome.tabGroups.update(groupId, tabGroupUpdateProperties(args));
+  }
+  const groupId = requiredInteger(args.groupId, "groupId");
+  if (action === "update") return chrome.tabGroups.update(groupId, tabGroupUpdateProperties(args));
+  if (action === "move") return chrome.tabGroups.move(groupId, { index: Number.isInteger(args.index) ? args.index : -1, ...(Number.isInteger(args.windowId) ? { windowId: args.windowId } : {}) });
+  if (action === "ungroup") {
+    const tabs = await chrome.tabs.query({ groupId });
+    await chrome.tabs.ungroup(tabs.map((tab) => tab.id));
+    return { ok: true, groupId, tabIds: tabs.map((tab) => tab.id) };
+  }
+  throw new Error(`Unsupported browser_tab_groups action: ${action}`);
+}
+
+function tabGroupUpdateProperties(args) {
+  const result = {};
+  if (args.title !== undefined) result.title = String(args.title);
+  if (args.color !== undefined) result.color = String(args.color);
+  if (args.collapsed !== undefined) result.collapsed = args.collapsed === true;
+  return result;
+}
+
+async function runBrowserSessions(args, options) {
+  await ensureToolOptionalPermissions("browser_sessions", options);
+  const action = required(args.action, "action");
+  if (action === "list") return chrome.sessions.getRecentlyClosed({ maxResults: Math.max(1, Math.min(25, Number(args.maxResults || 10))) });
+  if (action === "restore") return chrome.sessions.restore(args.sessionId ? String(args.sessionId) : undefined);
+  throw new Error(`Unsupported browser_sessions action: ${action}`);
+}
+
+async function runBrowserDownloads(args, options) {
+  await ensureToolOptionalPermissions("browser_downloads", options);
+  const action = required(args.action, "action");
+  if (action === "search") return chrome.downloads.search(args.query && typeof args.query === "object" ? args.query : {});
+  if (action === "download") {
+    const url = required(args.url, "url");
+    await ensureUrlPermission(url, "WebClaw needs access to download this URL.", options, `Download: ${url}`);
+    return { id: await chrome.downloads.download({ url, filename: args.filename ? String(args.filename) : undefined, saveAs: args.saveAs === true }) };
+  }
+  const id = requiredInteger(args.id, "id");
+  if (action === "pause") await chrome.downloads.pause(id);
+  else if (action === "resume") await chrome.downloads.resume(id);
+  else if (action === "cancel") await chrome.downloads.cancel(id);
+  else if (action === "erase") return { erasedIds: await chrome.downloads.erase({ id }) };
+  else if (action === "show") return { shown: chrome.downloads.show(id) !== false, id };
+  else throw new Error(`Unsupported browser_downloads action: ${action}`);
+  return { ok: true, action, id };
+}
+
+async function runBrowserBookmarks(args, options) {
+  await ensureToolOptionalPermissions("browser_bookmarks", options);
+  const action = required(args.action, "action");
+  if (action === "search") return chrome.bookmarks.search(String(args.query || ""));
+  if (action === "create") return chrome.bookmarks.create({ parentId: args.parentId, title: String(args.title || ""), url: args.url ? String(args.url) : undefined, index: args.index });
+  const id = required(args.id, "id");
+  if (action === "update") return chrome.bookmarks.update(id, { ...(args.title !== undefined ? { title: String(args.title) } : {}), ...(args.url !== undefined ? { url: String(args.url) } : {}) });
+  if (action === "move") return chrome.bookmarks.move(id, { parentId: args.parentId, index: args.index });
+  if (action === "remove") {
+    if (args.recursive) await chrome.bookmarks.removeTree(id); else await chrome.bookmarks.remove(id);
+    return { ok: true, id };
+  }
+  throw new Error(`Unsupported browser_bookmarks action: ${action}`);
+}
+
+async function runBrowserHistory(args, options) {
+  await ensureToolOptionalPermissions("browser_history", options);
+  const action = required(args.action, "action");
+  if (action === "search") return chrome.history.search({ text: String(args.text || ""), startTime: Number(args.startTime || 0), ...(args.endTime ? { endTime: Number(args.endTime) } : {}), maxResults: Math.max(1, Math.min(100, Number(args.maxResults || 20))) });
+  if (action === "visits") return chrome.history.getVisits({ url: required(args.url, "url") });
+  if (action === "delete_url") {
+    const url = required(args.url, "url");
+    const approval = await requestInteractiveApproval(options, {
+      kind: "browser_history_delete", title: "Delete browser history entry", reason: "This permanently removes the specified URL from Chrome history.",
+      details: url, allowLabel: "Delete history entry"
+    });
+    if (!approval.approved) throw new Error(approval.error || "History deletion was denied.");
+    await chrome.history.deleteUrl({ url });
+    return { ok: true, deletedUrl: url };
+  }
+  throw new Error(`Unsupported browser_history action: ${action}`);
+}
+
+async function runBrowserClipboardRead(options) {
+  await ensureToolOptionalPermissions("browser_clipboard_read", options);
+  await ensureChromeAIOffscreenDocument();
+  const response = await chrome.runtime.sendMessage({ type: "WEBCLAW_CLIPBOARD", action: "read" });
+  if (!response?.ok) throw new Error(response?.error || "Clipboard read failed.");
+  return response.result;
+}
+
+async function runBrowserClipboardWrite(args, options) {
+  await ensureToolOptionalPermissions("browser_clipboard_write", options);
+  await ensureChromeAIOffscreenDocument();
+  const response = await chrome.runtime.sendMessage({
+    type: "WEBCLAW_CLIPBOARD",
+    action: "write",
+    text: required(args.text, "text")
+  });
+  if (!response?.ok) throw new Error(response?.error || "Clipboard operation failed.");
+  return response.result;
+}
+
+async function runBrowserNotification(args, options) {
+  await ensureToolOptionalPermissions("browser_notification", options);
+  const action = required(args.action, "action");
+  const id = String(args.id || `webclaw-${Date.now()}`);
+  if (action === "clear") return { ok: await chrome.notifications.clear(id), id };
+  if (action === "create") {
+    const createdId = await chrome.notifications.create(id, {
+      type: "basic", iconUrl: chrome.runtime.getURL("assets/icons/icon-128.png"),
+      title: required(args.title, "title"), message: required(args.message, "message"), requireInteraction: args.requireInteraction === true
+    });
+    return { ok: true, id: createdId };
+  }
+  throw new Error(`Unsupported browser_notification action: ${action}`);
+}
+
+function publicTab(tab) {
+  if (!tab) return null;
+  const { id, title, url, pendingUrl, active, pinned, audible, mutedInfo, discarded, status, index, windowId, groupId } = tab;
+  return {
+    id, title, url: url || pendingUrl || "", active, pinned, audible,
+    muted: mutedInfo?.muted === true, discarded, status, index, windowId, groupId
+  };
 }
 
 async function getActiveTab() {
@@ -7970,10 +8243,7 @@ function canonicalizeToolCall(value) {
 }
 
 function canonicalToolName(value) {
-  const name = String(value || "").trim();
-  return name === LEGACY_QIYEWECHAT_NOTIFICATION_TOOL_NAME
-    ? QIYEWECHAT_NOTIFICATION_TOOL_NAME
-    : name;
+  return String(value || "").trim();
 }
 
 function hydrateToolArgs(toolObject, objects) {
@@ -9527,6 +9797,16 @@ function required(value, name) {
   if (value === undefined || value === null || value === "") {
     throw new Error(`${name} is required.`);
   }
+  return value;
+}
+
+function requiredInteger(value, name) {
+  if (!Number.isInteger(value)) throw new Error(`${name} is required and must be an integer.`);
+  return value;
+}
+
+function requiredArray(value, name) {
+  if (!Array.isArray(value) || value.length === 0) throw new Error(`${name} is required and must be a non-empty array.`);
   return value;
 }
 

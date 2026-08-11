@@ -20,6 +20,10 @@ import {
 } from "./provider-client-metadata.js";
 import { normalizeOpenAICompatibleApiProtocol } from "./openai-compatible-api.js";
 import { buildVfsPreviewDocument } from "./vfs-preview.js";
+import {
+  builtinToolUiDefinitions,
+  isRemovedBuiltinToolName
+} from "./tool-registry.js";
 
 const PROVIDER_DEFAULTS = {
   ollama: {
@@ -92,68 +96,11 @@ const PROVIDER_DEFAULTS = {
 };
 
 const QIYEWECHAT_NOTIFICATION_TOOL_NAME = "qiyewechat_notification";
-const LEGACY_QIYEWECHAT_NOTIFICATION_TOOL_NAME = "send_wecom_message";
 
-const BUILTIN_TOOLS = [
-  ["get_page_context", "Read active page context, with compact limits for small-context providers."],
-  ["click", "Click an element by CSS selector."],
-  ["type_text", "Type text into an element by CSS selector."],
-  ["navigate", "Navigate the active tab."],
-  ["run_js", "Execute JavaScript in the active page."],
-  ["translate_page", "Translate visible page text in-place."],
-  ["search_web", "Open search results and read context."],
-  ["get_weather", "Fetch weather from Open-Meteo."],
-  ["http_request", "Send HTTP requests from the extension background."],
-  ["qiyewechat_notification", "Send text or markdown through a configured WeCom robot webhook."],
-  ["chrome_api", "Use limited Chrome tab APIs."],
-  ["wait", "Wait for a short period."],
-  ["update_plan", "Create or update the current turn plan for substantial work."],
-  ["task_push", "Execute an ephemeral structured child task with an independent model context."],
-  ["task_stack", "Inspect the current ephemeral task stack and execution budget."],
-  ["fs_shell", "Run safe virtual filesystem commands including pwd and cd; cd changes the current session directory."],
-  ["fs_list", "List virtual filesystem directories."],
-  ["fs_read", "Read virtual filesystem files."],
-  ["fs_write", "Create or replace virtual text files."],
-  ["fs_edit", "Safely replace exact text in virtual files."],
-  ["fs_search", "Search virtual text files."],
-  ["fs_apply_patch", "Apply a batch of virtual filesystem changes."],
-  ["fs_mkdir", "Create virtual directories."],
-  ["fs_move", "Move or rename virtual files and directories."],
-  ["fs_delete", "Move virtual files and directories to trash."],
-  ["fs_restore", "Restore virtual files from trash."],
-  ["fs_purge", "Permanently delete items from trash."],
-  ["fs_empty_trash", "Permanently empty virtual filesystem trash."],
-  ["fs_usage", "Read virtual filesystem storage usage."],
-  ["knowledge_ingest", "Index a VFS text file for local knowledge search."],
-  ["knowledge_search", "Search indexed local knowledge."],
-  ["knowledge_read", "Read indexed knowledge chunks."],
-  ["knowledge_forget", "Remove a document from the local knowledge index."],
-  ["knowledge_status", "Read local knowledge index status."],
-  ["agent_artifact_read", "Read a bounded range from a large Agent Tool Result artifact."],
-  ["list_webclaw_config", "Read a redacted summary of WebClaw configuration."],
-  ["propose_webclaw_config_patch", "Propose validated changes to tools, skills, schedules, or the active Provider."],
-  ["apply_webclaw_config_patch", "Apply a previously validated WebClaw config patch."],
-  ["rollback_webclaw_config_patch", "Rollback the latest applied WebClaw config patch."]
-].map(([name, description]) => ({
-  id: name,
-  name,
-  title: name,
-  type: "builtin",
-  description,
-  enabled: true,
-  builtin: true
-}));
+const BUILTIN_TOOLS = builtinToolUiDefinitions();
 
-const ADVANCED_BUILTIN_TOOLS = new Set([
-  "list_webclaw_config",
-  "propose_webclaw_config_patch",
-  "apply_webclaw_config_patch",
-  "rollback_webclaw_config_patch"
-]);
-const DEFAULT_DISABLED_BUILTIN_TOOLS = new Set([
-  ...ADVANCED_BUILTIN_TOOLS,
-  QIYEWECHAT_NOTIFICATION_TOOL_NAME
-]);
+const ADVANCED_BUILTIN_TOOLS = new Set(BUILTIN_TOOLS.filter((tool) => tool.advanced).map((tool) => tool.name));
+const DEFAULT_DISABLED_BUILTIN_TOOLS = new Set(BUILTIN_TOOLS.filter((tool) => !tool.enabled).map((tool) => tool.name));
 const PRODUCT_DISCLOSURE_VERSION = 1;
 
 const CHAT_HISTORY_KEY = "webclawChatHistory";
@@ -269,6 +216,8 @@ const elements = {
   temperature: document.querySelector("#temperature"),
   allowUnsafePageJs: document.querySelector("#allowUnsafePageJs"),
   toolCount: document.querySelector("#toolCount"),
+  toolSearch: document.querySelector("#toolSearch"),
+  toolBundle: document.querySelector("#toolBundle"),
   toolList: document.querySelector("#toolList"),
   addTool: document.querySelector("#addTool"),
   saveTools: document.querySelector("#saveTools"),
@@ -579,6 +528,8 @@ function bindEvents() {
   elements.refreshCodexModels.addEventListener("click", refreshActiveProviderModels);
   elements.refreshGitHubCopilotModels.addEventListener("click", refreshActiveProviderModels);
   elements.addTool.addEventListener("click", openNewToolModal);
+  elements.toolSearch.addEventListener("input", renderToolList);
+  elements.toolBundle.addEventListener("change", renderToolList);
   elements.saveTools.addEventListener("click", saveSettings);
   elements.closeToolModal.addEventListener("click", closeToolModal);
   elements.saveTool.addEventListener("click", saveToolModal);
@@ -1363,10 +1314,13 @@ function showAgentApproval(port, message) {
       : "Site or service access request";
   elements.approvalReason.textContent = String(approval.reason || "Review this request before allowing it.");
   const origins = uniqueStrings(approval.origins);
+  const permissions = uniqueStrings(approval.permissions);
   elements.approvalOrigins.textContent = origins.length
-    ? `Chrome access requested:\n${origins.join("\n")}`
+    ? `Chrome access requested:\n${origins.join("\n")}${permissions.length ? `\nPermissions: ${permissions.join(", ")}` : ""}`
+    : permissions.length
+      ? `Chrome permissions requested:\n${permissions.join("\n")}`
     : "";
-  elements.approvalOrigins.classList.toggle("hidden", origins.length === 0);
+  elements.approvalOrigins.classList.toggle("hidden", origins.length === 0 && permissions.length === 0);
   elements.approvalDetails.textContent = String(approval.details || "");
   elements.approvalDetails.classList.toggle("hidden", !approval.details);
   elements.allowApproval.textContent = String(approval.allowLabel || "Allow once");
@@ -1385,10 +1339,11 @@ async function resolveAgentApproval(approved) {
   let error = "";
   if (granted) {
     const origins = uniqueStrings(pending.approval.origins);
-    if (origins.length > 0) {
+    const permissions = uniqueStrings(pending.approval.permissions);
+    if (origins.length > 0 || permissions.length > 0) {
       try {
-        granted = await chrome.permissions.request({ origins });
-        if (!granted) error = "Chrome origin permission was not granted.";
+        granted = await chrome.permissions.request({ ...(origins.length ? { origins } : {}), ...(permissions.length ? { permissions } : {}) });
+        if (!granted) error = "Chrome permission was not granted.";
       } catch (permissionError) {
         granted = false;
         error = permissionError?.message || String(permissionError);
@@ -2328,8 +2283,20 @@ function renderToolList() {
   const tools = normalizePanelTools(settings.tools);
   const enabledCount = tools.filter((tool) => tool.enabled).length;
   elements.toolCount.textContent = `${enabledCount}/${tools.length} enabled`;
+  const selectedBundle = elements.toolBundle.value;
+  const bundles = [...new Set(tools.map((tool) => tool.bundle || tool.type).filter(Boolean))].sort();
+  elements.toolBundle.replaceChildren(
+    new Option("All bundles", ""),
+    ...bundles.map((bundle) => new Option(bundle, bundle))
+  );
+  elements.toolBundle.value = bundles.includes(selectedBundle) ? selectedBundle : "";
+  const query = elements.toolSearch.value.trim().toLowerCase();
+  const visibleTools = tools.filter((tool) => {
+    if (elements.toolBundle.value && (tool.bundle || tool.type) !== elements.toolBundle.value) return false;
+    return !query || `${tool.name} ${tool.title} ${tool.description} ${tool.category} ${tool.bundle}`.toLowerCase().includes(query);
+  }).sort((left, right) => String(left.category || left.type).localeCompare(String(right.category || right.type)) || left.name.localeCompare(right.name));
   elements.toolList.replaceChildren(
-    ...tools.map((tool) => {
+    ...visibleTools.map((tool) => {
       const item = document.createElement("div");
       item.className = "tool-item";
 
@@ -2347,7 +2314,8 @@ function renderToolList() {
       const title = document.createElement("strong");
       title.textContent = tool.title || tool.name;
       const description = document.createElement("span");
-      description.textContent = `${tool.name} · ${tool.builtin ? "built-in" : tool.type}${tool.advanced ? " · optional advanced" : ""}${tool.description ? ` · ${tool.description}` : ""}`;
+      const optionalPermissions = Array.isArray(tool.optionalPermissions) ? tool.optionalPermissions : [];
+      description.textContent = `${tool.name} · ${tool.category || tool.type} · ${tool.bundle || tool.type}${tool.builtin ? " · built-in" : ""}${tool.advanced ? " · optional advanced" : ""}${optionalPermissions.length ? ` · permission: ${optionalPermissions.join(", ")}` : ""}${tool.description ? ` · ${tool.description}` : ""}`;
       text.append(title, description);
 
       const edit = document.createElement("button");
@@ -2357,6 +2325,12 @@ function renderToolList() {
       edit.addEventListener("click", () => openToolModal(tool.name));
 
       item.append(enabled, text, edit);
+      if (optionalPermissions.length) {
+        chrome.permissions.contains({ permissions: optionalPermissions }).then((granted) => {
+          description.dataset.permission = granted ? "granted" : "not-granted";
+          description.textContent += granted ? " · granted" : " · not granted";
+        }).catch(() => {});
+      }
       return item;
     })
   );
@@ -2476,6 +2450,10 @@ async function saveToolModal() {
     return;
   }
   syncToolFormToDraft();
+  if (isRemovedBuiltinToolName(toolDraft.name)) {
+    elements.status.textContent = `Tool name was removed and is reserved: ${toolDraft.name}`;
+    return;
+  }
   const nextTool = normalizePanelTool(toolDraft);
   if (!nextTool) {
     elements.status.textContent = "Tool name is required.";
@@ -4567,6 +4545,7 @@ function normalizePanelTools(value, options = {}) {
   for (const raw of rawTools) {
     const name = canonicalPanelToolName(raw?.name);
     if (!raw || raw.builtin || raw.type === "builtin" || BUILTIN_TOOLS.some((tool) => tool.name === name)) continue;
+    if (isRemovedBuiltinToolName(name)) continue;
     const tool = normalizePanelTool(raw);
     if (tool) tools.push(tool);
   }
@@ -4583,7 +4562,7 @@ function normalizeBuiltinToolDescription(definition, value) {
 
 function normalizePanelTool(tool) {
   const name = canonicalPanelToolName(normalizeToolName(tool?.name));
-  if (!name) return null;
+  if (!name || isRemovedBuiltinToolName(name)) return null;
   const builtin = BUILTIN_TOOLS.some((definition) => definition.name === name);
   const rawType = String(tool.type || "workflow");
   const type = builtin ? "builtin" : rawType === "http" ? "http" : "workflow";
@@ -4607,10 +4586,7 @@ function normalizePanelTool(tool) {
 }
 
 function canonicalPanelToolName(value) {
-  const name = String(value || "").trim();
-  return name === LEGACY_QIYEWECHAT_NOTIFICATION_TOOL_NAME
-    ? QIYEWECHAT_NOTIFICATION_TOOL_NAME
-    : name;
+  return String(value || "").trim();
 }
 
 function normalizeToolConfig(config) {

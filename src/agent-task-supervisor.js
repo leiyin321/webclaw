@@ -38,8 +38,8 @@ export function createAgentTaskSupervisor(run, options = {}) {
       return task;
     },
 
-    async recordModelStep(taskId) {
-      recordTaskModelStep(run, taskId);
+    async recordModelStep(taskId, stepOptions = {}) {
+      recordTaskModelStep(run, taskId, stepOptions);
       const task = run.tasks[taskId];
       await commit("task_model_step", task, { step: Number(task?.step || 0) });
       return task;

@@ -1,3 +1,5 @@
+import { builtinToolExecutionMetadata } from "./tool-registry.js";
+
 const DEFAULT_TIMEOUT_MS = 120000;
 
 export function createAgentToolScheduler(options = {}) {
@@ -35,50 +37,8 @@ export function createAgentToolScheduler(options = {}) {
 
 export function inferToolExecutionMetadata(name, args = {}) {
   const tool = String(name || "");
-  if (["get_weather", "knowledge_status", "agent_artifact_read", "task_stack", "list_webclaw_config", "fs_usage"].includes(tool)) {
-    return readOnlyMetadata([`tool:${tool}`]);
-  }
-  if (tool === "get_page_context") return readOnlyMetadata(["chrome:active-tab"]);
-  if (tool === "fs_list" || tool === "fs_read") {
-    return readOnlyMetadata([`vfs:${String(args.path || "/workspace")}`]);
-  }
-  if (tool === "fs_search") return readOnlyMetadata(["vfs:/"]);
-  if (["knowledge_search", "knowledge_read"].includes(tool)) {
-    return readOnlyMetadata(["knowledge:index"]);
-  }
-  if (["fs_write", "fs_mkdir"].includes(tool)) {
-    return writeMetadata([`vfs:${String(args.path || args.destination || args.trashPath || "/")}`], "retry_safe");
-  }
-  if (["fs_edit", "fs_delete", "fs_restore", "fs_purge"].includes(tool)) {
-    return writeMetadata([`vfs:${String(args.path || args.destination || args.trashPath || "/")}`], "unknown");
-  }
-  if (tool === "fs_move") {
-    return writeMetadata([
-      `vfs:${String(args.from || "/")}`,
-      `vfs:${String(args.to || "/")}`
-    ], "unknown");
-  }
-  if (["fs_apply_patch", "fs_empty_trash", "fs_shell"].includes(tool)) {
-    return writeMetadata(["vfs:/"], "unknown");
-  }
-  if (["click", "type_text", "navigate", "translate_page", "run_js", "chrome_api"].includes(tool)) {
-    return writeMetadata(["chrome:active-tab"], tool === "get_page_context" ? "safe" : "unknown", "interactive");
-  }
-  if (tool === "http_request") {
-    const method = String(args.method || "GET").toUpperCase();
-    return method === "GET"
-      ? readOnlyMetadata([`network:${safeOrigin(args.url)}`])
-      : writeMetadata([`network:${safeOrigin(args.url)}`], "unknown", "external");
-  }
-  if (tool === "search_web") return writeMetadata(["chrome:active-tab"], "unknown", "interactive");
-  if (tool === "qiyewechat_notification") {
-    return writeMetadata(["external:qiyewechat"], "unknown", "external");
-  }
-  if (tool === "update_plan") return writeMetadata(["agent:task-state"], "retry_safe");
-  if (tool === "task_push") return writeMetadata(["agent:task-state"], "unknown");
-  if (["propose_webclaw_config_patch", "apply_webclaw_config_patch", "rollback_webclaw_config_patch"].includes(tool)) {
-    return writeMetadata(["webclaw:configuration"], "unknown", "configuration");
-  }
+  const registered = builtinToolExecutionMetadata(tool, args);
+  if (registered) return registered;
   return writeMetadata([`tool:${tool || "unknown"}`], "unknown");
 }
 
@@ -104,6 +64,17 @@ export function normalizeToolObservation(call, result, metadata = {}) {
     tool: String(call.name || ""),
     ok: !failed,
     result,
+    data: failed ? null : result,
+    error: failed ? {
+      code: String(result.errorType || "tool_execution_error"),
+      message: String(result.error || "Tool execution failed."),
+      retryable: ["safe", "retry_safe"].includes(metadata.idempotency)
+    } : null,
+    meta: {
+      effects: metadata.effects,
+      resources: metadata.resources,
+      idempotency: metadata.idempotency
+    },
     errorType: failed ? String(result.errorType || "tool_execution_error") : "",
     effects: metadata.effects,
     resources: metadata.resources,
@@ -263,16 +234,6 @@ function operationKeyFor(call, context) {
   return [String(context.runId || "run"), call.callId, call.name].join(":");
 }
 
-function readOnlyMetadata(resources) {
-  return {
-    effects: ["read"],
-    resources: resources.map((key) => ({ key, mode: "read" })),
-    risk: "low",
-    idempotency: "safe",
-    parallelSafe: true
-  };
-}
-
 function writeMetadata(resources, idempotency, risk = "normal") {
   return {
     effects: ["write"],
@@ -281,14 +242,6 @@ function writeMetadata(resources, idempotency, risk = "normal") {
     idempotency,
     parallelSafe: false
   };
-}
-
-function safeOrigin(value) {
-  try {
-    return new URL(String(value || "")).origin;
-  } catch {
-    return "unknown";
-  }
 }
 
 function createMemoryOperationStore() {

@@ -41,7 +41,7 @@
   <text x="904" y="296" fill="#ffffff" font-family="Arial Unicode MS" font-size="14">我确认的决策。</text>
 
   <rect x="830" y="334" width="360" height="82" rx="8" fill="#eef5ff" stroke="#b8d4f4"/>
-  <text x="846" y="358" fill="#29415f" font-family="monospace" font-size="12" font-weight="700">tool: get_page_context</text>
+  <text x="846" y="358" fill="#29415f" font-family="monospace" font-size="12" font-weight="700">tool: page_snapshot</text>
   <text x="846" y="380" fill="#29415f" font-family="monospace" font-size="11">{ "mode": "compact",</text>
   <text x="846" y="399" fill="#29415f" font-family="monospace" font-size="11">  "maxChars": 4000 }</text>
 

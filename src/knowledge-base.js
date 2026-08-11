@@ -21,6 +21,7 @@ export async function knowledgeIngestVfsFile(path, options = {}) {
     path: source.path,
     title: String(options.title || source.path.split("/").pop() || source.path).slice(0, 240),
     tags: normalizeTags(options.tags),
+    collection: String(options.collection || "default").trim().slice(0, 120) || "default",
     sourceVersion: source.entry.version,
     sourceSize: source.entry.size,
     updatedAt: Date.now(),
@@ -33,9 +34,14 @@ export async function knowledgeIngestVfsFile(path, options = {}) {
   const chunkStore = transaction.objectStore(CHUNKS);
   const existing = await requestAsPromise(documents.get(documentId));
   if (existing && existing.sourceVersion === document.sourceVersion && existing.sourceSize === document.sourceSize) {
+    const metadataChanged = existing.title !== document.title ||
+      existing.collection !== document.collection ||
+      JSON.stringify(existing.tags || []) !== JSON.stringify(document.tags);
+    const current = metadataChanged ? { ...document, updatedAt: Date.now() } : existing;
+    if (metadataChanged) documents.put(current);
     await transactionDone(transaction);
     db.close();
-    return { ok: true, document: existing, chunks: existing.chunkCount, unchanged: true };
+    return { ok: true, document: current, chunks: current.chunkCount, unchanged: !metadataChanged, metadataUpdated: metadataChanged };
   }
   await deleteDocumentChunks(chunkStore, documentId);
   documents.put(document);
@@ -56,7 +62,8 @@ export async function knowledgeSearch(query, options = {}) {
   const chunks = await requestAsPromise(transaction.objectStore(CHUNKS).getAll());
   await transactionDone(transaction);
   db.close();
-  const documentById = new Map(documents.map((document) => [document.id, document]));
+  const filteredDocuments = documents.filter((document) => matchesDocumentFilter(document, options));
+  const documentById = new Map(filteredDocuments.map((document) => [document.id, document]));
   const normalizedQuery = normalizeText(query).toLowerCase();
   const results = chunks
     .map((chunk) => ({ chunk, document: documentById.get(chunk.documentId), score: scoreChunk(chunk.content, terms, normalizedQuery) }))
@@ -114,19 +121,63 @@ export async function knowledgeForget({ documentId, path } = {}) {
   return { ok: true, documentId: id, path: document.path };
 }
 
-export async function knowledgeStatus() {
+export async function knowledgeStatus(options = {}) {
   const db = await openDatabase();
   const transaction = db.transaction([DOCUMENTS, CHUNKS], "readonly");
   const documents = await requestAsPromise(transaction.objectStore(DOCUMENTS).getAll());
-  const chunks = await requestAsPromise(transaction.objectStore(CHUNKS).count());
+  const chunks = await requestAsPromise(transaction.objectStore(CHUNKS).getAll());
   await transactionDone(transaction);
   db.close();
+  const filteredDocuments = documents.filter((document) => matchesDocumentFilter(document, options));
+  const documentIds = new Set(filteredDocuments.map((document) => document.id));
+  const filteredChunks = chunks.filter((chunk) => documentIds.has(chunk.documentId));
   return {
-    documents: documents.length,
-    chunks,
-    sourceChars: documents.reduce((total, document) => total + Number(document.charCount || 0), 0),
-    items: documents.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 50)
+    documents: filteredDocuments.length,
+    chunks: filteredChunks.length,
+    sourceChars: filteredDocuments.reduce((total, document) => total + Number(document.charCount || 0), 0),
+    items: filteredDocuments
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, clamp(options.limit, 1, 10000, 50))
   };
+}
+
+export async function knowledgeReindex(options = {}) {
+  const status = await knowledgeStatus({ ...options, limit: 10000 });
+  const selected = status.items.filter((document) => matchesDocumentFilter(document, options));
+  const results = [];
+  for (const document of selected) {
+    try {
+      results.push(await knowledgeIngestVfsFile(document.path, {
+        title: document.title,
+        tags: document.tags,
+        collection: document.collection,
+        chunkChars: options.chunkChars
+      }));
+    } catch (error) {
+      results.push({ ok: false, path: document.path, error: error?.message || String(error) });
+    }
+  }
+  return {
+    ok: results.every((result) => result.ok !== false),
+    matched: selected.length,
+    reindexed: results.filter((result) => result.ok !== false).length,
+    failed: results.filter((result) => result.ok === false)
+  };
+}
+
+function matchesDocumentFilter(document, options = {}) {
+  const pathPrefix = String(options.path || "").trim().replace(/\/+$/, "") || (options.path ? "/" : "");
+  const documentPath = String(document.path || "");
+  if (pathPrefix && documentPath !== pathPrefix && !documentPath.startsWith(pathPrefix === "/" ? "/" : `${pathPrefix}/`)) return false;
+  const collection = String(options.collection || "").trim();
+  if (collection && String(document.collection || "default") !== collection) return false;
+  const tags = normalizeTags(options.tags);
+  if (tags.length > 0 && !tags.every((tag) => (document.tags || []).includes(tag))) return false;
+  const updatedAfter = Number(options.updatedAfter || 0);
+  if (updatedAfter > 0 && Number(document.updatedAt || 0) < updatedAfter) return false;
+  const updatedBefore = Number(options.updatedBefore || 0);
+  if (updatedBefore > 0 && Number(document.updatedAt || 0) > updatedBefore) return false;
+  return true;
 }
 
 function openDatabase() {

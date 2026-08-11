@@ -1,5 +1,10 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
+import {
+  builtinToolDefinition,
+  builtinToolDefinitions,
+  builtinToolUiDefinitions
+} from "../src/tool-registry.js";
 
 const root = resolve(import.meta.dirname, "..");
 const readText = (path) => readFileSync(resolve(root, path), "utf8");
@@ -19,6 +24,17 @@ requireCondition(
 requireCondition(Number(manifest.minimum_chrome_version) >= 135, "minimum_chrome_version must be 135 or newer");
 requireCondition(!Array.isArray(manifest.host_permissions), "required host_permissions must not be present");
 requireCondition(!manifest.permissions?.includes("activeTab"), "unused activeTab permission must not be present");
+const expectedOptionalPermissions = [
+  "bookmarks", "clipboardRead", "clipboardWrite", "downloads", "history", "notifications", "sessions", "tabGroups"
+];
+requireCondition(
+  expectedOptionalPermissions.every((permission) => manifest.optional_permissions?.includes(permission)),
+  "optional browser Tool permissions are missing from optional_permissions"
+);
+requireCondition(
+  expectedOptionalPermissions.every((permission) => !manifest.permissions?.includes(permission)),
+  "optional browser Tool permissions must not become required permissions"
+);
 requireCondition(
   Array.isArray(manifest.optional_host_permissions) &&
     manifest.optional_host_permissions.includes("http://*/*") &&
@@ -102,11 +118,19 @@ requireCondition(!/client(?:_|)secret\s*:/i.test(oauthClients), "OAuth client se
 requireCondition(!/\bnew\s+Function\s*\(/.test(runtimeJavaScriptSource), "runtime code must not contain new Function");
 requireCondition(!/\beval\s*\(/.test(runtimeJavaScriptSource), "runtime code must not contain eval");
 requireCondition(
-  source.includes('const QIYEWECHAT_NOTIFICATION_TOOL_NAME = "qiyewechat_notification"') &&
-    source.includes('const LEGACY_QIYEWECHAT_NOTIFICATION_TOOL_NAME = "send_wecom_message"') &&
+  builtinToolDefinition("qiyewechat_notification")?.name === "qiyewechat_notification" &&
+    builtinToolDefinition("send_wecom_message") === null &&
     source.includes("canonicalizeToolCall(hydrateToolArgs(toolObject, objects))") &&
     source.includes("title: definition.name === QIYEWECHAT_NOTIFICATION_TOOL_NAME"),
   "enterprise WeChat Tool canonical-name handling is missing"
+);
+const removedBuiltinToolNames = [
+  "get_page_context", "click", "type_text", "navigate", "chrome_api", "wait", "send_wecom_message",
+  "browser_clipboard", "fs_mkdir", "fs_move", "fs_delete", "fs_restore", "fs_purge", "fs_empty_trash"
+];
+requireCondition(
+  removedBuiltinToolNames.every((name) => builtinToolDefinition(name) === null),
+  "removed legacy Tool names must not be restored or aliased"
 );
 requireCondition(
   readText("README.md").includes("Tool name 与 Display name 均固定为 `qiyewechat_notification`") &&
@@ -154,7 +178,7 @@ requireCondition(
   "controlled active Provider switching and rollback are missing"
 );
 requireCondition(
-  source.includes("webclaw-default-manual: 0.6.0-r1") &&
+  source.includes("webclaw-default-manual: 0.6.1-r2") &&
     source.includes("REPLACEABLE_DEFAULT_KNOWLEDGE_MANUAL_HASHES") &&
     source.includes("qxBFf1iNGSrbPVRGoSSOQUH8Mu9b6rgnrTBznpwsH1s") &&
     source.includes("qmON25C52Otm3zxd8xOE_dlGJ9DX-j61ECdtgLwChHA") &&
@@ -162,9 +186,25 @@ requireCondition(
     source.includes("XAX46BXypQ1LE7DWmgpSqdw78M-Tw_JjPFRkRPSb4yw") &&
     source.includes("04RN_x4Yj49RriWSQGBAn7Wqh1UaDHM0iq395QmQb30") &&
     source.includes("AUoWZDFRlU1yysJ_EojdS8ROqAgFMuvXzZz5yYheR8g") &&
+    source.includes("ebvLDmJq-nzX4Kn5D2uASmSHK55uO-X6VMG8Fhg6Rwo") &&
+    source.includes("8Q4-Lrp4wlIcHOAUmRZJZXbY-hxxTEOPi4HUEYIWegw") &&
     source.includes("expectedVersion: existing.entry.version") &&
-    source.includes('"webclaw", "manual", "operations", "0.6.0"'),
+    source.includes('"webclaw", "manual", "operations", "0.6.1"'),
   "versioned default knowledge manual migration is missing"
+);
+requireCondition(
+  builtinToolDefinition("browser_clipboard_read")?.optionalPermissions?.join(",") === "clipboardRead" &&
+    builtinToolDefinition("browser_clipboard_write")?.optionalPermissions?.join(",") === "clipboardWrite" &&
+    builtinToolDefinition("browser_clipboard") === null &&
+    source.includes('reasons: ["DOM_SCRAPING", "CLIPBOARD"]'),
+  "clipboard read/write Tool permissions must remain separate and use the clipboard offscreen reason"
+);
+const previewSandboxSource = readText("src/preview-sandbox.js");
+requireCondition(
+  previewSandboxSource.includes("window.opener || (window.parent !== window ? window.parent : null)") &&
+    previewSandboxSource.includes("event.source !== previewHost") &&
+    previewSandboxSource.includes("previewHost?.postMessage"),
+  "VFS preview sandbox must handshake with its iframe parent or opener"
 );
 const backgroundSource = readText("src/background.js");
 const agentRuntimeSource = readText("src/agent-runtime.js");
@@ -299,15 +339,14 @@ requireCondition(
   "OpenAI-compatible Responses API routing or configuration is incomplete"
 );
 requireCondition(
-  backgroundSource.includes('name: "update_plan"') &&
+  builtinToolDefinitions().some((tool) => tool.name === "update_plan") &&
     backgroundSource.includes('case "update_plan"') &&
-    backgroundSource.includes('"plan_updated"') &&
-    readText("src/sidepanel.js").includes('["update_plan",'),
+    backgroundSource.includes('"plan_updated"'),
   "unified Agent planning support is incomplete"
 );
 requireCondition(
-  backgroundSource.includes('name: "task_push"') &&
-    backgroundSource.includes('name: "task_stack"') &&
+  builtinToolDefinitions().some((tool) => tool.name === "task_push") &&
+    builtinToolDefinitions().some((tool) => tool.name === "task_stack") &&
     backgroundSource.includes("runTaskPush") &&
     backgroundSource.includes("validateTaskOutput") &&
     backgroundSource.includes("task_output_validation_error") &&
@@ -363,17 +402,13 @@ const sidepanelSelectors = [...readText("src/sidepanel.js").matchAll(/querySelec
 const missingSelectors = [...new Set(sidepanelSelectors.filter((id) => !htmlIds.includes(id)))];
 requireCondition(missingSelectors.length === 0, `side panel selectors are missing from HTML: ${missingSelectors.join(", ")}`);
 
-const backgroundToolBlock = readText("src/background.js").match(
-  /const BUILTIN_TOOLS = \[([\s\S]*?)\n\];\n\nconst BUILTIN_TOOL_REQUIRED_ARGS/
-)?.[1] || "";
-const panelToolBlock = readText("src/sidepanel.js").match(/const BUILTIN_TOOLS = \[([\s\S]*?)\n\]\.map/)?.[1] || "";
-const backgroundTools = new Set([...backgroundToolBlock.matchAll(/^    name:\s*"([^"]+)"/gm)].map((match) => match[1]));
-const panelTools = new Set([...panelToolBlock.matchAll(/^  \["([^"]+)"/gm)].map((match) => match[1]));
+const backgroundTools = new Set(builtinToolDefinitions().map((tool) => tool.name));
+const panelTools = new Set(builtinToolUiDefinitions().map((tool) => tool.name));
 const mismatchedTools = [
   ...[...backgroundTools].filter((name) => !panelTools.has(name)),
   ...[...panelTools].filter((name) => !backgroundTools.has(name))
 ];
-requireCondition(backgroundTools.size > 0 && mismatchedTools.length === 0, `built-in Tool registries differ: ${mismatchedTools.join(", ")}`);
+requireCondition(backgroundTools.size > 0 && mismatchedTools.length === 0, `built-in Tool registry projections differ: ${mismatchedTools.join(", ")}`);
 
 if (errors.length > 0) {
   console.error("Release validation failed:");

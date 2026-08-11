@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "WebClaw",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "minimum_chrome_version": "135",
   "description": "A user-controlled browser AI assistant for conversations, page actions, tools, and optional advanced automation.",
   "permissions": [
@@ -14,6 +14,16 @@
     "tabs",
     "userScripts",
     "windows"
+  ],
+  "optional_permissions": [
+    "bookmarks",
+    "clipboardRead",
+    "clipboardWrite",
+    "downloads",
+    "history",
+    "notifications",
+    "sessions",
+    "tabGroups"
   ],
   "optional_host_permissions": [
     "http://*/*",

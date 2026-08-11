@@ -16,6 +16,11 @@ for test_file in \
   scripts/test-agent-state.mjs \
   scripts/test-agent-task-supervisor.mjs \
   scripts/test-agent-terminal-outcome.mjs \
+  scripts/test-json-schema-validator.mjs \
+  scripts/test-knowledge-base.mjs \
+  scripts/test-preview-sandbox.mjs \
+  scripts/test-tool-registry.mjs \
+  scripts/test-vfs-tools.mjs \
   scripts/test-agent-tool-scheduler.mjs
 do
   node "$test_file"

@@ -13,11 +13,20 @@ function isChromeAIMessage(message) {
     message?.type === "WEBCLAW_CHROME_AI_AVAILABILITY" ||
     message?.type === "WEBCLAW_CHROME_AI_ABORT" ||
     message?.type === "WEBCLAW_CHROME_AI_PROMPT" ||
-    message?.type === "WEBCLAW_CHROME_AI_SUMMARIZE"
+    message?.type === "WEBCLAW_CHROME_AI_SUMMARIZE" ||
+    message?.type === "WEBCLAW_CLIPBOARD"
   );
 }
 
 async function handleMessage(message) {
+  if (message?.type === "WEBCLAW_CLIPBOARD") {
+    if (message.action === "read") return { text: await navigator.clipboard.readText() };
+    if (message.action === "write") {
+      await navigator.clipboard.writeText(String(message.text || ""));
+      return { ok: true, chars: String(message.text || "").length };
+    }
+    throw new Error(`Unsupported clipboard action: ${message.action}`);
+  }
   if (message?.type === "WEBCLAW_CHROME_AI_AVAILABILITY") {
     const languageModel = getLanguageModel();
     const options = { expectedInputs: [{ type: "text" }], expectedOutputs: [{ type: "text" }] };

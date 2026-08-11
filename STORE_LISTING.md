@@ -20,6 +20,8 @@ WebClaw 是一个用户控制的 Chrome 浏览器 AI 助手。用户可以连接
 
 在会话中，WebClaw 可以根据用户请求读取当前页面上下文、点击或输入、翻译页面、搜索网页、调用受控 HTTP Tool，以及管理扩展本地的虚拟文件和知识库。文件管理器还可以在隔离的 Chrome 标签页中预览 VFS 内的静态 HTML 网站及其相对资源。网页和外部服务采用按域名申请的 optional host permissions；向外部模型首次发送数据前会披露数据范围；JavaScript 执行默认关闭，临时调用逐次批准，Schedule 只有在用户首次检查并允许后才能复用完全相同操作的授权。
 
+内置 Tool 由统一 Registry 定义并在执行前校验参数。每轮模型只接收核心 Tool；`tool_search` 可以把用户已启用、且已具备权限的匹配能力加载到当前运行。书签、历史、下载、最近关闭页面、标签组、剪贴板和本机通知均为默认关闭的可选 Tool，并在首次使用时单独申请对应 Chrome optional permission。
+
 复杂请求可以使用临时任务栈拆分为独立上下文的子任务。子任务只继承当前 Provider 和不超过父任务范围的已启用 Tool，其结果按照声明的 JSON Schema 在浏览器本地校验；完成后子任务上下文从活动栈删除。
 
 所有 Provider 共用同一 Agent Runtime。运行状态、脱敏事件、边界 checkpoint 和 Tool operation 状态保存在浏览器本地，用于在扩展后台中断后恢复确定性任务；已经完成的 Tool 结果不会重复执行，只有明确标记为安全或可重试的操作才会自动继续，外部副作用不确定的操作保持待检查状态。
@@ -39,6 +41,7 @@ Channels、Schedules 和自我配置 Tool 是可选高级功能。只有用户�
 - `tabs`: 管理用户请求的标签页操作，并支持受限的标签页 Tool。
 - `userScripts`: 在总开关和用户批准后执行 `run_js`；临时调用逐次批准，Schedule 仅可复用完全相同操作的已保存批准。
 - `windows`: 把设置和文件管理器放在独立扩展窗口中。
+- `optional_permissions`: 仅当用户启用并使用相应 Tool 时，访问书签、历史、下载、最近关闭页面、标签组、剪贴板或创建本机通知；未授权能力不会暴露给模型。
 - `optional_host_permissions`: 首次访问具体网页、模型 Provider、Channel 或 HTTP Tool endpoint 前说明原因并按 origin 请求；安装时不要求全站访问。
 
 ## 数据披露摘要

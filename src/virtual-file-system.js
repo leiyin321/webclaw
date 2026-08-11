@@ -72,6 +72,69 @@ export async function vfsList(path = "/") {
   };
 }
 
+export async function vfsStat(path) {
+  await ensureFileSystem();
+  const normalizedPath = normalizePath(path, "/");
+  const entry = await getEntry(normalizedPath);
+  if (!entry) throw new VirtualFileSystemError(`No such file or directory: ${normalizedPath}`);
+  return { path: normalizedPath, entry: publicEntry(entry), trash: isTrashPath(normalizedPath) ? await getTrashRecord(normalizedPath) : null };
+}
+
+export async function vfsGlob(pattern, { path = "/workspace", maxResults = 200 } = {}) {
+  await ensureFileSystem();
+  const root = normalizePath(path, "/");
+  assertNotTrashPath(root, "search");
+  const rootEntry = await getEntry(root);
+  if (!rootEntry) throw new VirtualFileSystemError(`No such file or directory: ${root}`);
+  const rawPattern = String(pattern || "").trim();
+  if (!rawPattern) throw new VirtualFileSystemError("pattern is required.");
+  const absolutePattern = rawPattern.startsWith("/") ? normalizePath(rawPattern, "/") : `${root === "/" ? "" : root}/${rawPattern}`;
+  const matcher = globRegExp(absolutePattern);
+  const limit = clampNumber(maxResults, 1, 1000, 200);
+  const candidates = (await allEntries())
+    .filter((entry) => !isTrashPath(entry.path) && matcher.test(entry.path))
+    .sort((left, right) => left.path.localeCompare(right.path))
+    .slice(0, limit + 1);
+  const matches = candidates.slice(0, limit).map(publicEntry);
+  return { pattern: rawPattern, path: root, matches, truncated: candidates.length > limit };
+}
+
+export async function vfsHash(path, { algorithm = "SHA-256" } = {}) {
+  await ensureFileSystem();
+  const normalizedPath = normalizePath(path, "/");
+  const entry = await requireFile(normalizedPath);
+  const normalizedAlgorithm = String(algorithm || "SHA-256").toUpperCase();
+  if (!["SHA-256", "SHA-384", "SHA-512"].includes(normalizedAlgorithm)) {
+    throw new VirtualFileSystemError(`Unsupported hash algorithm: ${normalizedAlgorithm}`);
+  }
+  const blob = (await getContent(normalizedPath)) || new Blob([""]);
+  const digest = new Uint8Array(await crypto.subtle.digest(normalizedAlgorithm, await blob.arrayBuffer()));
+  return {
+    path: normalizedPath,
+    algorithm: normalizedAlgorithm,
+    hash: Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join(""),
+    size: entry.size,
+    version: entry.version
+  };
+}
+
+export async function vfsDiff(fromPath, toPath, { maxChars = 60000 } = {}) {
+  await ensureFileSystem();
+  const from = normalizePath(fromPath, "/");
+  const to = normalizePath(toPath, "/");
+  const [fromEntry, toEntry] = await Promise.all([requireFile(from), requireFile(to)]);
+  if (!isTextMimeType(fromEntry.mimeType) || !isTextMimeType(toEntry.mimeType)) {
+    throw new VirtualFileSystemError("fs_diff only supports text files.");
+  }
+  const [before, after] = await Promise.all([
+    ((await getContent(from)) || new Blob([""])).text(),
+    ((await getContent(to)) || new Blob([""])).text()
+  ]);
+  const diff = simpleUnifiedDiff(from, before, to, after);
+  const limit = clampNumber(maxChars, 1000, 200000, 60000);
+  return { from, to, identical: before === after, diff: diff.slice(0, limit), truncated: diff.length > limit };
+}
+
 export async function vfsReadFile(path, { startLine, endLine, maxChars = 60_000, includeData = false } = {}) {
   await ensureFileSystem();
   const normalizedPath = normalizePath(path, "/");
@@ -163,6 +226,17 @@ export async function vfsMove(source, destination) {
   assertNotTrashPath(normalizePath(source, "/"), "move");
   assertNotTrashPath(normalizePath(destination, "/"), "move items into");
   return runVirtualFileSystemShell(`mv ${quoteShellPath(source)} ${quoteShellPath(destination)}`, { cwd: "/" });
+}
+
+export async function vfsCopy(source, destination) {
+  assertNotTrashPath(normalizePath(source, "/"), "copy");
+  assertNotTrashPath(normalizePath(destination, "/"), "copy items into");
+  return runVirtualFileSystemShell(`cp ${quoteShellPath(source)} ${quoteShellPath(destination)}`, { cwd: "/" });
+}
+
+export async function vfsTouch(path) {
+  assertNotTrashPath(normalizePath(path, "/"), "write");
+  return runVirtualFileSystemShell(`touch ${quoteShellPath(path)}`, { cwd: "/" });
 }
 
 export async function vfsDelete(path, { recursive = true } = {}) {
@@ -329,6 +403,47 @@ function inferMimeType(path, value) {
     return extension === "json" ? "application/json" : extension === "csv" ? "text/csv" : "text/plain";
   }
   return requested || "application/octet-stream";
+}
+
+function globRegExp(pattern) {
+  let source = "^";
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === "*" && pattern[index + 1] === "*") {
+      index += 1;
+      if (pattern[index + 1] === "/") {
+        index += 1;
+        source += "(?:.*/)?";
+      } else source += ".*";
+    } else if (char === "*") source += "[^/]*";
+    else if (char === "?") source += "[^/]";
+    else source += char.replace(/[\\^$+?.()|{}\[\]]/g, "\\$&");
+  }
+  return new RegExp(`${source}$`);
+}
+
+function simpleUnifiedDiff(fromPath, before, toPath, after) {
+  if (before === after) return "";
+  const left = before.split("\n");
+  const right = after.split("\n");
+  let prefix = 0;
+  while (prefix < left.length && prefix < right.length && left[prefix] === right[prefix]) prefix += 1;
+  let suffix = 0;
+  while (suffix < left.length - prefix && suffix < right.length - prefix && left[left.length - 1 - suffix] === right[right.length - 1 - suffix]) suffix += 1;
+  const contextStart = Math.max(0, prefix - 3);
+  const leftEnd = left.length - suffix;
+  const rightEnd = right.length - suffix;
+  const contextEndLeft = Math.min(left.length, leftEnd + 3);
+  const contextEndRight = Math.min(right.length, rightEnd + 3);
+  return [
+    `--- ${fromPath}`,
+    `+++ ${toPath}`,
+    `@@ -${contextStart + 1},${contextEndLeft - contextStart} +${contextStart + 1},${contextEndRight - contextStart} @@`,
+    ...left.slice(contextStart, prefix).map((line) => ` ${line}`),
+    ...left.slice(prefix, leftEnd).map((line) => `-${line}`),
+    ...right.slice(prefix, rightEnd).map((line) => `+${line}`),
+    ...left.slice(leftEnd, contextEndLeft).map((line) => ` ${line}`)
+  ].join("\n");
 }
 
 function clampLine(value, minimum, maximum) {

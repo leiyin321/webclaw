@@ -2,6 +2,22 @@
 
 All notable changes to WebClaw will be documented in this file.
 
+## 0.6.1
+
+- Centralize built-in Tool definitions, JSON Schemas, UI metadata, and scheduler effects in one Tool Registry.
+- Add recursive JSON Schema validation for Tool arguments, including nested objects and arrays, bounds, enums, constants, required fields, and unknown-property rejection.
+- Add structured page and tab Tools: `page_snapshot`, `page_action`, `page_wait`, `page_extract`, `page_storage`, `page_screenshot`, `page_file_input`, and `browser_tabs`; remove ambiguous legacy page and tab Tool names instead of retaining aliases.
+- Add optional-permission Tools for tab groups, recent sessions, downloads, bookmarks, history, separate clipboard read/write access, and local Chrome notifications; disabled or ungranted capabilities are not exposed to the model.
+- Add run-scoped `tool_search` discovery so models start with a compact core Tool set and can load matching enabled capabilities without changing global configuration.
+- Extend `http_request` with timeouts, URL-encoded forms, multipart VFS uploads, bounded response decoding, binary handling, and direct VFS saves.
+- Add VFS metadata, glob, hashing, text diff, portable archive, and static-preview Tools; consolidate file management and trash operations under `fs_manage` and `fs_trash`, removing the replaced single-action names.
+- Add knowledge collections and path/tag/time filters, filtered status, and `knowledge_reindex` for changed VFS sources.
+- Send bounded model-facing Tool observations through a stable `ok`/`data`/`error`/`meta` envelope while retaining the original Tool name and arguments in the conversation UI.
+- Ensure the parent Agent always receives a continuation turn to consume a completed child Task result, including at the regular step limit and the shared task-tree model-step budget boundary.
+- Add Tool category and bundle filters, optional-permission status, and unified Registry metadata to the Tool management window.
+- Fix iframe preview host handshaking, filtered knowledge status totals and path boundaries, and the enterprise WeChat text/markdown input contract.
+- Refresh the built-in workspace Tool instructions and operation manual for the 0.6.1 capability set.
+
 ## 0.6.0
 
 - Replace the monolithic execution loop with one provider-independent AgentRunner,

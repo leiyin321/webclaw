@@ -25,6 +25,7 @@ function createDatabase(version) {
   const definitions = new Map();
   return {
     version,
+    close() {},
     objectStoreNames: { contains: (name) => definitions.has(name) },
     createObjectStore(name, options = {}) {
       const definition = { keyPath: options.keyPath || "id", records: new Map(), indexes: new Map() };
@@ -111,6 +112,11 @@ function transactionalStore(definition, transaction) {
           return request(() => [...definition.records.values()]
             .filter((value) => value[keyPath] === key)
             .map(clone));
+        },
+        getAllKeys(key) {
+          return request(() => [...definition.records.entries()]
+            .filter(([, value]) => value[keyPath] === key)
+            .map(([recordKey]) => recordKey));
         },
         openCursor(key) {
           const entries = [...definition.records.entries()].filter(([, value]) => value[keyPath] === key);

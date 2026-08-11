@@ -13,10 +13,16 @@ async function handleContentMessage(message) {
   switch (message?.type) {
     case "WEBCLAW_CONTENT_GET_CONTEXT":
       return getPageContext(message);
-    case "WEBCLAW_CONTENT_CLICK":
-      return clickElement(message.selector);
-    case "WEBCLAW_CONTENT_TYPE_TEXT":
-      return typeText(message.selector, message.text, message.clear);
+    case "WEBCLAW_CONTENT_PAGE_ACTION":
+      return pageAction(message);
+    case "WEBCLAW_CONTENT_PAGE_WAIT":
+      return pageWait(message);
+    case "WEBCLAW_CONTENT_PAGE_EXTRACT":
+      return pageExtract(message);
+    case "WEBCLAW_CONTENT_PAGE_STORAGE":
+      return pageStorage(message);
+    case "WEBCLAW_CONTENT_PAGE_FILE_INPUT":
+      return pageFileInput(message);
     case "WEBCLAW_CONTENT_COLLECT_TEXT_NODES":
       return collectTextNodes(message.maxItems, message.maxTotalChars);
     case "WEBCLAW_CONTENT_APPLY_TEXT_TRANSLATIONS":
@@ -108,6 +114,170 @@ function typeText(selector, text, clear = true) {
   element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
   element.dispatchEvent(new Event("change", { bubbles: true }));
   return { ok: true, selector, textLength: String(text).length };
+}
+
+function pageAction(options) {
+  const action = String(options.action || "");
+  if (action === "click") return clickElement(requiredValue(options.selector, "selector"));
+  if (action === "type") return typeText(requiredValue(options.selector, "selector"), String(options.text ?? ""), options.clear !== false);
+  const element = options.selector ? findElement(options.selector) : document.activeElement || document.body;
+  element?.scrollIntoView?.({ block: options.block || "center", behavior: "instant" });
+  if (action === "select") {
+    if (!(element instanceof HTMLSelectElement)) throw new Error("page_action select requires a <select> element.");
+    if (options.value !== undefined) element.value = String(options.value);
+    else if (options.label !== undefined) {
+      const option = Array.from(element.options).find((item) => item.label === String(options.label) || item.text === String(options.label));
+      if (!option) throw new Error(`Select option not found: ${options.label}`);
+      element.value = option.value;
+    } else throw new Error("page_action select requires value or label.");
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    return { ok: true, action, selector: options.selector, value: element.value };
+  }
+  if (action === "check") {
+    if (!(element instanceof HTMLInputElement) || !["checkbox", "radio"].includes(element.type)) {
+      throw new Error("page_action check requires a checkbox or radio input.");
+    }
+    element.checked = options.checked !== false;
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    return { ok: true, action, selector: options.selector, checked: element.checked };
+  }
+  if (action === "hover") {
+    element.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, view: window }));
+    element.dispatchEvent(new MouseEvent("mouseenter", { bubbles: false, view: window }));
+  } else if (action === "focus") {
+    element.focus();
+  } else if (action === "keypress") {
+    const init = {
+      key: requiredValue(options.key, "key"), code: String(options.code || ""), bubbles: true,
+      ctrlKey: options.ctrlKey === true, altKey: options.altKey === true,
+      shiftKey: options.shiftKey === true, metaKey: options.metaKey === true
+    };
+    element.dispatchEvent(new KeyboardEvent("keydown", init));
+    element.dispatchEvent(new KeyboardEvent("keypress", init));
+    element.dispatchEvent(new KeyboardEvent("keyup", init));
+  } else if (action === "scroll") {
+    if (options.selector) {
+      element.scrollIntoView({ block: options.block || "center", behavior: options.behavior || "auto" });
+    } else if (Number.isFinite(Number(options.deltaX)) || Number.isFinite(Number(options.deltaY))) {
+      window.scrollBy({ left: Number(options.deltaX || 0), top: Number(options.deltaY || 0), behavior: options.behavior || "auto" });
+    } else {
+      window.scrollTo({ left: Number(options.left || 0), top: Number(options.top || 0), behavior: options.behavior || "auto" });
+    }
+  } else if (action === "submit") {
+    const form = element instanceof HTMLFormElement ? element : element.closest?.("form");
+    if (!form) throw new Error("page_action submit could not find a form.");
+    form.requestSubmit();
+  } else {
+    throw new Error(`Unsupported page_action action: ${action}`);
+  }
+  return { ok: true, action, selector: options.selector || "" };
+}
+
+async function pageWait(options) {
+  const condition = String(options.condition || "");
+  const timeoutMs = clampNumber(options.timeoutMs, 0, 30000, condition === "timeout" ? 1000 : 10000);
+  const pollMs = clampNumber(options.pollMs, 50, 2000, 200);
+  if (condition === "timeout") {
+    await delay(timeoutMs);
+    return { ok: true, condition, waitedMs: timeoutMs };
+  }
+  const startedAt = Date.now();
+  while (Date.now() - startedAt <= timeoutMs) {
+    if (pageWaitSatisfied(condition, options)) {
+      return { ok: true, condition, waitedMs: Date.now() - startedAt, url: location.href };
+    }
+    await delay(pollMs);
+  }
+  throw new Error(`page_wait timed out after ${timeoutMs} ms (${condition}).`);
+}
+
+function pageWaitSatisfied(condition, options) {
+  if (condition === "selector_visible") return Boolean(document.querySelector(requiredValue(options.selector, "selector")) && isVisible(document.querySelector(options.selector)));
+  if (condition === "selector_hidden") {
+    const element = document.querySelector(requiredValue(options.selector, "selector"));
+    return !element || !isVisible(element);
+  }
+  if (condition === "text") return visibleBodyText().includes(requiredValue(options.text, "text"));
+  if (condition === "url") return location.href.includes(requiredValue(options.url, "url"));
+  if (condition === "ready") return options.state === "interactive"
+    ? ["interactive", "complete"].includes(document.readyState)
+    : document.readyState === "complete";
+  throw new Error(`Unsupported page_wait condition: ${condition}`);
+}
+
+function pageExtract(options) {
+  const kind = String(options.kind || "");
+  const maxItems = clampNumber(options.maxItems, 1, 200, 50);
+  const maxChars = clampNumber(options.maxChars, 100, 30000, 12000);
+  let data;
+  if (kind === "text") data = visibleBodyText().slice(0, maxChars);
+  else if (kind === "links") data = Array.from(document.querySelectorAll("a[href]")).filter(isVisible).slice(0, maxItems).map((item) => ({ text: normalizedText(item.innerText).slice(0, 300), href: item.href, rel: item.rel || "" }));
+  else if (kind === "tables") data = Array.from(document.querySelectorAll("table")).slice(0, maxItems).map((table) => Array.from(table.rows).slice(0, 100).map((row) => Array.from(row.cells).map((cell) => normalizedText(cell.innerText).slice(0, 1000))));
+  else if (kind === "forms") data = Array.from(document.forms).slice(0, maxItems).map((form) => ({ action: form.action, method: form.method, fields: Array.from(form.elements).slice(0, 100).map((field) => ({ name: field.name || "", type: field.type || field.tagName.toLowerCase(), value: String(field.value || "").slice(0, 500), required: field.required === true })) }));
+  else if (kind === "metadata") data = { title: document.title, url: location.href, lang: document.documentElement.lang || "", description: document.querySelector('meta[name="description"]')?.content || "", canonical: document.querySelector('link[rel="canonical"]')?.href || "", openGraph: Object.fromEntries(Array.from(document.querySelectorAll('meta[property^="og:"]')).slice(0, maxItems).map((meta) => [meta.getAttribute("property"), meta.content])) };
+  else if (kind === "jsonld") data = Array.from(document.querySelectorAll('script[type="application/ld+json"]')).slice(0, maxItems).map((script) => { try { return JSON.parse(script.textContent); } catch { return { raw: script.textContent.slice(0, maxChars), parseError: true }; } });
+  else if (kind === "selector") data = Array.from(document.querySelectorAll(requiredValue(options.selector, "selector"))).slice(0, maxItems).map((element) => options.attribute ? element.getAttribute(options.attribute) : normalizedText(element.innerText || element.textContent).slice(0, maxChars));
+  else throw new Error(`Unsupported page_extract kind: ${kind}`);
+  return { ok: true, kind, url: location.href, data: truncateStructured(data, maxChars) };
+}
+
+function pageStorage(options) {
+  const action = String(options.action || "");
+  const storage = options.storage === "session" ? sessionStorage : localStorage;
+  const storageName = options.storage === "session" ? "session" : "local";
+  const key = String(options.key || "");
+  if (action === "get") return { ok: true, storage: storageName, key: requiredValue(key, "key"), value: storage.getItem(key) };
+  if (action === "list") {
+    const maxItems = clampNumber(options.maxItems, 1, 200, 50);
+    const maxValueChars = clampNumber(options.maxValueChars, 100, 20000, 4000);
+    const entries = [];
+    for (let index = 0; index < Math.min(storage.length, maxItems); index += 1) {
+      const itemKey = storage.key(index);
+      entries.push({ key: itemKey, value: String(storage.getItem(itemKey) || "").slice(0, maxValueChars) });
+    }
+    return { ok: true, storage: storageName, entries, total: storage.length };
+  }
+  if (action === "set") storage.setItem(requiredValue(key, "key"), String(options.value ?? ""));
+  else if (action === "remove") storage.removeItem(requiredValue(key, "key"));
+  else if (action === "clear") storage.clear();
+  else throw new Error(`Unsupported page_storage action: ${action}`);
+  return { ok: true, storage: storageName, action, key };
+}
+
+async function pageFileInput(options) {
+  const element = findElement(requiredValue(options.selector, "selector"));
+  if (!(element instanceof HTMLInputElement) || element.type !== "file") {
+    throw new Error("page_file_input requires an input[type=file] element.");
+  }
+  const response = await fetch(requiredValue(options.dataUrl, "dataUrl"));
+  const blob = await response.blob();
+  const file = new File([blob], String(options.filename || "file"), {
+    type: String(options.mimeType || blob.type || "application/octet-stream"),
+    lastModified: Date.now()
+  });
+  const transfer = new DataTransfer();
+  transfer.items.add(file);
+  element.files = transfer.files;
+  element.dispatchEvent(new Event("input", { bubbles: true }));
+  element.dispatchEvent(new Event("change", { bubbles: true }));
+  return { ok: true, selector: options.selector, filename: file.name, size: file.size, type: file.type };
+}
+
+function requiredValue(value, name) {
+  if (value === undefined || value === null || String(value) === "") throw new Error(`${name} is required.`);
+  return value;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function truncateStructured(value, maxChars) {
+  const serialized = JSON.stringify(value);
+  if (serialized.length <= maxChars) return value;
+  return { truncated: true, preview: serialized.slice(0, maxChars), originalChars: serialized.length };
 }
 
 function collectTextNodes(maxItems = 320, maxTotalChars = 24000) {

@@ -14,5 +14,5 @@
   <text x="266" y="153" fill="#ffffff" font-family="Arial Unicode MS" font-size="11">总结当前页面</text>
   <text x="266" y="171" fill="#ffffff" font-family="Arial Unicode MS" font-size="11">并列出行动项</text>
   <rect x="252" y="194" width="144" height="42" rx="7" fill="#eef5ff" stroke="#b8d4f4"/>
-  <text x="264" y="219" fill="#29415f" font-family="monospace" font-size="9">tool: get_page_context</text>
+  <text x="264" y="219" fill="#29415f" font-family="monospace" font-size="9">tool: page_snapshot</text>
 </svg>

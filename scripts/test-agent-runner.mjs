@@ -42,6 +42,58 @@ assert.equal(toolThenFinal.status, "completed");
 assert.equal(toolThenFinal.final, "finished");
 assert.equal(toolMessages.length, 3);
 
+let finalTaskSamples = 0;
+let finalTaskResultObserved = false;
+const taskContinuationFlags = [];
+const finalStepTask = await runAgentLoop({
+  maxSteps: 1,
+  messages: [{ role: "user", content: "delegate once" }],
+  beforeModelStep: async ({ taskContinuation }) => {
+    taskContinuationFlags.push(taskContinuation);
+  },
+  sampleModel: async ({ messages }) => {
+    finalTaskSamples += 1;
+    if (finalTaskSamples === 1) {
+      return createToolCallTurn([
+        { callId: "task-call", name: "task_push", args: { instruction: "inspect" } }
+      ]);
+    }
+    finalTaskResultObserved = messages.some((message) => String(message.content || "").includes("child result"));
+    return createAssistantTurn("parent integrated child result");
+  },
+  executeTool: async () => ({
+    messages: [
+      { role: "assistant", content: JSON.stringify({ tool: { name: "task_push" } }) },
+      { role: "user", content: "TOOL_RESULT task_push: child result" }
+    ]
+  }),
+  handleAssistant: async ({ assistantText }) => ({ final: assistantText })
+});
+assert.equal(finalStepTask.status, "completed");
+assert.equal(finalStepTask.final, "parent integrated child result");
+assert.equal(finalTaskSamples, 2);
+assert.equal(finalTaskResultObserved, true);
+assert.deepEqual(taskContinuationFlags, [false, true]);
+
+let continuationToolExecutions = 0;
+const boundedTaskContinuation = await runAgentLoop({
+  maxSteps: 1,
+  messages: [],
+  sampleModel: async ({ step }) => createToolCallTurn([
+    step === 0
+      ? { callId: "task-at-limit", name: "task_push", args: { instruction: "inspect" } }
+      : { callId: "tool-after-limit", name: "fs_read", args: { path: "/workspace/a" } }
+  ]),
+  executeTool: async () => {
+    continuationToolExecutions += 1;
+    return { messages: [{ role: "user", content: "TOOL_RESULT task_push: child result" }] };
+  },
+  handleAssistant: async () => ({ final: "unexpected" })
+});
+assert.equal(boundedTaskContinuation.status, "step_limit");
+assert.equal(boundedTaskContinuation.taskResultConsumed, true);
+assert.equal(continuationToolExecutions, 1);
+
 const recoveredMessages = [{ role: "user", content: "continue" }];
 let recoveredToolExecutions = 0;
 let recoveredModelSawToolResult = false;

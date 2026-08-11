@@ -20,16 +20,20 @@ or message channels.
 - Codex / ChatGPT sign-in provider using a Codex CLI-compatible device OAuth flow.
 - GitHub Copilot sign-in provider using GitHub OAuth device flow.
 - Multiple custom providers. Each provider is one of `Codex / ChatGPT OAuth`, `GitHub Copilot OAuth`, `Chrome AI`, `Local Ollama`, `OpenAI-compatible API`, or `OpenCode Zen`.
-- Browser tools: page snapshot, click, type, navigate, wait, page translation, current weather lookup, background HTTP requests, limited tab APIs, and JavaScript execution.
-- Virtual filesystem: the file manager and agent tools share an IndexedDB-backed filesystem with directory browsing, text editing, upload, download, rename, trash, restore, permanent deletion, and structured tools including `fs_list`, `fs_read`, `fs_write`, `fs_edit`, `fs_search`, and `fs_apply_patch`.
+- Unified Tool Registry: built-in names, JSON Schemas, permissions, risk, scheduling, and Settings metadata have one source of truth; arguments are recursively validated and model-facing results use a stable envelope.
+- Browser tools: structured page snapshots, actions, waits, extraction, screenshots, origin storage, VFS file-input attachment, full tab lifecycle, page translation, background HTTP requests, and approval-gated JavaScript execution.
+- Optional browser capabilities: tab groups, recent sessions, downloads, bookmarks, history, clipboard, and local notifications are enabled per Tool and request matching Chrome optional permissions only when needed. Clipboard access is split into `browser_clipboard_read` and `browser_clipboard_write`, so read-only work never requests write permission.
+- Virtual filesystem: the file manager and agent tools share an IndexedDB-backed filesystem with structured reads and writes, search, glob, hash, diff, patch, archives, preview, and consolidated `fs_manage` and `fs_trash` operations.
 - VFS static site preview: HTML/HTM/XHTML/SVG files in the file manager can open in a separate Chrome tab; the preview runtime loads relative CSS, JavaScript, images, fonts, and JSON resources from VFS.
 - Preview pages run in an isolated Extension Sandbox. They receive a project-scoped `localStorage` compatibility layer persisted in this browser, without access to extension credentials. This compatibility layer is not the real website-origin `localStorage`.
 - Restricted `fs_shell`: provides `pwd`, `cd`, `ls`, `stat`, `mkdir`, `touch`, `cat`, `cp`, `mv`, and `rm` in that extension-private filesystem without running a real system shell. `cd` updates the current session's working directory.
-- Local knowledge base: indexes VFS text files in browser-local IndexedDB with `knowledge_ingest`, `knowledge_search`, `knowledge_read`, `knowledge_forget`, and `knowledge_status`; a WebClaw operation manual is created and indexed on first startup.
+- Local knowledge base: indexes VFS text files in browser-local IndexedDB with collection/path/tag/time filters and `knowledge_reindex`; a WebClaw operation manual is created and indexed on first startup.
+- Dynamic Tool exposure: each run starts with a compact core set; `tool_search` loads matching enabled Tools by task, category, or bundle for that run, reducing ambiguity for smaller models.
 - Workspace memory: initializes `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, and daily memory files, then injects bounded workspace context before each agent run.
 - Bounded structured tool trajectories: preserves tool outcomes and failure reasons for later turns and cross-provider continuation.
 - Structured agent responses: Chrome AI uses Prompt API `responseConstraint`, Ollama uses a JSON Schema in `format`, OpenAI-compatible adapters negotiate `json_schema`, `json_object`, or prompt-only constraints, Copilot selects Responses or Chat Completions from discovered model metadata and uses the compatible JSON Tool protocol, and Codex uses native function calling.
 - Unified Agent Runtime: every Provider, Side Panel conversation, Channel, and Schedule shares the same Turn, Item, Tool, Plan, approval, stop, and context-compaction lifecycle.
+- Browser tools: `page_snapshot`, `page_action`, `page_wait`, `page_extract`, `page_screenshot`, `page_storage`, `page_file_input`, and `browser_tabs` provide verified page and tab operations, while `run_js` remains an approval-gated advanced escape hatch.
 - Ephemeral task stack: `task_push` runs a child task with an independent model context; children may push deeper tasks and return JSON Schema-validated structured results.
 - Controlled self-management patches can add tools, skills, and schedules or switch the active Provider to an existing Provider ID. They cannot read or modify Provider credentials.
 
@@ -47,7 +51,7 @@ For substantial work, the model can call `update_plan` to publish and update a p
 
 `task_push` places a separable unit of work on a one-time task stack. Each child has an independent model context and receives only its explicit `instruction`, structured `context`, working directory, and `outputSchema`; the parent waits synchronously for the structured result. A child may call `task_push` again. The defaults allow four levels and sixteen tasks per root run. Settings can raise those values and set a whole-tree model-step budget; zero means unlimited. `task_stack` reports the active frames and budget.
 
-Tasks are never added to Tool configuration and do not become Workflows. Their full execution context is removed from the active stack after completion or failure; the parent receives a standard result envelope whose `output` is locally validated against the JSON Schema. Active snapshots and recent status, count, budget, and error summaries stay in the current Chrome profile for interruption diagnostics without duplicating final answers. WebClaw does not automatically replay uncertain external operations after a service-worker interruption.
+Tasks are never added to Tool configuration and do not become Workflows. Their full execution context is removed from the active stack after completion or failure; the parent receives a standard result envelope whose `output` is locally validated against the JSON Schema, then gets at least one model turn to integrate the child result before deciding whether the parent task is complete. When `task_push` occurs on the last regular step, WebClaw reserves this integration turn, but the reserved turn cannot bypass the step limit to execute more Tools. Active snapshots and recent status, count, budget, and error summaries stay in the current Chrome profile for interruption diagnostics without duplicating final answers. WebClaw does not automatically replay uncertain external operations after a service-worker interruption.
 
 The current `outputSchema` supports a controlled JSON Schema subset: `type`, `properties`, `required`, `additionalProperties`, `items`, `enum`, `const`, string/array length limits, and numeric bounds. It rejects `$ref`, `$defs`, `oneOf`, `anyOf`, `allOf`, and recursive schemas.
 
@@ -67,6 +71,7 @@ A Workflow remains a persistent reusable custom Tool, while a Task is an ephemer
 - [Release checklist](RELEASE.md)
 - [Chrome Web Store listing material](STORE_LISTING.md)
 - [Agent Loop architecture and recovery semantics](docs/agent-loop-architecture.md)
+- [0.6.1 Tool upgrade plan (Chinese)](docs/tool-upgrade-plan.md)
 - [License](LICENSE)
 
 ## Load in Chrome
@@ -207,7 +212,7 @@ When you choose `auto` in WebClaw, WebClaw omits the `model` field from the Copi
 All Providers share one Agent Runtime. Provider Adapters own authentication, wire format, streaming, media encoding, context capabilities, and native function calling versus JSON Tool transport. Switching Providers therefore does not change session, Tool, Plan, approval, stop, or persistence behavior. A model step commonly emits one JSON Tool object:
 
 ```json
-{"tool":{"name":"get_page_context","args":{}}}
+{"tool":{"name":"page_snapshot","args":{}}}
 ```
 
 or:
@@ -239,7 +244,7 @@ WebClaw uses the `translate_page` tool to collect visible text nodes, translate 
 
 Models do not know live data by themselves. WebClaw adds live data by exposing browser and search tools to the agent.
 
-For current or recent facts, WebClaw can use `search_web` to open a search page, inspect the results, navigate to a likely source, read the page with `get_page_context`, and summarize the result. This is the general path for questions such as match results, news, public schedules, prices, and recently changed facts.
+For current or recent facts, WebClaw can use `search_web` to open a search page, inspect the results, navigate to a likely source, read the page with `page_snapshot` or `page_extract`, and summarize the result. This is the general path for questions such as match results, news, public schedules, prices, and recently changed facts.
 
 For example:
 
@@ -262,9 +267,9 @@ The direct weather tool geocodes the location with Open-Meteo, fetches current c
 - `run_js` requires Chrome 135 or newer and uses only `userScripts.execute()`; there is no `eval` / `new Function` fallback. In Chrome 138+, enable `Allow User Scripts` for WebClaw on the extension details page if Chrome reports that the API is unavailable.
 - `userScripts` injection is not blocked by page CSP dynamic-evaluation rules, but it cannot bypass the same-origin policy, HttpOnly cookies, extension permissions, or operating-system permissions.
 - `run_js` accepts inline `code` or `vfsPath` for a VFS `.js`, `.mjs`, or `.cjs` file; provide exactly one.
-- Use `http_request` for cross-origin webhooks or APIs that pages cannot call because of CORS. HTTP(S) access uses optional host permissions requested per origin with a reason before first use.
+- Use `http_request` for cross-origin webhooks or APIs that pages cannot call because of CORS. It supports timeouts, JSON, forms, multipart VFS files, binary responses, and saving directly to VFS. HTTP(S) access uses optional host permissions requested per origin with a reason before first use.
 - `fs_shell` only operates on the IndexedDB-backed virtual filesystem and cannot access local machine files. It supports `pwd`, `cd`, `ls`, `stat`, `mkdir`, `touch`, `cat`, `cp`, `mv`, and `rm`; `cd` validates the target directory, updates the current session working directory, and makes later relative paths resolve from it. It rejects pipes, redirection, command substitution, and multi-command input; `rm` moves entries into `/.trash`.
-- Trash records retain the original path and deletion time. `fs_restore` rejects a conflicting destination by default, supports `onConflict: "rename"`, and can move the existing destination to trash when `confirmOverwrite: true`; `fs_purge` and `fs_empty_trash` permanently delete only trash entries and require `confirm: true`.
+- `fs_manage` provides mkdir, move, copy, touch, and recoverable deletion; `fs_trash` provides list, restore, purge, and empty. Restore rejects a conflicting destination by default, supports `onConflict: "rename"`, and can move the existing destination to trash when `confirmOverwrite: true`; purge and empty operate only on `/.trash` and require `confirm: true`.
 - Successfully downloaded WeChat channel media is also archived under `/inbox/<channel>/`. Its content is still sent to the active provider according to that provider's media capabilities.
 - Edit and enable the `qiyewechat_notification` Tool to configure an enterprise WeChat robot webhook. Its Tool name and Display name are both fixed to `qiyewechat_notification`; use only this canonical identifier. It supports text and markdown payloads without putting the webhook into model prompts.
 - API keys and OAuth tokens are stored in `chrome.storage.local`.

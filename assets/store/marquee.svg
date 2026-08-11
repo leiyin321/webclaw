@@ -26,7 +26,7 @@
   <rect x="1064" y="182" width="218" height="56" rx="7" fill="#1769e0"/>
   <text x="1080" y="215" fill="#ffffff" font-family="Arial Unicode MS" font-size="12">总结当前页面</text>
   <rect x="1030" y="258" width="240" height="58" rx="7" fill="#eef5ff" stroke="#b8d4f4"/>
-  <text x="1044" y="291" fill="#29415f" font-family="monospace" font-size="11">tool: get_page_context</text>
+  <text x="1044" y="291" fill="#29415f" font-family="monospace" font-size="11">tool: page_snapshot</text>
   <rect x="1030" y="336" width="252" height="102" rx="7" fill="#ffffff" stroke="#dfe3ea"/>
   <text x="1046" y="366" fill="#202124" font-family="Arial Unicode MS" font-size="12" font-weight="700">页面摘要</text>
   <rect x="1046" y="388" width="208" height="8" rx="4" fill="#dfe3ea"/>

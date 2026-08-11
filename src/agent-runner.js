@@ -11,14 +11,21 @@ import { createAgentStateMachine, isTerminalAgentState } from "./agent-state.js"
 
 export async function runAgentLoop(options) {
   const maxSteps = positiveInteger(
-    options?.runtimeState?.budgets?.limits?.modelSteps,
+    options?.runtimeState?.control?.maxSteps,
     positiveInteger(options?.maxSteps, 1)
   );
   const messages = Array.isArray(options?.messages) ? options.messages : [];
   let pendingRecoveryResult = null;
+  let taskContinuationPending = options?.runtimeState?.control?.taskContinuationPending === true;
   let toolScheduler = null;
+  const resumedWithoutBudgetLimits = Boolean(
+    options.runtimeState?.budgets && !options.runtimeState?.budgets?.limits
+  );
   const budgets = options.budgets || createAgentBudgets({
-    maxModelSteps: maxSteps,
+    // A task created on the last regular step still needs one parent model turn
+    // to consume its validated result. This slot cannot execute more Tools.
+    maxModelSteps: options.runtimeState?.budgets?.limits?.modelSteps
+      ?? (resumedWithoutBudgetLimits ? maxSteps : maxSteps + 1),
     maxToolCalls: options.runtimeState?.budgets?.limits?.toolCalls ?? options.maxToolCalls,
     maxElapsedMs: options.runtimeState?.budgets?.limits?.elapsedMs ?? options.maxElapsedMs,
     startedAt: options.runtimeState?.budgets?.startedAt,
@@ -37,7 +44,11 @@ export async function runAgentLoop(options) {
   const runtimeSnapshot = () => ({
     budgets: budgets.snapshot(),
     progress: progressTracker.snapshot(),
-    recovery: options.recoveryPolicy?.snapshot?.() || null
+    recovery: options.recoveryPolicy?.snapshot?.() || null,
+    control: {
+      maxSteps,
+      taskContinuationPending
+    }
   });
   const scheduler = () => {
     if (!toolScheduler) {
@@ -84,6 +95,7 @@ export async function runAgentLoop(options) {
       appendMessages(messages, batch.results.flatMap(messagesForScheduledResult));
       const progress = progressTracker.recordToolBatch(pendingToolCalls, batch.results);
       if (progress.action === "nudge") messages.push({ role: "user", content: progress.message });
+      taskContinuationPending = containsTaskPush(pendingToolCalls);
       await options.onBoundary?.({
         phase: "after_tool",
         step,
@@ -101,15 +113,23 @@ export async function runAgentLoop(options) {
       }
     }
 
-    for (let step = 0; step < maxSteps; step += 1) {
+    for (let step = 0; step < maxSteps || taskContinuationPending; step += 1) {
     options.assertCanContinue?.();
+    const taskContinuation = taskContinuationPending;
+    const reservedTaskContinuation = step >= maxSteps && taskContinuation;
     const modelBudget = budgets.consume("modelSteps");
     if (modelBudget.exhausted) {
       await transition("failed", { reason: "budget_exhausted", step });
       return { status: "budget_exhausted", budget: modelBudget };
     }
     await transition("sampling_model", { step });
-    const stepContext = await options.beforeModelStep?.({ step, messages, runtimeState: runtimeSnapshot() });
+    const stepContext = await options.beforeModelStep?.({
+      step,
+      messages,
+      runtimeState: runtimeSnapshot(),
+      taskContinuation
+    });
+    taskContinuationPending = false;
     let turn;
     try {
       turn = await options.sampleModel({ step, messages, stepContext });
@@ -263,6 +283,17 @@ export async function runAgentLoop(options) {
       };
     }
 
+    if (reservedTaskContinuation) {
+      await transition("failed", { reason: "step_limit", step, taskResultConsumed: true });
+      return {
+        status: "step_limit",
+        maxSteps,
+        step,
+        taskResultConsumed: true,
+        reason: "The parent consumed the final child-task result but requested another Tool after the configured step limit."
+      };
+    }
+
     const toolBudget = budgets.consume("toolCalls", toolCalls.length);
     if (toolBudget.exhausted) {
       await transition("failed", { reason: "budget_exhausted", step });
@@ -290,6 +321,7 @@ export async function runAgentLoop(options) {
     if (progress.action === "nudge") {
       messages.push({ role: "user", content: progress.message });
     }
+    taskContinuationPending = containsTaskPush(toolCalls);
     await options.onBoundary?.({
       phase: "after_tool",
       step,
@@ -325,6 +357,10 @@ export async function runAgentLoop(options) {
     }
     throw error;
   }
+}
+
+function containsTaskPush(toolCalls) {
+  return (Array.isArray(toolCalls) ? toolCalls : []).some((call) => String(call?.name || "") === "task_push");
 }
 
 function appendMessages(target, additions) {

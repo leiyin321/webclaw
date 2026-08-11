@@ -1,5 +1,7 @@
+const previewHost = window.opener || (window.parent !== window ? window.parent : null);
+
 window.addEventListener("message", (event) => {
-  if (event.source !== window.opener) return;
+  if (!previewHost || event.source !== previewHost) return;
   if (event.data?.type === "WEBCLAW_PREVIEW_ERROR") {
     document.querySelector("#status").textContent = `Preview failed: ${String(event.data.error || "Unknown error")}`;
     return;
@@ -10,6 +12,4 @@ window.addEventListener("message", (event) => {
   document.close();
 });
 
-if (window.opener) {
-  window.opener.postMessage({ type: "WEBCLAW_PREVIEW_READY" }, "*");
-}
+previewHost?.postMessage({ type: "WEBCLAW_PREVIEW_READY" }, "*");

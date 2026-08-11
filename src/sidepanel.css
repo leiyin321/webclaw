@@ -532,6 +532,13 @@ textarea {
   margin: 8px 0 10px;
 }
 
+.tool-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 0.55fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+
 .tool-item {
   display: grid;
   grid-template-columns: auto 1fr auto;

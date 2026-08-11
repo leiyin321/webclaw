@@ -15,11 +15,14 @@ WebClaw 目前是实验性的浏览器原生 Agent 框架，适合本地开发�
 - 多会话 Session 管理，所有通道消息进入当前活跃会话。
 - Provider 管理：Local Ollama、OpenAI-compatible API、OpenCode Zen、Chrome AI、Codex / ChatGPT OAuth、GitHub Copilot OAuth。
 - 模型列表刷新、模型下拉选择、Thinking mode 配置。
-- 浏览器工具：页面上下文、点击、输入、跳转、等待、页面翻译、天气查询、搜索网页、后台 HTTP 请求、企业微信推送、有限 Chrome API、可选页面 JavaScript 执行。
-- 虚拟文件系统：文件管理器与 Agent Tool 共享 IndexedDB 文件系统；支持目录浏览、文本编辑、上传、下载、重命名、回收站、恢复、彻底删除，以及 `fs_list`、`fs_read`、`fs_write`、`fs_edit`、`fs_search`、`fs_apply_patch` 等结构化 Tool。
+- 统一 Tool Registry：内置 Tool 的名称、JSON Schema、权限、风险、调度和管理界面元数据来自同一事实源；参数在执行前递归校验，结果以统一信封反馈给模型。
+- 浏览器 Tool：通过 `page_snapshot`、`page_action`、`page_wait`、`page_extract`、`page_screenshot`、`page_storage`、`page_file_input` 和 `browser_tabs` 执行可验证的页面与标签页操作；`run_js` 仅作为需审批的高级能力。
+- 可选浏览器能力：标签组、最近关闭页面、下载、书签、历史、剪贴板和本机通知按 Tool 启用，并按需申请 Chrome optional permissions；剪贴板读取与写入分别使用 `browser_clipboard_read` 和 `browser_clipboard_write`，不会为只读任务申请写权限。
+- 虚拟文件系统：文件管理器与 Agent Tool 共享 IndexedDB 文件系统；支持结构化读写、搜索、glob、hash、diff、patch、归档、预览，以及由 `fs_manage` 和 `fs_trash` 提供的统一文件管理与回收站操作。
 - VFS 静态网页预览：文件管理器中的 HTML/HTM/XHTML/SVG 文件可直接打开到独立 Chrome 标签页，预览运行时会从 VFS 加载同目录的 CSS、JS、图片、字体和 JSON 资源。
 - 预览页面运行在隔离的 Extension Sandbox 中；网页可使用由 WebClaw 提供的项目级 `localStorage` 兼容层，数据保存在浏览器本地，不访问扩展凭证。该兼容层不是网站真实 origin 的 `localStorage`。
-- 本地知识库：将 VFS 文本文件索引到浏览器本地 IndexedDB，支持 `knowledge_ingest`、`knowledge_search`、`knowledge_read`、`knowledge_forget`、`knowledge_status`；首次启动会创建并索引 WebClaw 操作手册。
+- 本地知识库：将 VFS 文本文件索引到浏览器本地 IndexedDB，支持 collection/path/tag/time 过滤和 `knowledge_reindex`；首次启动会创建并索引 WebClaw 操作手册。
+- 动态 Tool 暴露：每轮只向模型注入核心能力，模型可调用 `tool_search` 按任务、分类或 bundle 加载当前运行所需的已启用 Tool，减少小模型选择歧义。
 - 工作区记忆：自动初始化 `AGENTS.md`、`SOUL.md`、`TOOLS.md`、`IDENTITY.md`、`USER.md`、`MEMORY.md` 及每日记忆文件，并在每次 Agent 运行前按上下文预算注入。
 - 受控 Tool 轨迹：保留受限长度的工具结果和失败原因，用于后续会话与 Provider 切换时的自我纠错。
 - 统一 Agent Runtime：所有 Provider、Side Panel、Channel 和 Schedule 共用 Turn、Item、Tool、Plan、审批、停止和上下文压缩机制。
@@ -45,7 +48,7 @@ WebClaw 只维护一套外层 Agent Runtime。它把一次请求表示为 `Turn`
 
 `task_push` 用于把可独立完成的工作压入一次性任务栈。每个子任务有独立模型上下文，只接收明确传入的 `instruction`、`context`、工作目录和 `outputSchema`；父任务同步等待结构化结果。子任务可以继续调用 `task_push`，默认最大深度为 4、每个根任务最多创建 16 个 Task。Settings 可调整这两个值和整棵任务树的模型步骤预算，其中步骤预算 `0` 表示不设总上限。`task_stack` 可读取当前栈和预算。
 
-Task 不会写入 Tool 配置，也不会固化成 Workflow。完成或失败后，其完整上下文从活动栈删除；父任务只收到统一结果信封及符合 JSON Schema 的 `output`。活动栈快照和最近运行的状态、计数、预算及错误摘要保存在当前 Chrome 配置文件，用于诊断中断，不重复保存最终回答，也不会自动恢复或重放不确定的外部操作。
+Task 不会写入 Tool 配置，也不会固化成 Workflow。完成或失败后，其完整上下文从活动栈删除；父任务收到统一结果信封及符合 JSON Schema 的 `output`，并至少再执行一个模型回合来整合子任务结果，然后才判断父任务是否完成。即使 `task_push` 位于最后一个常规步骤，运行时也会保留该整合回合，但这个保留回合不能绕过步骤限制继续执行 Tool。活动栈快照和最近运行的状态、计数、预算及错误摘要保存在当前 Chrome 配置文件，用于诊断中断，不重复保存最终回答，也不会自动恢复或重放不确定的外部操作。
 
 当前 `outputSchema` 支持受控 JSON Schema 子集：`type`、`properties`、`required`、`additionalProperties`、`items`、`enum`、`const`、字符串/数组长度和数值上下限；不接受 `$ref`、`$defs`、`oneOf`、`anyOf`、`allOf` 或递归 Schema。
 
@@ -66,6 +69,7 @@ Workflow 仍是持久化、可复用的自定义 Tool；Task 是仅在一次执�
 - [OAuth 配置与发布建议](OAUTH.md)
 - [Chrome Web Store 上架资料](STORE_LISTING.md)
 - [Agent Loop 架构与恢复语义](docs/agent-loop-architecture.md)
+- [0.6.1 Tool 升级改造规划](docs/tool-upgrade-plan.md)
 - [许可证](LICENSE)
 
 ## 在 Chrome 中加载
@@ -134,7 +138,7 @@ Chrome AI 需要支持内置 AI 的 Chrome 版本、合适硬件、足够磁盘�
 chrome://on-device-internals
 ```
 
-当 `get_page_context` 页面正文较长时，WebClaw 会优先用 Chrome Summarizer API 对页面内容做摘要，再把摘要传给 Prompt API，以降低上下文超限概率。
+当 `page_snapshot` 页面正文较长时，WebClaw 会优先用 Chrome Summarizer API 对页面内容做摘要，再把摘要传给 Prompt API，以降低上下文超限概率。
 
 ### Codex / ChatGPT OAuth
 
@@ -188,7 +192,7 @@ Copilot Responses 模型的 Thinking mode 会转换为标准 reasoning effort：
 所有 Provider 共用同一个 Agent Runtime。Provider Adapter 负责认证、消息格式、流式响应、媒体编码、上下文能力，以及原生 function calling 或 JSON Tool transport；因此切换 Provider 不会改变会话、Tool、Plan、审批、停止和持久化机制。模型每一步通常输出一个 JSON Tool 对象：
 
 ```json
-{"tool":{"name":"get_page_context","args":{}}}
+{"tool":{"name":"page_snapshot","args":{}}}
 ```
 
 完成任务时输出：
@@ -229,7 +233,7 @@ WebClaw 会使用 `translate_page` 工具收集可见文本节点，调用当前
 
 - `search_web`：打开搜索结果、读取页面并总结。
 - `get_weather`：通过 Open-Meteo 查询天气。
-- `get_page_context`：读取当前页面上下文。
+- `page_snapshot`：读取当前页面上下文；`page_extract` 可进一步提取链接、表格、表单和元数据。
 
 例如：
 
@@ -263,9 +267,9 @@ WebClaw 支持把外部消息通道接入当前活跃会话：
 - `run_js` 要求 Chrome 135 或更高版本，并且只使用 Chrome `userScripts.execute()`，不提供 `eval` / `new Function` 回退。Chrome 138 及以上如果提示 API 不可用，请在扩展详情页打开 **Allow User Scripts** 后重新加载扩展。
 - `userScripts` 注入不受页面 CSP 的动态求值限制，但不能突破浏览器同源策略、HttpOnly Cookie、扩展权限或系统权限。
 - `run_js` 可直接接收 `code`，或通过 `vfsPath` 执行 VFS 内的 `.js`、`.mjs`、`.cjs` 文件；两者只能提供一个。
-- `http_request` 在扩展 background 中执行，用于调用页面 JS 因 CORS 无法调用的接口或 webhook。
+- `http_request` 在扩展 background 中执行，用于调用页面 JS 因 CORS 无法调用的接口或 webhook；支持超时、JSON、表单、VFS multipart 文件、二进制响应和直接保存到 VFS。
 - `fs_shell` 仅操作扩展 IndexedDB 中的虚拟文件系统；支持 `pwd`、`cd`、`ls`、`stat`、`mkdir`、`touch`、`cat`、`cp`、`mv`、`rm`。`cd` 会校验目标目录并更新当前会话的工作目录，后续相对路径从该目录解析；它不访问本机文件，也拒绝管道、重定向、命令替换和多命令输入，`rm` 会移动到 `/.trash`。
-- 回收站会保存原路径和删除时间。`fs_restore` 默认拒绝同名覆盖，可选择 `onConflict: "rename"` 自动改名，或在 `confirmOverwrite: true` 时把现有目标移入回收站后恢复；`fs_purge` 与 `fs_empty_trash` 只能永久删除 `/.trash` 中的内容，并要求 `confirm: true`。
+- `fs_manage` 统一执行 mkdir、move、copy、touch 和可恢复删除；`fs_trash` 统一执行 list、restore、purge 和 empty。恢复默认拒绝同名覆盖，可选择 `onConflict: "rename"` 自动改名，或在 `confirmOverwrite: true` 时把现有目标移入回收站后恢复；purge 与 empty 只处理 `/.trash`，并要求 `confirm: true`。
 - 通过微信通道收到且已下载成功的媒体会归档到 `/inbox/<channel>/`；文件内容仍按当前 Provider 的媒体能力发送给模型。
 - API key、OAuth token、Webhook、会话和通道状态存储在 `chrome.storage.local`。
 - 页面内容和通道消息可能会发送给你当前选择的模型 Provider。

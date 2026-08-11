@@ -142,12 +142,12 @@ export function pushTask(run, parentTaskId, spec) {
   return task;
 }
 
-export function recordTaskModelStep(run, taskId) {
+export function recordTaskModelStep(run, taskId, options = {}) {
   assertTaskRun(run);
   const task = run.tasks[String(taskId || "")];
   if (!task) throw new Error(`Task not found: ${taskId || "unknown"}`);
   const max = run.budget.maxModelSteps;
-  if (max > 0 && run.budget.usedModelSteps >= max) {
+  if (max > 0 && run.budget.usedModelSteps >= max && options.allowReservedContinuation !== true) {
     throw new Error(`Task run model-step budget reached (${max}).`);
   }
   task.step += 1;
