@@ -2,6 +2,15 @@
 
 All notable changes to WebClaw will be documented in this file.
 
+## Unreleased
+
+## 0.7.2
+
+- Stop creating a visible root Task for every user message. Each message now starts an AgentRun with an empty task stack, and Tasks exist only when the model explicitly calls `task_push`.
+- Reserve one final model turn to consume any Tool observation at the configured step limit, including `tool_search`; the reserved turn may return a final answer but cannot execute another Tool beyond the limit.
+- Expand model-facing `run_js` guidance across its Tool Schema, dynamic Agent prompt, `tool_search` result example, default manual, and capability documentation, with correct Sandbox-controller, page RPC, VFS, HTTP, and Chrome API patterns plus failure recovery guidance.
+- Drive the conversation Stop button from the live Agent stream instead of generic Settings/UI busy state, and show a non-repeatable Stopping state while cancellation propagates.
+
 ## 0.7.1
 
 - Add provider-independent rich document generation for DOCX, XLSX, PPTX, and PDF through versioned Rich Schemas, built-in format-qualified templates, local sandboxed engines, VFS image assets, fidelity reporting, and bounded artifact transfer.

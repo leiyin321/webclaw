@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "WebClaw",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "minimum_chrome_version": "135",
   "description": "A user-controlled browser AI assistant for conversations, page actions, tools, and optional advanced automation.",
   "permissions": [

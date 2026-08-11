@@ -119,29 +119,36 @@ const BUILTIN_TOOL_DEFINITIONS = [
     object({ selector: string({ minLength: 1 }), path: string({ minLength: 1 }), filename: string() }, ["selector", "path"]),
     { selector: "input[type=file]", path: "/uploads/document.pdf" }, write("chrome:active-tab", "unknown", "interactive"),
     { hostPermissions: ["active_tab_origin"] }),
-  definition("run_js", "page", "Execute JavaScript in a cumulative L0-L5 capability sandbox. L0 is isolated compute; L1 adds scoped VFS RPC; L2 adds declared-origin HTTP RPC; L3 adds USER_SCRIPT page RPC; L4 adds MAIN-world page RPC; L5 adds allowlisted Chrome API RPC. Requires the setting plus explicit approval.",
+  definition("run_js", "page", "Execute an async JavaScript controller in WebClaw's Manifest Sandbox. The controller can use only input plus declared RPCs: L0 compute; L1 webclaw.vfs; L2 webclaw.http.request; L3 webclaw.page.run in USER_SCRIPT; L4 adds MAIN; L5 adds declared chrome methods. window/document/localStorage and page globals exist only inside the code string passed to webclaw.page.run, never in controller code. Choose the lowest level, declare every scope, return JSON-serializable data, and provide exactly one of code or vfsPath. Requires explicit approval.",
     object({
-      code: string({ description: "Inline JavaScript source. Provide code or vfsPath, not both." }),
-      vfsPath: string({ description: "VFS path to a .js, .mjs, or .cjs file. Provide code or vfsPath, not both." }),
-      level: string({ enum: ["L0", "L1", "L2", "L3", "L4", "L5"] }),
-      input: openObject("Structured input available to the script as input."),
-      timeoutMs: integer({ minimum: 100, maximum: 120000 }),
+      code: string({ description: "Complete async-function body for the sandbox controller. Use return. Do not use window/document/localStorage or direct fetch here; use the declared webclaw RPC. Provide code or vfsPath, never both." }),
+      vfsPath: string({ description: "Absolute VFS path to a complete .js, .mjs, or .cjs controller body. The file follows the same sandbox/RPC rules as code. Provide code or vfsPath, never both." }),
+      level: string({
+        enum: ["L0", "L1", "L2", "L3", "L4", "L5"],
+        description: "Lowest sufficient cumulative ceiling: L0 compute; L1 VFS; L2 HTTP; L3 isolated page DOM; L4 page MAIN globals; L5 allowlisted Chrome APIs. A higher level does not automatically grant lower-level scopes."
+      }),
+      input: openObject("JSON-serializable data available to controller code as input. Pass data here instead of interpolating it into code."),
+      timeoutMs: integer({ minimum: 100, maximum: 120000, description: "Whole controller timeout in milliseconds; default 30000." }),
       capabilities: object({
         vfs: object({
-          read: array(string(), { description: "Allowed absolute VFS paths or path scopes ending in /* or /**." }),
-          write: array(string(), { description: "Allowed absolute VFS paths or path scopes ending in /* or /**." })
-        }),
+          read: array(string(), { description: "Absolute readable VFS paths/scopes ending in /* or /**. L1 defaults to /workspace/** only when omitted; L2-L5 require explicit VFS scopes." }),
+          write: array(string(), { description: "Absolute writable VFS paths/scopes ending in /* or /**. Include destination and missing parent scopes for create/copy/move/save operations." })
+        }, [], { description: "Scopes for webclaw.vfs.* at L1+. Read and write are checked independently." }),
         network: object({
-          origins: array(string(), { description: "Allowed HTTP(S) origins, such as https://api.example.com or https://*.example.com/*." })
-        }),
+          origins: array(string(), { description: "Required origins for webclaw.http.request at L2+, such as https://api.example.com or https://*.example.com/*. Direct controller fetch is not the supported network path." })
+        }, [], { description: "Declared cross-origin HTTP(S) scope for L2+. Redirects cannot escape this scope." }),
         page: object({
-          tabIds: array(integer({ minimum: 0 })),
-          worlds: array(string({ enum: ["USER_SCRIPT", "MAIN"] }))
-        }),
-        chrome: array(string(), { description: "Allowlisted Chrome methods such as tabs.query or bookmarks.search. Namespace wildcards such as tabs.* are accepted." })
-      })
+          tabIds: array(integer({ minimum: 0 }), { description: "Approved page tab IDs. Omit to bind the active tab at approval time." }),
+          worlds: array(string({ enum: ["USER_SCRIPT", "MAIN"] }), { description: "L3 supports USER_SCRIPT only. MAIN requires L4+. At L5 page access exists only when this page capability is present." })
+        }, [], { description: "Scope for webclaw.page.run({world, code}). Put DOM/page-global JavaScript in that nested code string." }),
+        chrome: array(string(), { description: "L5-only allowlisted methods called as await chrome.tabs.query(...) or webclaw.chrome.tabs.query(...). Declare exact methods such as tabs.query; namespace wildcards such as tabs.* include only WebClaw's allowlist." })
+      }, [], { description: "Approved RPC scope. Declaring level alone is insufficient except L0 and L1's /workspace/** default." })
     }, ["level"]),
-    { vfsPath: "/workspace/test.js", level: "L1", capabilities: { vfs: { read: ["/workspace/**"], write: ["/workspace/**"] } } },
+    {
+      level: "L3",
+      code: "const page = await webclaw.page.run({ world: 'USER_SCRIPT', code: \"const ok = window.confirm('Continue?'); return { answer: ok ? 'yes' : 'no', title: document.title };\" }); return page.result;",
+      capabilities: { page: { worlds: ["USER_SCRIPT"] } }
+    },
     write("sandbox:declared-capabilities", "unknown", "interactive"),
     { permissions: ["userScripts"], hostPermissions: ["args.capabilities.network.origins", "args.capabilities.page.tabIds"], advanced: true }),
   definition("translate_page", "page", "Translate visible text on the active page and replace it in-place.",

@@ -42,6 +42,34 @@ assert.equal(toolThenFinal.status, "completed");
 assert.equal(toolThenFinal.final, "finished");
 assert.equal(toolMessages.length, 3);
 
+let finalToolSamples = 0;
+let finalToolResultObserved = false;
+const finalStepTool = await runAgentLoop({
+  maxSteps: 1,
+  messages: [{ role: "user", content: "discover a tool" }],
+  sampleModel: async ({ messages }) => {
+    finalToolSamples += 1;
+    if (finalToolSamples === 1) {
+      return createToolCallTurn([
+        { callId: "search-call", name: "tool_search", args: { query: "run JavaScript in the active page" } }
+      ]);
+    }
+    finalToolResultObserved = messages.some((message) => String(message.content || "").includes("run_js"));
+    return createAssistantTurn("tool discovery integrated");
+  },
+  executeTool: async () => ({
+    messages: [
+      { role: "assistant", content: JSON.stringify({ tool: { name: "tool_search" } }) },
+      { role: "user", content: "TOOL_RESULT tool_search: loaded run_js" }
+    ]
+  }),
+  handleAssistant: async ({ assistantText }) => ({ final: assistantText })
+});
+assert.equal(finalStepTool.status, "completed");
+assert.equal(finalStepTool.final, "tool discovery integrated");
+assert.equal(finalToolSamples, 2);
+assert.equal(finalToolResultObserved, true);
+
 let finalTaskSamples = 0;
 let finalTaskResultObserved = false;
 const taskContinuationFlags = [];
@@ -91,7 +119,7 @@ const boundedTaskContinuation = await runAgentLoop({
   handleAssistant: async () => ({ final: "unexpected" })
 });
 assert.equal(boundedTaskContinuation.status, "step_limit");
-assert.equal(boundedTaskContinuation.taskResultConsumed, true);
+assert.equal(boundedTaskContinuation.toolResultConsumed, true);
 assert.equal(continuationToolExecutions, 1);
 
 const recoveredMessages = [{ role: "user", content: "continue" }];

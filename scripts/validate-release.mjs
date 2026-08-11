@@ -208,7 +208,7 @@ requireCondition(
   "controlled active Provider switching and rollback are missing"
 );
 requireCondition(
-  source.includes("webclaw-default-manual: 0.7.1-r1") &&
+  source.includes("webclaw-default-manual: 0.7.2-r1") &&
     source.includes("REPLACEABLE_DEFAULT_KNOWLEDGE_MANUAL_HASHES") &&
     source.includes("qxBFf1iNGSrbPVRGoSSOQUH8Mu9b6rgnrTBznpwsH1s") &&
     source.includes("qmON25C52Otm3zxd8xOE_dlGJ9DX-j61ECdtgLwChHA") &&
@@ -219,8 +219,9 @@ requireCondition(
     source.includes("ebvLDmJq-nzX4Kn5D2uASmSHK55uO-X6VMG8Fhg6Rwo") &&
     source.includes("8Q4-Lrp4wlIcHOAUmRZJZXbY-hxxTEOPi4HUEYIWegw") &&
     source.includes("yw9YuL1Vy3_VyqxVFkDzr5e4fJ3Nkhc-Z37vJmeoaOk") &&
+    source.includes("t22iHPwq8td1DdSnld0Ey3QPw3A9eaQzClv8D4EfT38") &&
     source.includes("expectedVersion: existing.entry.version") &&
-    source.includes('"webclaw", "manual", "operations", "0.7.1"'),
+    source.includes('"webclaw", "manual", "operations", "0.7.2"'),
   "versioned default knowledge manual migration is missing"
 );
 requireCondition(
@@ -238,6 +239,7 @@ requireCondition(
   "VFS preview sandbox must handshake with its iframe parent or opener"
 );
 const backgroundSource = readText("src/background.js");
+const sidepanelSource = readText("src/sidepanel.js");
 const agentRuntimeSource = readText("src/agent-runtime.js");
 const agentRunnerSource = readText("src/agent-runner.js");
 const agentRecoveryPolicySource = readText("src/agent-recovery-policy.js");
@@ -249,6 +251,13 @@ const agentStateSource = readText("src/agent-state.js");
 const agentTaskSupervisorSource = readText("src/agent-task-supervisor.js");
 const agentServiceSource = readText("src/agent-service.js");
 const agentTerminalOutcomeSource = readText("src/agent-terminal-outcome.js");
+requireCondition(
+  sidepanelSource.includes("activeAgentStopRequested") &&
+    sidepanelSource.includes("updateStopButtonState()") &&
+    sidepanelSource.includes("elements.stop.disabled = !running || activeAgentStopRequested") &&
+    !sidepanelSource.includes("elements.stop.disabled = !busy"),
+  "conversation Stop button must follow the live Agent stream instead of generic busy state"
+);
 const runAgentSource = backgroundSource.match(
   /async function runAgent\([\s\S]*?\n}\n\nfunction emitAgentEvent/
 )?.[0] || "";

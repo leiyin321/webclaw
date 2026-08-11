@@ -7,7 +7,7 @@ import {
   planHistoryCompaction
 } from "../src/agent-runtime.js";
 import {
-  completeRootTask,
+  completeTaskRun,
   completeTask,
   createTaskRun,
   normalizeTaskSpec,
@@ -77,9 +77,10 @@ const taskRun = createTaskRun({
   maxDepth: 3,
   maxTasks: 6
 });
-const child = pushTask(taskRun, taskRun.rootTaskId, taskSpec);
-assert.equal(taskStackSnapshot(taskRun).stack.length, 2);
-assert.equal(taskRun.tasks[taskRun.rootTaskId].status, "waiting_child");
+assert.equal(taskStackSnapshot(taskRun).stack.length, 0);
+const child = pushTask(taskRun, "", taskSpec);
+assert.equal(child.depth, 0);
+assert.equal(taskStackSnapshot(taskRun).stack.length, 1);
 const grandchild = pushTask(taskRun, child.id, normalizeTaskSpec({
   instruction: "Check one file.",
   context: { path: "/workspace/index.html" },
@@ -90,9 +91,9 @@ const grandchild = pushTask(taskRun, child.id, normalizeTaskSpec({
     additionalProperties: false
   }
 }));
-assert.equal(taskStackSnapshot(taskRun).stack.length, 3);
-completeTask(taskRun, grandchild.id);
 assert.equal(taskStackSnapshot(taskRun).stack.length, 2);
+completeTask(taskRun, grandchild.id);
+assert.equal(taskStackSnapshot(taskRun).stack.length, 1);
 recordTaskModelStep(taskRun, child.id);
 assert.equal(child.step, 1);
 assert.equal(validateTaskOutput({ valid: true, errors: [] }, taskSpec.outputSchema).valid, true);
@@ -102,9 +103,8 @@ assert.ok(invalidTaskOutput.errors.some((error) => error.path === "$.valid"));
 assert.ok(invalidTaskOutput.errors.some((error) => error.path === "$.errors"));
 assert.ok(invalidTaskOutput.errors.some((error) => error.path === "$.unexpected"));
 completeTask(taskRun, child.id);
-assert.equal(taskStackSnapshot(taskRun).stack.length, 1);
-assert.equal(taskRun.tasks[taskRun.rootTaskId].status, "running");
-completeRootTask(taskRun);
+assert.equal(taskStackSnapshot(taskRun).stack.length, 0);
+completeTaskRun(taskRun);
 assert.equal(taskStackSnapshot(taskRun).active, false);
 assert.throws(
   () => normalizeTaskSpec({
@@ -114,7 +114,7 @@ assert.throws(
   /not supported/
 );
 const boundedRun = createTaskRun({ maxDepth: 1, maxTasks: 2 });
-const boundedChild = pushTask(boundedRun, boundedRun.rootTaskId, normalizeTaskSpec({
+const boundedChild = pushTask(boundedRun, "", normalizeTaskSpec({
   instruction: "Only child",
   outputSchema: {
     type: "object",
@@ -127,10 +127,10 @@ assert.throws(
   /depth limit/
 );
 completeTask(boundedRun, boundedChild.id);
-const secondBoundedChild = pushTask(boundedRun, boundedRun.rootTaskId, taskSpec);
+const secondBoundedChild = pushTask(boundedRun, "", taskSpec);
 completeTask(boundedRun, secondBoundedChild.id);
 assert.throws(
-  () => pushTask(boundedRun, boundedRun.rootTaskId, taskSpec),
+  () => pushTask(boundedRun, "", taskSpec),
   /count limit/
 );
 

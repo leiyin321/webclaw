@@ -370,7 +370,7 @@ WORKSPACE_BOOTSTRAP_TEMPLATES["TOOLS.md"] = WORKSPACE_BOOTSTRAP_TEMPLATES["TOOLS
   .replaceAll("search_web", "web_search")
   .replace(
     "Use run_js only for logic normal Tools cannot express; ad-hoc calls require approval every time.",
-    "Use run_js only for logic normal Tools cannot express; ad-hoc calls require approval every time. Choose the lowest L0-L5 level and declare narrow capabilities. Controller code runs in a Manifest Sandbox; use webclaw.vfs at L1+, webclaw.http.request at L2+, webclaw.page.run at L3+ (MAIN requires L4+), and allowlisted chrome methods at L5."
+    "Use run_js only for logic normal Tools cannot express; ad-hoc calls require approval every time. Choose the lowest L0-L5 level and declare narrow capabilities. The outer controller always runs in a Manifest Sandbox and has input, webclaw, and the controlled chrome proxy, but no page window/document/localStorage. Use webclaw.vfs at L1+, webclaw.http.request at L2+, and webclaw.page.run at L3+; put DOM code inside page.run's code string (USER_SCRIPT first, MAIN only at L4+). At L2-L5 explicitly declare every lower-level VFS/network scope; at L5 explicitly declare page scope and each allowlisted Chrome method. Return JSON-serializable results and correct scope/level errors instead of retrying unchanged."
   )
   .replace("The current browser phase implements Markdown only.", "Markdown supports full operations; DOCX supports rich creation with schemaVersion=docx-2 plus basic rebuild editing; PDF supports rich text/table creation with schemaVersion=pdf-2 plus ASCII text-page fallback; XLSX supports rich worksheet creation with schemaVersion=xlsx-2 while charts remain a declared warning; PPTX supports rich slide, image, table, and common native chart creation with schemaVersion=pptx-2 plus basic rebuild editing; all four binary formats support bounded read projections.")
   .replace("Office adapters for DOCX, XLSX, PPTX, and PDF are planned and must not be claimed as supported until document_inspect reports capabilities.", "Office/PDF projections preserve original bytes and report fidelity=projection with warnings. Use document_revision to list or restore automatic pre-write snapshots, and purge only with confirm=true. Do not claim unsupported layout preservation, formula recalculation, page-isolated PDF extraction, or OCR.");
@@ -390,12 +390,13 @@ const REPLACEABLE_DEFAULT_KNOWLEDGE_MANUAL_HASHES = new Set([
   "AUoWZDFRlU1yysJ_EojdS8ROqAgFMuvXzZz5yYheR8g",
   "ebvLDmJq-nzX4Kn5D2uASmSHK55uO-X6VMG8Fhg6Rwo",
   "8Q4-Lrp4wlIcHOAUmRZJZXbY-hxxTEOPi4HUEYIWegw",
-  "yw9YuL1Vy3_VyqxVFkDzr5e4fJ3Nkhc-Z37vJmeoaOk"
+  "yw9YuL1Vy3_VyqxVFkDzr5e4fJ3Nkhc-Z37vJmeoaOk",
+  "t22iHPwq8td1DdSnld0Ey3QPw3A9eaQzClv8D4EfT38"
 ]);
-const DEFAULT_KNOWLEDGE_MANUAL = `<!-- webclaw-default-manual: 0.7.1-r1 -->
+const DEFAULT_KNOWLEDGE_MANUAL = `<!-- webclaw-default-manual: 0.7.2-r1 -->
 # WebClaw Operation Manual
 
-Built-in operating reference for WebClaw 0.7.1. The file is stored in VFS and indexed into the local knowledge base. WebClaw upgrades an unchanged historical default copy, but preserves a copy that the user has edited.
+Built-in operating reference for WebClaw 0.7.2. The file is stored in VFS and indexed into the local knowledge base. WebClaw upgrades an unchanged historical default copy, but preserves a copy that the user has edited.
 
 ## 1. What WebClaw is
 WebClaw is a Chrome extension AI agent. It can converse in the side panel and through connected WeChat or Telegram channels, use configured model providers, operate the active browser tab, use a browser-backed virtual filesystem (VFS), run schedules, and retain durable workspace context.
@@ -449,9 +450,10 @@ WebClaw supports local Ollama, OpenAI-compatible endpoints, OpenCode Zen, Codex/
 ## 3.1 Ephemeral task stack
 Use task_push when a genuinely separable part of a large request benefits from an independent model context. A Task is an execution instance, not a Tool definition and not a persistent Workflow.
 
+- A user message starts an AgentRun with an empty task stack. It does not create a root Task; Tasks exist only after an explicit task_push Tool Call.
 - Pass a complete instruction, minimal JSON context, a JSON Schema outputSchema, optional outputInstructions, maxSteps, and an optional allowedTools subset.
 - The parent waits synchronously. The child receives its own messages and may call task_push again until the stack depth or task-count budget is reached.
-- Settings controls maximum depth, Tasks per run, and the whole-tree model-step budget. A model-step budget of 0 is unlimited.
+- Settings controls maximum depth, Tasks per run, and the explicit-task-tree model-step budget. Root AgentRun steps do not consume this Task budget; 0 is unlimited.
 - The active Provider is inherited. allowedTools can only reduce the enabled Tool set and cannot expand permissions.
 - The child result is locally validated even when the Provider supports native structured output. Validation errors are returned to the child for correction.
 - outputSchema supports type, properties, required, additionalProperties, items, enum, const, string/array length limits, and numeric bounds. Do not use references, combinators, or recursive Schemas.
@@ -496,6 +498,9 @@ run_js requires the Allow agent JavaScript execution setting.
 - capabilities are the actual approved scope. L1 alone defaults VFS to /workspace/** for convenience; at L2-L5, lower-level VFS/network scopes must be explicit. L3/L4 bind the active tab when tabIds are omitted; L5 gets page access only when capabilities.page is present. Network origins and L5 Chrome methods must always be declared.
 - Every ad-hoc execution shows level, scopes, targets, and source. Rejecting approval executes nothing. RPC calls outside the approved scope return Tool errors.
 - L3 page calls use webclaw.page.run({world:"USER_SCRIPT",code:"return document.title;"}); use MAIN only at L4+ when page-owned globals are required.
+- Correct L3 pattern: controller code calls const page = await webclaw.page.run({world:"USER_SCRIPT", code:"const ok=confirm('Continue?'); return {answer:ok?'yes':'no'};"}); then returns page.result. Do not put confirm, document, window, or localStorage directly in controller code.
+- L2 HTTP pattern: declare capabilities.network.origins, then call await webclaw.http.request({url,method,json}). Do not use direct controller fetch. If the same controller also reads/writes VFS, explicitly declare capabilities.vfs because L2-L5 do not inherit L1's default scope.
+- L5 Chrome pattern: declare capabilities.chrome:["tabs.query"] and call await chrome.tabs.query({...}). L5 page access is separate and still requires capabilities.page.
 - L5 exposes only allowlisted tabs, windows, bookmarks, history, downloads, sessions, tabGroups, and notifications methods. It never exposes extension credential storage or identity/runtime/permissions/scripting/userScripts APIs.
 - Keep scripts narrow, return JSON-serializable data, and use normal Tools when they are sufficient.
 
@@ -650,7 +655,15 @@ function buildAgentSystemPrompt(settings) {
       : ""
   ].filter(Boolean).join(" ");
   const runJsNote = hasTool("run_js")
-    ? "\nrun_js controller code always runs in a Manifest Sandbox with input and capability RPC. Use webclaw.vfs methods at L1+, webclaw.http.request at L2+, webclaw.page.run at L3+ (MAIN requires L4+), and declared allowlisted chrome methods at L5. L2-L5 lower-level data scopes must be declared explicitly; L5 does not get page access unless capabilities.page is present. Never claim an RPC succeeded without its returned result."
+    ? `
+run_js rules:
+- Provide exactly one of code or vfsPath and always return JSON-serializable data. Controller code is an async-function body in a Manifest Sandbox; it has input, webclaw, and the controlled chrome proxy. It does not run in the page, so never use window, document, confirm, localStorage, or page globals directly in controller code.
+- Choose the lowest sufficient level. L0: computation only. L1: webclaw.vfs.*. L2: webclaw.http.request. L3: webclaw.page.run in USER_SCRIPT. L4: adds page MAIN. L5: declared allowlisted chrome methods.
+- Page pattern: const page = await webclaw.page.run({world:"USER_SCRIPT", code:"return {title:document.title};"}); return page.result; Put all DOM/page-global logic inside the nested code string. Omit tabId to bind the active tab. Try USER_SCRIPT first; use MAIN only for page-owned JavaScript globals.
+- HTTP pattern: const response = await webclaw.http.request({url:"https://api.example.com/data",method:"GET"}); return response; Declare that origin in capabilities.network.origins. Do not use direct fetch.
+- VFS pattern: await webclaw.vfs.read(path, options) or await webclaw.vfs.write(path, content, options). L1 alone defaults to /workspace/**; L2-L5 require explicit capabilities.vfs scopes for every VFS operation, including destinations and created parents.
+- Chrome pattern at L5: declare the exact method in capabilities.chrome, then call await chrome.tabs.query(...), or webclaw.chrome.tabs.query(...). L5 has no page access unless capabilities.page is also present.
+- Read a run_js error literally. Raise the level or widen only the missing scope; do not repeat the same invalid arguments. Never claim success without the returned RPC/result.`
     : "";
   const skillNotes = skills
     .map((skill) => `## ${skill.title || skill.name}\n${skill.content}`)
@@ -826,7 +839,8 @@ async function searchAndLoadTools(args, settings, options = {}) {
       category: definition.category,
       bundle: definition.bundle,
       description: definition.description,
-      inputSchema: definition.inputSchema
+      inputSchema: definition.inputSchema,
+      example: definition.example
     })),
     skipped: skippedMatches,
     activeToolCount: exposure.size
@@ -3340,13 +3354,6 @@ function nonNegativeInteger(value, fallback) {
   return Math.max(0, Math.floor(number));
 }
 
-function rootTaskTitle(messages) {
-  const lastUserMessage = [...(Array.isArray(messages) ? messages : [])]
-    .reverse()
-    .find((message) => message?.role === "user");
-  return truncateText(String(lastUserMessage?.content || "Agent turn").replace(/\s+/g, " ").trim(), 160);
-}
-
 function parseTaskOutput(response) {
   const candidate = modelTurnFinalValue(response);
   if (typeof candidate !== "string") return candidate;
@@ -3441,14 +3448,13 @@ async function runAgent(uiMessages, options = {}) {
   const taskRun = options.taskRun || createTaskRun({
     sessionId: options.sessionId,
     providerId: settings.activeProviderId,
-    title: rootTaskTitle(uiMessages),
     maxSteps: settings.maxSteps,
     workingDirectory,
     maxDepth: settings.taskMaxDepth,
     maxTasks: settings.taskMaxTasks,
     maxModelSteps: settings.taskMaxModelSteps
   });
-  const taskFrameId = String(options.taskFrameId || taskRun.rootTaskId);
+  const taskFrameId = String(options.taskFrameId || "");
   const taskSupervisor = options.taskSupervisor || createAgentTaskSupervisor(taskRun, {
     persist: () => persistTaskRuns()
   });
@@ -3492,17 +3498,19 @@ async function runAgent(uiMessages, options = {}) {
     taskRunId: taskRun.id,
     taskId: taskFrameId
   });
-  const startedTask = taskRun.tasks[taskFrameId];
-  emitAgentEvent(options, "task_started", {
-    turnId,
-    taskRunId: taskRun.id,
-    taskId: taskFrameId,
-    parentTaskId: startedTask?.parentId || "",
-    depth: Number(startedTask?.depth || 0),
-    title: startedTask?.title || "Agent turn",
-    step: Number(startedTask?.step || 0),
-    maxSteps: Number(startedTask?.maxSteps || settings.maxSteps || 8)
-  });
+  const startedTask = taskFrameId ? taskRun.tasks[taskFrameId] : null;
+  if (startedTask) {
+    emitAgentEvent(options, "task_started", {
+      turnId,
+      taskRunId: taskRun.id,
+      taskId: taskFrameId,
+      parentTaskId: startedTask.parentId || "",
+      depth: Number(startedTask.depth || 0),
+      title: startedTask.title || "Task",
+      step: Number(startedTask.step || 0),
+      maxSteps: Number(startedTask.maxSteps || settings.maxSteps || 8)
+    });
+  }
   const runHeartbeat = setInterval(() => runJournal?.heartbeat(), 10000);
   let taskRunFinalized = false;
 
@@ -3519,7 +3527,7 @@ async function runAgent(uiMessages, options = {}) {
       taskId: taskFrameId
     });
     if (ownsTaskRun) {
-      await taskSupervisor.completeRoot(outcome.taskStatus, {
+      await taskSupervisor.completeRun(outcome.taskStatus, {
         status: outcome.status,
         reason: outcome.metadata?.reason || ""
       });
@@ -3607,21 +3615,28 @@ async function runAgent(uiMessages, options = {}) {
         taskId: taskFrameId,
         ...transition
       }),
-      beforeModelStep: async ({ step, messages: modelMessages, runtimeState, taskContinuation }) => {
+      beforeModelStep: async ({ step, messages: modelMessages, runtimeState, observationContinuation, taskContinuation }) => {
         await taskSupervisor.recordModelStep(taskFrameId, {
-          allowReservedContinuation: taskContinuation === true
+          allowReservedContinuation: observationContinuation === true
         });
-        emitAgentEvent(options, "task_progress", {
-          turnId,
-          taskRunId: taskRun.id,
-          taskId: taskFrameId,
-          phase: taskContinuation ? "integrating_child_result" : "model",
-          step: Number(taskRun.tasks[taskFrameId]?.step || step + 1),
-          maxSteps: Math.max(
-            Number(taskRun.tasks[taskFrameId]?.maxSteps || settings.maxSteps || 8),
-            Number(taskRun.tasks[taskFrameId]?.step || step + 1)
-          )
-        });
+        const activeTask = taskFrameId ? taskRun.tasks[taskFrameId] : null;
+        if (activeTask) {
+          emitAgentEvent(options, "task_progress", {
+            turnId,
+            taskRunId: taskRun.id,
+            taskId: taskFrameId,
+            phase: taskContinuation
+              ? "integrating_child_result"
+              : observationContinuation
+                ? "integrating_tool_result"
+                : "model",
+            step: Number(activeTask.step || step + 1),
+            maxSteps: Math.max(
+              Number(activeTask.maxSteps || settings.maxSteps || 8),
+              Number(activeTask.step || step + 1)
+            )
+          });
+        }
         const modelItemId = createAgentId("item");
         emitAgentEvent(options, "item_started", {
           turnId,
@@ -3852,15 +3867,18 @@ async function runAgent(uiMessages, options = {}) {
             startedAt: Date.now()
           }
         });
-        emitAgentEvent(options, "task_progress", {
-          turnId,
-          taskRunId: taskRun.id,
-          taskId: taskFrameId,
-          phase: "tool",
-          tool: toolName,
-          step: Number(taskRun.tasks[taskFrameId]?.step || step + 1),
-          maxSteps: Number(taskRun.tasks[taskFrameId]?.maxSteps || settings.maxSteps || 8)
-        });
+        const activeTask = taskFrameId ? taskRun.tasks[taskFrameId] : null;
+        if (activeTask) {
+          emitAgentEvent(options, "task_progress", {
+            turnId,
+            taskRunId: taskRun.id,
+            taskId: taskFrameId,
+            phase: "tool",
+            tool: toolName,
+            step: Number(activeTask.step || step + 1),
+            maxSteps: Number(activeTask.maxSteps || settings.maxSteps || 8)
+          });
+        }
         await checkpointAgentRun(runJournal, {
           phase: "before_tool",
           step,
@@ -3990,7 +4008,7 @@ async function runAgent(uiMessages, options = {}) {
       workingDirectory
     });
     if (ownsTaskRun && !taskRunFinalized) {
-      await taskSupervisor.completeRoot(interrupted ? "cancelled" : "failed", {
+      await taskSupervisor.completeRun(interrupted ? "cancelled" : "failed", {
         error: interrupted ? "Stopped" : normalizeError(error)
       });
       activeTaskRuns.delete(taskRun.id);
@@ -4169,7 +4187,7 @@ async function resumeRecoverableAgentRun(runId, runtimeOptions = {}) {
     throw new Error(`Recoverable Agent run Provider no longer exists: ${storedRun.providerId || "unknown"}`);
   }
   const taskRun = checkpoint.taskRun;
-  if (!taskRun?.id || !checkpoint.taskId) {
+  if (!taskRun?.id) {
     throw new Error("Recoverable Agent run has no durable task state.");
   }
   const resumeMessages = structuredClone(checkpoint.messages);
@@ -4195,7 +4213,7 @@ async function resumeRecoverableAgentRun(runId, runtimeOptions = {}) {
     pendingToolCalls: recovery.action === "resume_tool" ? [checkpoint.toolCall] : [],
     pendingToolStep: Number(checkpoint.step || 0),
     taskRun,
-    taskFrameId: checkpoint.taskId,
+    taskFrameId: String(checkpoint.taskId || ""),
     taskSupervisor: null,
     ownsTaskRun: true,
     recoveredApproval: recovery.action === "wait_approval"
@@ -4421,7 +4439,7 @@ async function ensureDefaultKnowledgeManual() {
   }
   await knowledgeIngestVfsFile(DEFAULT_KNOWLEDGE_MANUAL_PATH, {
     title: "WebClaw Operation Manual",
-    tags: ["webclaw", "manual", "operations", "0.7.1"]
+    tags: ["webclaw", "manual", "operations", "0.7.2"]
   });
 }
 
@@ -4572,9 +4590,20 @@ function normalizedToolResultEnvelope(toolName, toolResult, options = {}) {
 function buildToolRecoveryGuidance(settings, toolName) {
   const tool = enabledTools(settings).find((item) => item.name === toolName);
   if (!tool) return "\nTOOL_RECOVERY: Read the error, revise the arguments, then retry only if the request still requires this tool.";
+  const runJsRecovery = toolName === "run_js"
+    ? [
+        "RUN_JS_RECOVERY:",
+        "- Keep controller code in the Manifest Sandbox. Put window/document/confirm/localStorage logic inside webclaw.page.run({world, code}).",
+        "- Match resources to the lowest level: compute=L0, VFS=L1, HTTP=L2, USER_SCRIPT page=L3, MAIN page=L4, Chrome methods=L5.",
+        "- Level is only a ceiling. Declare exact VFS paths, network origins, page worlds/tabs, and Chrome methods; at L2-L5 VFS scopes must be explicit.",
+        "- Use webclaw.http.request instead of direct fetch. Omit page.tabIds to target the active approved tab.",
+        "- Correct only the level or scope named by the error. Do not repeat unchanged arguments."
+      ].join("\n")
+    : "";
   return [
     "",
     "TOOL_RECOVERY: The call failed. Read the error, correct the arguments, and then retry only if the request still requires this tool. Do not repeat the failed arguments unchanged.",
+    runJsRecovery,
     `VALID_TOOL_EXAMPLE: ${JSON.stringify(toolExample(tool))}`,
     tool.description ? `TOOL_DESCRIPTION: ${truncateText(tool.description, 500)}` : ""
   ].filter(Boolean).join("\n");
@@ -6516,7 +6545,7 @@ async function runTaskPush(args, settings, options = {}) {
   const run = options.taskRun;
   const supervisor = options.taskSupervisor;
   const parentTaskId = String(options.taskFrameId || "");
-  if (!run || !supervisor || !parentTaskId) {
+  if (!run || !supervisor) {
     throw new Error("task_push requires an active WebClaw task run.");
   }
   const spec = normalizeTaskSpec(args, {
@@ -6669,7 +6698,7 @@ function taskSettings(settings, task, run) {
     maxSteps: task.maxSteps,
     tools: normalizeTools(settings.tools).map((tool) => {
       const taskRuntimeTool = tool.name === "task_push" || tool.name === "task_stack";
-      const depthAllowsPush = tool.name !== "task_push" || task.depth < run.budget.maxDepth;
+      const depthAllowsPush = tool.name !== "task_push" || task.depth + 1 < run.budget.maxDepth;
       const allowedByTask = !restrictTools || allowed.has(tool.name) || taskRuntimeTool;
       return {
         ...tool,

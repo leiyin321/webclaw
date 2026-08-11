@@ -1,5 +1,5 @@
 import {
-  completeRootTask,
+  completeTaskRun,
   completeTask,
   failTask,
   pushTask,
@@ -40,9 +40,12 @@ export function createAgentTaskSupervisor(run, options = {}) {
 
     async recordModelStep(taskId, stepOptions = {}) {
       recordTaskModelStep(run, taskId, stepOptions);
-      const task = run.tasks[taskId];
-      await commit("task_model_step", task, { step: Number(task?.step || 0) });
-      return task;
+      const task = taskId ? run.tasks[taskId] : null;
+      const frame = task || run.runFrame;
+      await commit(task ? "task_model_step" : "agent_run_model_step", task, {
+        step: Number(frame?.step || 0)
+      });
+      return frame;
     },
 
     async complete(taskId, output = undefined) {
@@ -57,10 +60,9 @@ export function createAgentTaskSupervisor(run, options = {}) {
       return task;
     },
 
-    async completeRoot(status = "completed", summary = {}) {
-      const rootTaskId = run.rootTaskId;
-      completeRootTask(run, status);
-      await commit("task_root_completed", null, { taskId: rootTaskId, status, summary });
+    async completeRun(status = "completed", summary = {}) {
+      completeTaskRun(run, status);
+      await commit("task_run_completed", null, { status, summary });
     }
   };
 }

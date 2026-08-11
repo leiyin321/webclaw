@@ -47,9 +47,9 @@ WebClaw 只维护一套外层 Agent Runtime。它把一次请求表示为 `Turn`
 
 ### 临时任务栈
 
-`task_push` 用于把可独立完成的工作压入一次性任务栈。每个子任务有独立模型上下文，只接收明确传入的 `instruction`、`context`、工作目录和 `outputSchema`；父任务同步等待结构化结果。子任务可以继续调用 `task_push`，默认最大深度为 4、每个根任务最多创建 16 个 Task。Settings 可调整这两个值和整棵任务树的模型步骤预算，其中步骤预算 `0` 表示不设总上限。`task_stack` 可读取当前栈和预算。
+每次用户输入只创建一次 AgentRun，初始任务栈为空，不会自动创建根 Task。`task_push` 用于让模型按需把可独立完成的工作压入一次性任务栈。每个 Task 有独立模型上下文，只接收明确传入的 `instruction`、`context`、工作目录和 `outputSchema`；调用它的 Agent 或父 Task 同步等待结构化结果。Task 可以继续调用 `task_push`，默认最大深度为 4、每个 AgentRun 最多创建 16 个 Task。Settings 可调整这两个值和显式任务树的模型步骤预算，其中步骤预算 `0` 表示不设总上限；根 AgentRun 的普通模型步骤不计入 Task 预算。`task_stack` 可读取当前显式任务栈和预算。
 
-Task 不会写入 Tool 配置，也不会固化成 Workflow。完成或失败后，其完整上下文从活动栈删除；父任务收到统一结果信封及符合 JSON Schema 的 `output`，并至少再执行一个模型回合来整合子任务结果，然后才判断父任务是否完成。即使 `task_push` 位于最后一个常规步骤，运行时也会保留该整合回合，但这个保留回合不能绕过步骤限制继续执行 Tool。活动栈快照和最近运行的状态、计数、预算及错误摘要保存在当前 Chrome 配置文件，用于诊断中断，不重复保存最终回答，也不会自动恢复或重放不确定的外部操作。
+Task 不会写入 Tool 配置，也不会固化成 Workflow。完成或失败后，其完整上下文从活动栈删除；调用方收到统一结果信封及符合 JSON Schema 的 `output`，并至少再执行一个模型回合来整合结果，然后才判断当前 Agent 是否完成。即使 `task_push` 位于最后一个常规步骤，运行时也会保留该整合回合，但这个保留回合不能绕过步骤限制继续执行 Tool。活动栈快照和最近运行的状态、计数、预算及错误摘要保存在当前 Chrome 配置文件，用于诊断中断，不重复保存最终回答，也不会自动恢复或重放不确定的外部操作。
 
 当前 `outputSchema` 支持受控 JSON Schema 子集：`type`、`properties`、`required`、`additionalProperties`、`items`、`enum`、`const`、字符串/数组长度和数值上下限；不接受 `$ref`、`$defs`、`oneOf`、`anyOf`、`allOf` 或递归 Schema。
 

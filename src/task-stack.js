@@ -59,31 +59,20 @@ export function normalizeTaskOutputSchema(value) {
 export function createTaskRun(options = {}) {
   const now = Date.now();
   const runId = String(options.runId || createId("task-run"));
-  const rootTaskId = String(options.rootTaskId || createId("task"));
-  const root = {
-    id: rootTaskId,
-    runId,
-    parentId: "",
-    depth: 0,
-    title: String(options.title || "Agent turn").slice(0, 160),
-    instruction: "",
-    status: "running",
+  const runFrame = {
     step: 0,
     maxSteps: positiveInteger(options.maxSteps, 8),
     workingDirectory: normalizeTaskPath(options.workingDirectory || "/workspace"),
-    providerId: String(options.providerId || ""),
-    createdAt: now,
-    startedAt: now,
-    completedAt: 0
+    providerId: String(options.providerId || "")
   };
   return {
     id: runId,
     sessionId: String(options.sessionId || ""),
     providerId: String(options.providerId || ""),
     status: "running",
-    rootTaskId,
-    stack: [rootTaskId],
-    tasks: { [rootTaskId]: root },
+    runFrame,
+    stack: [],
+    tasks: {},
     completedTaskCount: 0,
     budget: {
       maxDepth: positiveInteger(options.maxDepth, 4),
@@ -99,13 +88,14 @@ export function createTaskRun(options = {}) {
 
 export function pushTask(run, parentTaskId, spec) {
   assertTaskRun(run);
-  const parent = run.tasks[String(parentTaskId || "")];
-  if (!parent) throw new Error(`Parent task not found: ${parentTaskId || "unknown"}`);
-  if (run.stack.at(-1) !== parent.id) {
+  const parentId = String(parentTaskId || "");
+  const parent = parentId ? run.tasks[parentId] : null;
+  if (parentId && !parent) throw new Error(`Parent task not found: ${parentId}`);
+  if ((parent && run.stack.at(-1) !== parent.id) || (!parent && run.stack.length > 0)) {
     throw new Error("Only the current stack-top task can create a child task.");
   }
-  const depth = parent.depth + 1;
-  if (depth > run.budget.maxDepth) {
+  const depth = parent ? parent.depth + 1 : 0;
+  if (depth + 1 > run.budget.maxDepth) {
     throw new Error(`Task stack depth limit reached (${run.budget.maxDepth}).`);
   }
   if (run.budget.createdTasks >= run.budget.maxTasks) {
@@ -114,11 +104,11 @@ export function pushTask(run, parentTaskId, spec) {
 
   const now = Date.now();
   const id = createId("task");
-  parent.status = "waiting_child";
+  if (parent) parent.status = "waiting_child";
   const task = {
     id,
     runId: run.id,
-    parentId: parent.id,
+    parentId: parent?.id || "",
     depth,
     title: spec.title,
     instruction: spec.instruction,
@@ -130,7 +120,7 @@ export function pushTask(run, parentTaskId, spec) {
     maxSteps: spec.maxSteps,
     allowedTools: [...spec.allowedTools],
     workingDirectory: spec.workingDirectory,
-    providerId: parent.providerId || run.providerId,
+    providerId: parent?.providerId || run.providerId,
     createdAt: now,
     startedAt: now,
     completedAt: 0
@@ -144,14 +134,17 @@ export function pushTask(run, parentTaskId, spec) {
 
 export function recordTaskModelStep(run, taskId, options = {}) {
   assertTaskRun(run);
-  const task = run.tasks[String(taskId || "")];
-  if (!task) throw new Error(`Task not found: ${taskId || "unknown"}`);
-  const max = run.budget.maxModelSteps;
-  if (max > 0 && run.budget.usedModelSteps >= max && options.allowReservedContinuation !== true) {
-    throw new Error(`Task run model-step budget reached (${max}).`);
+  const id = String(taskId || "");
+  const task = id ? run.tasks[id] : run.runFrame;
+  if (!task) throw new Error(id ? `Task not found: ${id}` : "Agent run frame not found.");
+  if (id) {
+    const max = run.budget.maxModelSteps;
+    if (max > 0 && run.budget.usedModelSteps >= max && options.allowReservedContinuation !== true) {
+      throw new Error(`Task run model-step budget reached (${max}).`);
+    }
+    run.budget.usedModelSteps += 1;
   }
   task.step += 1;
-  run.budget.usedModelSteps += 1;
   run.updatedAt = Date.now();
 }
 
@@ -163,16 +156,11 @@ export function failTask(run, taskId) {
   return removeStackTopTask(run, taskId, "failed");
 }
 
-export function completeRootTask(run, status = "completed") {
+export function completeTaskRun(run, status = "completed") {
   assertTaskRun(run);
-  const root = run.tasks[run.rootTaskId];
-  if (root) {
-    root.status = TASK_STATUSES.has(status) ? status : "completed";
-    root.completedAt = Date.now();
-  }
   run.stack = [];
   run.tasks = {};
-  run.status = status;
+  run.status = TASK_STATUSES.has(status) ? status : "completed";
   run.updatedAt = Date.now();
 }
 
@@ -192,7 +180,6 @@ export function taskStackSnapshot(run) {
     runId: run.id,
     sessionId: run.sessionId,
     status: run.status,
-    rootTaskId: run.rootTaskId,
     stack: run.stack
       .map((id) => run.tasks[id])
       .filter(Boolean)
@@ -234,9 +221,6 @@ function removeStackTopTask(run, taskId, status) {
   const id = String(taskId || "");
   if (run.stack.at(-1) !== id) {
     throw new Error("Only the current stack-top task can leave the task stack.");
-  }
-  if (id === run.rootTaskId) {
-    throw new Error("Use completeRootTask for the root task.");
   }
   const task = run.tasks[id];
   if (!task) throw new Error(`Task not found: ${id || "unknown"}`);

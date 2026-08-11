@@ -340,6 +340,7 @@ let settings = null;
 let codexPollTimer = null;
 let githubCopilotPollTimer = null;
 let activeAgentPort = null;
+let activeAgentStopRequested = false;
 let activeAssistantNode = null;
 let activeTurnId = "";
 let activePlanNode = null;
@@ -885,9 +886,15 @@ function handlePromptKeydown(event) {
 }
 
 function stopActiveAgent() {
-  if (!activeAgentPort) return;
+  if (!activeAgentPort || activeAgentStopRequested) return;
+  activeAgentStopRequested = true;
+  updateStopButtonState();
   elements.status.textContent = "Stopping";
-  activeAgentPort.postMessage({ type: "stop" });
+  try {
+    activeAgentPort.postMessage({ type: "stop" });
+  } catch {
+    // The stream completion/disconnect handler restores the idle UI state.
+  }
 }
 
 function streamAgentMessage(messages, workingDirectory) {
@@ -912,6 +919,8 @@ function streamAgentRequest(startMessage) {
   return new Promise((resolve, reject) => {
     const port = chrome.runtime.connect({ name: "WEBCLAW_AGENT_STREAM" });
     activeAgentPort = port;
+    activeAgentStopRequested = false;
+    updateStopButtonState();
     let settled = false;
     const keepAlive = setInterval(() => {
       try {
@@ -924,7 +933,9 @@ function streamAgentRequest(startMessage) {
     const finish = (callback, value) => {
       if (settled) return;
       settled = true;
-      activeAgentPort = null;
+      if (activeAgentPort === port) activeAgentPort = null;
+      activeAgentStopRequested = false;
+      updateStopButtonState();
       clearAgentApproval(port);
       clearInterval(keepAlive);
       try {
@@ -998,14 +1009,12 @@ function handleAgentEvent(event) {
   if (!event || typeof event !== "object") return;
   if (event.type === "task_started") {
     updateTaskRunView(event, "running");
-    elements.status.textContent = Number(event.depth || 0) > 0
-      ? `Task ${Number(event.depth)}: ${event.title || "Running"}`
-      : "Thinking";
+    elements.status.textContent = `Task ${Number(event.depth || 0) + 1}: ${event.title || "Running"}`;
     return;
   }
   if (event.type === "task_pushed") {
     updateTaskRunView(event, "running");
-    elements.status.textContent = `Task ${Number(event.depth || event.taskDepth || 0)}: ${event.title || "Running"}`;
+    elements.status.textContent = `Task ${Number(event.depth ?? event.taskDepth ?? 0) + 1}: ${event.title || "Running"}`;
     return;
   }
   if (event.type === "task_progress") {
@@ -1130,7 +1139,6 @@ function updateTaskRunView(event, status) {
   if (!view) {
     view = {
       runId,
-      rootTaskId: "",
       status: "running",
       tasks: new Map(),
       startedAt: Number(event.timestamp || Date.now()),
@@ -1145,7 +1153,7 @@ function updateTaskRunView(event, status) {
     id: taskId,
     parentTaskId: String(event.parentTaskId ?? previous.parentTaskId ?? ""),
     depth,
-    title: String(event.title || previous.title || (depth === 0 ? "Agent turn" : "Subtask")),
+    title: String(event.title || previous.title || "Task"),
     status,
     phase: String(event.phase || previous.phase || ""),
     tool: String(event.tool || (event.phase === "model" ? "" : previous.tool || "")),
@@ -1162,7 +1170,6 @@ function updateTaskRunView(event, status) {
     task.phase = "correcting";
     task.error = formatTaskValidationErrors(event.errors);
   }
-  if (depth === 0) view.rootTaskId = taskId;
   if (event.type === "task_pushed" && task.parentTaskId) {
     const parent = view.tasks.get(task.parentTaskId);
     if (parent) {
@@ -1184,19 +1191,19 @@ function updateTaskRunView(event, status) {
 function finalizeTaskRunView(event) {
   const runId = String(event.taskRunId || "");
   const view = activeTaskRunViews.get(runId);
-  if (!view || (view.rootTaskId && String(event.taskId || "") !== view.rootTaskId)) return;
+  if (!view || String(event.taskId || "")) return;
   const status = event.type === "turn_completed"
     ? "completed"
     : event.type === "turn_interrupted"
       ? "interrupted"
       : "failed";
   view.status = status;
-  const root = view.tasks.get(view.rootTaskId || String(event.taskId || ""));
-  if (root) {
-    root.status = status;
-    root.phase = "";
-    root.error = String(event.error || root.error || "");
-    root.completedAt = Number(event.completedAt || event.timestamp || Date.now());
+  for (const task of view.tasks.values()) {
+    if (!["running", "waiting_child", "correcting"].includes(task.status)) continue;
+    task.status = status;
+    task.phase = "";
+    task.error = String(event.error || task.error || "");
+    task.completedAt = Number(event.completedAt || event.timestamp || Date.now());
   }
   renderLiveTaskRunView(view);
   activeTaskRunViews.delete(runId);
@@ -5211,7 +5218,7 @@ function setMessageNodeContent(node, content, status = undefined) {
 
 function setBusy(busy, text = "Ready") {
   elements.send.disabled = busy;
-  elements.stop.disabled = !busy;
+  updateStopButtonState();
   elements.sessionSelect.disabled = busy;
   elements.newSession.disabled = busy;
   elements.clearSession.disabled = busy;
@@ -5252,6 +5259,13 @@ function setBusy(busy, text = "Ready") {
   elements.saveSchedule.disabled = busy;
   elements.deleteSchedule.disabled = busy;
   if (busy) elements.status.textContent = text;
+}
+
+function updateStopButtonState() {
+  const running = Boolean(activeAgentPort);
+  elements.stop.disabled = !running || activeAgentStopRequested;
+  elements.stop.textContent = activeAgentStopRequested ? "Stopping" : "Stop";
+  elements.stop.setAttribute("aria-label", activeAgentStopRequested ? "Stopping active conversation" : "Stop active conversation");
 }
 
 async function runtimeMessage(message) {

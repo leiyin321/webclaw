@@ -16,14 +16,16 @@ export async function runAgentLoop(options) {
   );
   const messages = Array.isArray(options?.messages) ? options.messages : [];
   let pendingRecoveryResult = null;
+  let observationContinuationPending = options?.runtimeState?.control?.observationContinuationPending === true ||
+    options?.runtimeState?.control?.taskContinuationPending === true;
   let taskContinuationPending = options?.runtimeState?.control?.taskContinuationPending === true;
   let toolScheduler = null;
   const resumedWithoutBudgetLimits = Boolean(
     options.runtimeState?.budgets && !options.runtimeState?.budgets?.limits
   );
   const budgets = options.budgets || createAgentBudgets({
-    // A task created on the last regular step still needs one parent model turn
-    // to consume its validated result. This slot cannot execute more Tools.
+    // A Tool executed on the last regular step still needs one model turn to
+    // consume its observation. This slot cannot execute more Tools.
     maxModelSteps: options.runtimeState?.budgets?.limits?.modelSteps
       ?? (resumedWithoutBudgetLimits ? maxSteps : maxSteps + 1),
     maxToolCalls: options.runtimeState?.budgets?.limits?.toolCalls ?? options.maxToolCalls,
@@ -47,6 +49,7 @@ export async function runAgentLoop(options) {
     recovery: options.recoveryPolicy?.snapshot?.() || null,
     control: {
       maxSteps,
+      observationContinuationPending,
       taskContinuationPending
     }
   });
@@ -95,6 +98,7 @@ export async function runAgentLoop(options) {
       appendMessages(messages, batch.results.flatMap(messagesForScheduledResult));
       const progress = progressTracker.recordToolBatch(pendingToolCalls, batch.results);
       if (progress.action === "nudge") messages.push({ role: "user", content: progress.message });
+      observationContinuationPending = pendingToolCalls.length > 0;
       taskContinuationPending = containsTaskPush(pendingToolCalls);
       await options.onBoundary?.({
         phase: "after_tool",
@@ -113,10 +117,11 @@ export async function runAgentLoop(options) {
       }
     }
 
-    for (let step = 0; step < maxSteps || taskContinuationPending; step += 1) {
+    for (let step = 0; step < maxSteps || observationContinuationPending; step += 1) {
     options.assertCanContinue?.();
+    const observationContinuation = observationContinuationPending;
     const taskContinuation = taskContinuationPending;
-    const reservedTaskContinuation = step >= maxSteps && taskContinuation;
+    const reservedObservationContinuation = step >= maxSteps && observationContinuation;
     const modelBudget = budgets.consume("modelSteps");
     if (modelBudget.exhausted) {
       await transition("failed", { reason: "budget_exhausted", step });
@@ -127,8 +132,10 @@ export async function runAgentLoop(options) {
       step,
       messages,
       runtimeState: runtimeSnapshot(),
+      observationContinuation,
       taskContinuation
     });
+    observationContinuationPending = false;
     taskContinuationPending = false;
     let turn;
     try {
@@ -283,14 +290,14 @@ export async function runAgentLoop(options) {
       };
     }
 
-    if (reservedTaskContinuation) {
-      await transition("failed", { reason: "step_limit", step, taskResultConsumed: true });
+    if (reservedObservationContinuation) {
+      await transition("failed", { reason: "step_limit", step, toolResultConsumed: true });
       return {
         status: "step_limit",
         maxSteps,
         step,
-        taskResultConsumed: true,
-        reason: "The parent consumed the final child-task result but requested another Tool after the configured step limit."
+        toolResultConsumed: true,
+        reason: "The Agent consumed the final Tool result but requested another Tool after the configured step limit."
       };
     }
 
@@ -321,6 +328,7 @@ export async function runAgentLoop(options) {
     if (progress.action === "nudge") {
       messages.push({ role: "user", content: progress.message });
     }
+    observationContinuationPending = toolCalls.length > 0;
     taskContinuationPending = containsTaskPush(toolCalls);
     await options.onBoundary?.({
       phase: "after_tool",

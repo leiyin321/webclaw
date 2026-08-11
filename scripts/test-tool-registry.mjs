@@ -7,6 +7,7 @@ import {
   builtinToolUiDefinitions,
   isRemovedBuiltinToolName
 } from "../src/tool-registry.js";
+import { validateJsonSchema } from "../src/json-schema-validator.js";
 
 const definitions = builtinToolDefinitions();
 const names = definitions.map((tool) => tool.name);
@@ -46,6 +47,19 @@ assert.deepEqual(builtinToolInputSchema("run_js").required, ["level"]);
 assert.deepEqual(builtinToolInputSchema("run_js").properties.level.enum, ["L0", "L1", "L2", "L3", "L4", "L5"]);
 assert.equal(Object.hasOwn(builtinToolInputSchema("run_js").properties, "world"), false);
 assert.ok(builtinToolInputSchema("run_js").properties.capabilities.properties.chrome);
+assert.match(builtinToolDefinition("run_js").description, /window\/document\/localStorage/);
+assert.match(builtinToolInputSchema("run_js").properties.code.description, /webclaw RPC/);
+assert.match(builtinToolInputSchema("run_js").properties.capabilities.description, /Declaring level alone is insufficient/);
+assert.equal(builtinToolDefinition("run_js").example.tool.args.level, "L3");
+assert.match(builtinToolDefinition("run_js").example.tool.args.code, /webclaw\.page\.run/);
+assert.deepEqual(
+  validateJsonSchema(
+    builtinToolDefinition("run_js").example.tool.args,
+    builtinToolInputSchema("run_js"),
+    { requiredNonEmpty: true }
+  ),
+  []
+);
 
 for (const tool of definitions) {
   assert.equal(tool.builtin, true, `${tool.name} must be marked built-in`);
