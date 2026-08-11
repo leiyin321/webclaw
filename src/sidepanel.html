@@ -69,7 +69,7 @@
           <span>Allow agent JavaScript execution</span>
         </label>
 
-        <p class="settings-note">JavaScript execution is off by default. Ad-hoc <code>run_js</code> calls require approval with the target and source shown. An exact scheduled operation can be remembered after its first approval and is rechecked if its Schedule, URL, world, or code changes.</p>
+        <p class="settings-note">JavaScript execution is off by default. Each ad-hoc <code>run_js</code> call shows its L0-L5 level, capability scopes, targets, and source for approval. An exact scheduled operation is rechecked if its Schedule, level, capabilities, targets, or code changes.</p>
         <button id="saveSettings" type="button">Save settings</button>
       </div>
 
@@ -544,6 +544,52 @@
             </label>
             <p class="channel-help">The webhook stays in extension storage and is used only when the enabled <code>qiyewechat_notification</code> tool sends a text or markdown notification.</p>
           </div>
+
+          <div data-tool-section="web_search" class="tool-section">
+            <label>
+              Search provider
+              <select id="toolWebSearchProvider">
+                <option value="auto">Auto (Brave when configured, otherwise browser)</option>
+                <option value="brave">Brave Search API</option>
+                <option value="browser">Browser search fallback</option>
+              </select>
+            </label>
+            <label>
+              Brave Search API key
+              <input id="toolWebSearchBraveApiKey" type="password" spellcheck="false" autocomplete="off">
+            </label>
+            <label>
+              Brave API base URL
+              <input id="toolWebSearchBraveBaseUrl" type="text" spellcheck="false" placeholder="https://api.search.brave.com">
+            </label>
+            <label>
+              Browser fallback engine
+              <select id="toolWebSearchBrowserEngine">
+                <option value="duckduckgo">DuckDuckGo</option>
+                <option value="bing">Bing</option>
+                <option value="google">Google</option>
+              </select>
+            </label>
+            <label class="check-row">
+              <input id="toolWebSearchFallback" type="checkbox">
+              <span>Fall back to browser search when Brave fails</span>
+            </label>
+            <div class="grid-two">
+              <label>
+                Default results
+                <input id="toolWebSearchMaxResults" type="number" min="1" max="10" step="1">
+              </label>
+              <label>
+                Timeout seconds
+                <input id="toolWebSearchTimeoutSeconds" type="number" min="1" max="120" step="1">
+              </label>
+            </div>
+            <label>
+              Cache TTL minutes (0 disables cache)
+              <input id="toolWebSearchCacheTtlMinutes" type="number" min="0" max="1440" step="1">
+            </label>
+            <p class="channel-help">Brave returns structured titles, URLs, and snippets without opening a tab. If no API key is configured, the same <code>web_search</code> Tool uses the selected browser search engine.</p>
+          </div>
         </div>
       </section>
     </div>
@@ -735,7 +781,7 @@
           <ul>
             <li>Your prompt and relevant history are sent to the model provider you select. Page content, files, media, and tool results are included only when needed for your request.</li>
             <li>Site and external service access is requested per origin before first use. You can deny a request or revoke access in Chrome extension settings.</li>
-            <li><code>run_js</code> is disabled by default. Ad-hoc execution requires approval each time; an exact scheduled operation may reuse a saved approval until its Schedule, URL, world, or code changes.</li>
+            <li><code>run_js</code> is disabled by default. Ad-hoc execution requires approval each time; an exact scheduled operation may reuse a saved approval until its Schedule, L0-L5 level, capability scopes, targets, or code changes.</li>
             <li>Channels, Schedules, and self-configuration are optional advanced features. Enabled automations may run while Chrome is open.</li>
           </ul>
           <p>Review the <a href="https://github.com/leiyin321/webclaw/blob/main/PRIVACY.md" target="_blank" rel="noreferrer">privacy policy</a> for retention, deletion, and provider details.</p>

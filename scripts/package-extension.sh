@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+npm ci
+npm run build:documents
+npm run test:documents
 ./scripts/check-syntax.sh
 node scripts/test-agent-runtime.mjs
 ./scripts/test-agent-loop.sh
@@ -20,6 +23,7 @@ rm -f "$OUTPUT"
 zip -q -r "$OUTPUT" \
   manifest.json \
   src \
+  build/document \
   assets/icons/icon-16.png \
   assets/icons/icon-32.png \
   assets/icons/icon-48.png \

@@ -27,7 +27,7 @@ WebClaw 的运行环境是 Chrome 扩展，而不是普通网页或操作系统�
 
 | 分类 | 数量 | 当前 Tool |
 | --- | ---: | --- |
-| 页面与浏览器 | 9 | `get_page_context`、`click`、`type_text`、`navigate`、`run_js`、`translate_page`、`search_web`、`chrome_api`、`wait` |
+| 页面与浏览器 | 9 | `get_page_context`、`click`、`type_text`、`navigate`、`run_js`、`translate_page`、`web_search`、`chrome_api`、`wait` |
 | 网络与信息 | 2 | `http_request`、`get_weather` |
 | 外部通知 | 1 | `qiyewechat_notification` |
 | Agent 调度 | 4 | `update_plan`、`task_push`、`task_stack`、`agent_artifact_read` |
@@ -229,7 +229,7 @@ Downloads、Bookmarks、History、Sessions、Clipboard、Notifications 使用 ma
 - `http_request` 暂时保留名称，避免破坏自定义 HTTP Tool 和已有 Skill。
 - 增加 timeout、responseType、maxBytes、redirect、form、multipart、saveToVfs。
 - 文本和 JSON 返回受控长度；二进制直接保存 VFS 或 artifact，不转换成无限 data URL。
-- `search_web` 和 `get_weather` 归入 convenience bundle。
+- `web_search` 和 `get_weather` 归入 convenience bundle。
 
 未来如需命名统一，可在兼容期后将 `http_request` 映射为 `net_request`，但 0.6.1 不做无收益改名。
 

@@ -2,6 +2,17 @@
 
 All notable changes to WebClaw will be documented in this file.
 
+## 0.7.1
+
+- Add provider-independent rich document generation for DOCX, XLSX, PPTX, and PDF through versioned Rich Schemas, built-in format-qualified templates, local sandboxed engines, VFS image assets, fidelity reporting, and bounded artifact transfer.
+- Add Brave Search API support to the canonical `web_search` Tool with normalized structured results, bounded in-memory caching, optional browser fallback, Tool configuration UI, privacy disclosure, and cancellation-safe execution.
+- Replace the single page-script runtime with cumulative `run_js` L0-L5 capability levels: isolated computation, scoped VFS RPC, declared-origin HTTP, USER_SCRIPT page access, MAIN-world page access, and allowlisted Chrome APIs.
+- Run all `run_js` controller code inside a Manifest Sandbox worker, require explicit capability declarations and user approval, enforce per-call size/count/time limits, and retain exact Schedule approval fingerprints.
+- Harden `run_js` authorization by revalidating the approved tab URL before every page RPC, authorizing resolved VFS copy/move destinations, and checking implicitly created parent directories.
+- Propagate Agent cancellation through Brave Search and rich document generation so Stop does not open fallback tabs or commit a completed document after cancellation.
+- Add local WebP-to-PNG conversion and signature-based image validation before document engines, preventing disguised unsupported image formats from reaching bundled parsers.
+- Add expiring IndexedDB document artifacts, cancellation cleanup, format-qualified template IDs, expanded CI/package gates, bilingual documentation updates, and focused regression tests.
+
 ## 0.7.0
 
 - Add one provider-independent document layer with eight Tools for inspecting, reading, creating, editing, rendering, exporting, and revising VFS documents.

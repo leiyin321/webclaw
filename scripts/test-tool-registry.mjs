@@ -14,7 +14,7 @@ const names = definitions.map((tool) => tool.name);
 assert.equal(definitions.length, 61);
 assert.equal(new Set(names).size, names.length);
 assert.deepEqual(builtinToolUiDefinitions().map((tool) => tool.name), names);
-for (const removed of ["get_page_context", "click", "type_text", "navigate", "chrome_api", "wait", "send_wecom_message", "browser_clipboard", "fs_mkdir", "fs_move", "fs_delete", "fs_restore", "fs_purge", "fs_empty_trash"]) {
+for (const removed of ["get_page_context", "click", "type_text", "navigate", "chrome_api", "wait", "send_wecom_message", "browser_clipboard", "fs_mkdir", "fs_move", "fs_delete", "fs_restore", "fs_purge", "fs_empty_trash", "search_web"]) {
   assert.equal(builtinToolDefinition(removed), null, `${removed} must not remain registered or aliased`);
   assert.equal(isRemovedBuiltinToolName(removed), true, `${removed} must remain reserved after removal`);
 }
@@ -40,6 +40,12 @@ assert.deepEqual(builtinToolDefinition("browser_clipboard_read").optionalPermiss
 assert.deepEqual(builtinToolDefinition("browser_clipboard_write").optionalPermissions, ["clipboardWrite"]);
 assert.deepEqual(builtinToolInputSchema("qiyewechat_notification").required, ["content"]);
 assert.equal(Object.hasOwn(builtinToolInputSchema("qiyewechat_notification").properties, "payload"), false);
+assert.deepEqual(builtinToolInputSchema("web_search").required, ["query"]);
+assert.equal(builtinToolDefinition("search_web"), null);
+assert.deepEqual(builtinToolInputSchema("run_js").required, ["level"]);
+assert.deepEqual(builtinToolInputSchema("run_js").properties.level.enum, ["L0", "L1", "L2", "L3", "L4", "L5"]);
+assert.equal(Object.hasOwn(builtinToolInputSchema("run_js").properties, "world"), false);
+assert.ok(builtinToolInputSchema("run_js").properties.capabilities.properties.chrome);
 
 for (const tool of definitions) {
   assert.equal(tool.builtin, true, `${tool.name} must be marked built-in`);

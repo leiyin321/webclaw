@@ -14,6 +14,7 @@ const {
   vfsList,
   vfsMkdir,
   vfsReadFile,
+  vfsResolveDestination,
   vfsRestore,
   vfsStat,
   vfsTouch,
@@ -44,6 +45,11 @@ assert.match(diff.diff, /\+gamma/);
 
 await vfsCopy("/workspace/tool-test/a.txt", "/workspace/tool-test/copied.txt");
 assert.equal((await vfsReadFile("/workspace/tool-test/copied.txt")).content, "alpha\nbeta\n");
+await vfsMkdir("/workspace/tool-test/output");
+assert.equal(
+  await vfsResolveDestination("/workspace/tool-test/a.txt", "/workspace/tool-test/output"),
+  "/workspace/tool-test/output/a.txt"
+);
 
 await vfsTouch("/workspace/tool-test/empty.txt");
 assert.equal((await vfsStat("/workspace/tool-test/empty.txt")).entry.size, 0);

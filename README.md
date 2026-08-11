@@ -22,7 +22,7 @@ WebClaw 目前是实验性的浏览器原生 Agent 框架，适合本地开发�
 - VFS 静态网页预览：文件管理器中的 HTML/HTM/XHTML/SVG 文件可直接打开到独立 Chrome 标签页，预览运行时会从 VFS 加载同目录的 CSS、JS、图片、字体和 JSON 资源。
 - 预览页面运行在隔离的 Extension Sandbox 中；网页可使用由 WebClaw 提供的项目级 `localStorage` 兼容层，数据保存在浏览器本地，不访问扩展凭证。该兼容层不是网站真实 origin 的 `localStorage`。
 - 本地知识库：将 VFS 文本文件索引到浏览器本地 IndexedDB，支持 collection/path/tag/time 过滤和 `knowledge_reindex`；首次启动会创建并索引 WebClaw 操作手册。
-- 办公文档：统一的 `documents` Tool bundle 支持 Markdown 完整操作、DOCX/XLSX/PPTX 基础创建与 rebuild 编辑、ASCII 文本 PDF 创建，以及 DOCX/XLSX/PPTX/PDF 的受限投影读取、导出、预览和 revision 恢复。
+- 办公文档：统一的 `documents` Tool bundle 支持 Markdown 完整操作、DOCX/XLSX/PPTX/PDF Rich Schema 创建、DOCX/XLSX/PPTX rebuild 编辑，以及四种二进制格式的受限投影读取、导出和 revision 恢复；未实现能力通过 `warnings` 和 `partial` fidelity 明确返回。
 - 动态 Tool 暴露：每轮只向模型注入核心能力，模型可调用 `tool_search` 按任务、分类或 bundle 加载当前运行所需的已启用 Tool，减少小模型选择歧义。
 - 工作区记忆：自动初始化 `AGENTS.md`、`SOUL.md`、`TOOLS.md`、`IDENTITY.md`、`USER.md`、`MEMORY.md` 及每日记忆文件，并在每次 Agent 运行前按上下文预算注入。
 - 受控 Tool 轨迹：保留受限长度的工具结果和失败原因，用于后续会话与 Provider 切换时的自我纠错。
@@ -71,15 +71,16 @@ Workflow 仍是持久化、可复用的自定义 Tool；Task 是仅在一次执�
 - [Chrome Web Store 上架资料](STORE_LISTING.md)
 - [Agent Loop 架构与恢复语义](docs/agent-loop-architecture.md)
 - [0.6.1 Tool 升级改造规划](docs/tool-upgrade-plan.md)
-- [0.7.0 办公文档能力设计与实现状态](docs/office-document-capability-plan.md)
+- [0.7.x 办公文档能力设计与实现状态](docs/office-document-capability-plan.md)
+- [0.7.x 复杂样式文档生成迭代计划](docs/rich-document-generation-plan.md)
 - [许可证](LICENSE)
 
 ## 在 Chrome 中加载
 
-1. 打开 `chrome://extensions`。
-2. 开启右上角 `Developer mode`。
-3. 点击 `Load unpacked`。
-4. 选择本仓库目录，目录根部应直接包含 `manifest.json`。
+1. 在仓库目录执行 `npm ci && npm run build:documents`。
+2. 打开 `chrome://extensions`。
+3. 开启右上角 `Developer mode`。
+4. 点击 `Load unpacked`，选择根部包含 `manifest.json` 的本仓库目录。
 5. 点击 WebClaw 扩展图标打开 Side Panel。
 
 ## Provider 配置
@@ -233,9 +234,11 @@ WebClaw 会使用 `translate_page` 工具收集可见文本节点，调用当前
 
 模型本身不知道实时信息。WebClaw 通过工具提供实时能力：
 
-- `search_web`：打开搜索结果、读取页面并总结。
+- `web_search`：优先通过用户在该 Tool 中配置的 Brave Search API 返回结构化标题、URL 和摘要，并缓存相同查询；未配置 Brave API Key 或 Brave 调用失败且允许回退时，使用配置的浏览器搜索引擎打开结果页。搜索结果属于不可信外部内容，Agent 应继续检查可靠来源页面后再回答。
 - `get_weather`：通过 Open-Meteo 查询天气。
 - `page_snapshot`：读取当前页面上下文；`page_extract` 可进一步提取链接、表格、表单和元数据。
+
+配置方法：打开 Settings -> Tools，编辑 `web_search`，选择 `Auto` 或 `Brave Search API`，填写从 Brave Search API 控制台获取的 API Key 并保存。Tool name 与 Display name 均固定为 `web_search`；旧名称 `search_web` 已移除，仅保留其浏览器搜索行为作为内部回退。
 
 例如：
 
@@ -264,10 +267,11 @@ WebClaw 支持把外部消息通道接入当前活跃会话：
 
 ## 安全说明
 
-- JavaScript 执行默认关闭。开启总开关后，临时会话中的 `run_js` 每次都会显示目标页面和待执行代码并要求批准。Schedule 可以在第一次批准时记住完全相同的操作；Schedule、完整目标 URL、执行 world 或代码任一变化都会重新询问。
+- JavaScript 执行默认关闭。`run_js` 使用累积式 L0-L5 能力等级：L0 隔离计算、L1 增加受限 VFS RPC、L2 增加声明域名的 HTTP RPC、L3 增加 USER_SCRIPT 页面 RPC、L4 增加 MAIN 页面 RPC、L5 增加白名单 Chrome API RPC。脚本控制器始终运行在 Manifest Sandbox 中。
+- 临时会话中的 `run_js` 每次都会显示等级、能力范围、目标和代码并要求批准。Schedule 可以记住完全相同的操作；Schedule、等级、能力、页面目标或代码任一变化都会重新询问。
 - 已保存的 Schedule 操作授权位于 Settings 的 Privacy & control，可随时全部清除。Chrome 域名权限被撤销后仍必须在浏览器中重新授予，保存的操作授权不会绕过它。
-- `run_js` 要求 Chrome 135 或更高版本，并且只使用 Chrome `userScripts.execute()`，不提供 `eval` / `new Function` 回退。Chrome 138 及以上如果提示 API 不可用，请在扩展详情页打开 **Allow User Scripts** 后重新加载扩展。
-- `userScripts` 注入不受页面 CSP 的动态求值限制，但不能突破浏览器同源策略、HttpOnly Cookie、扩展权限或系统权限。
+- L3-L5 页面子调用要求 Chrome 135 或更高版本，并使用 Chrome `userScripts.execute()`，不提供 `eval` / `new Function` 回退。Chrome 138 及以上如果提示 API 不可用，请在扩展详情页打开 **Allow User Scripts** 后重新加载扩展。
+- RPC 会逐次校验 VFS 路径、网络 origin、tab/world 和 Chrome 方法；L5 不开放 `identity`、`storage`、`runtime`、`permissions`、`scripting`、`userScripts` 等扩展内部 API。详细接口见 [run_js L0-L5 设计](docs/run-js-capability-levels.md)。
 - `run_js` 可直接接收 `code`，或通过 `vfsPath` 执行 VFS 内的 `.js`、`.mjs`、`.cjs` 文件；两者只能提供一个。
 - `http_request` 在扩展 background 中执行，用于调用页面 JS 因 CORS 无法调用的接口或 webhook；支持超时、JSON、表单、VFS multipart 文件、二进制响应和直接保存到 VFS。
 - `fs_shell` 仅操作扩展 IndexedDB 中的虚拟文件系统；支持 `pwd`、`cd`、`ls`、`stat`、`mkdir`、`touch`、`cat`、`cp`、`mv`、`rm`。`cd` 会校验目标目录并更新当前会话的工作目录，后续相对路径从该目录解析；它不访问本机文件，也拒绝管道、重定向、命令替换和多命令输入，`rm` 会移动到 `/.trash`。
@@ -283,6 +287,9 @@ WebClaw 支持把外部消息通道接入当前活跃会话：
 运行与 CI 相同的语法、Agent Loop 和发布检查：
 
 ```bash
+npm ci
+npm run build:documents
+npm run test:documents
 ./scripts/check-syntax.sh
 node scripts/test-agent-runtime.mjs
 ./scripts/test-agent-loop.sh
@@ -290,6 +297,8 @@ node scripts/test-provider-client-metadata.mjs
 node scripts/test-openai-compatible-structured-output.mjs
 node scripts/validate-release.mjs
 ```
+
+复杂文档生成按 [复杂样式文档迭代计划](docs/rich-document-generation-plan.md) 分阶段启用。当前 0.7.x 已接入 DOCX、PDF、XLSX、PPTX 的首版生成引擎；图表、中文 PDF 字体、复杂样式编辑和视觉 QA 仍按计划增强，工具返回的 `warnings` 是能力边界的正式说明。
 
 ## 打包
 

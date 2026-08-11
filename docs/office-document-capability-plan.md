@@ -10,6 +10,8 @@
 
 当前实现说明：已提供统一 `DocumentService`、Markdown 解析/渲染、基础 DOCX/XLSX/PPTX 创建和 rebuild 编辑、ASCII 文本 PDF 创建、DOCX/XLSX/PPTX/PDF 的受控只读投影、段落/单元格/幻灯片 locator、版本与哈希保护、自动 pre-write revision、恢复与确认清理、8 个文档 Tools、独立投影视图、知识库投影 ingest 和自动化测试。当前 Office/PDF 读取使用浏览器原生 ZIP/XML/TextDecoder，不执行宏、外部关系、公式重算、脚本或 OCR。PDF 解析器不能可靠隔离单页文本，因此 0.7.0 明确拒绝 `pdf_page` locator。DOCX/XLSX/PPTX rebuild 编辑不保证样式、图片、动画和未知 OOXML 部件保留。
 
+0.7.1 及后续复杂样式生成的可执行开发方案见 [复杂样式文档生成迭代计划](rich-document-generation-plan.md)。
+
 ## 1. 文档目的
 
 本文定义 WebClaw 在纯 Chrome 扩展环境中读取、创建、编辑、渲染和导出常用办公文档的目标架构、能力边界、Tool 契约、安全约束、模块拆分、测试矩阵和分阶段开发计划，可直接作为后续代码开发依据。
@@ -435,7 +437,7 @@ PDF 编辑操作按页面和坐标执行。正文提取结果只用于阅读，�
 Chrome 同一扩展只能谨慎管理 offscreen document。文档能力复用当前 `src/chrome-ai-offscreen.html` 和 `src/offscreen.js`：
 
 - 新增轻量 `document-offscreen.js` 消息路由；
-- 首次文档请求时动态导入对应本地格式 bundle；
+- 首次文档请求时由共享 Offscreen Document 把规范化请求转交给 manifest 声明的独立 document sandbox；sandbox 通过静态打包的单一 IIFE bundle 加载格式引擎，Service Worker 不使用动态 `import()`；
 - DOM、Canvas、字体测量和渲染在 offscreen 中执行；
 - Service Worker 保持 DocumentService、VFS 提交和 Tool 生命周期所有权；
 - 取消请求通过 request ID 和 AbortController 传播；

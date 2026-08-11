@@ -39,7 +39,7 @@ Channels、Schedules 和自我配置 Tool 是可选高级功能。只有用户�
 - `scripting`: 在用户已授权的目标站点按需注入页面操作脚本。
 - `storage`: 保存配置、凭证、披露确认和扩展状态。
 - `tabs`: 管理用户请求的标签页操作，并支持受限的标签页 Tool。
-- `userScripts`: 在总开关和用户批准后执行 `run_js`；临时调用逐次批准，Schedule 仅可复用完全相同操作的已保存批准。
+- `userScripts`: 仅供 `run_js` 的 L3-L5 页面 RPC 在批准的 tab/world 注入子代码；脚本控制器在 Manifest Sandbox 中运行，临时调用逐次批准，Schedule 仅复用等级、capabilities、页面目标和代码均相同的批准。
 - `windows`: 把设置和文件管理器放在独立扩展窗口中。
 - `optional_permissions`: 仅当用户启用并使用相应 Tool 时，访问书签、历史、下载、最近关闭页面、标签组、剪贴板或创建本机通知；未授权能力不会暴露给模型。
 - `optional_host_permissions`: 首次访问具体网页、模型 Provider、Channel 或 HTTP Tool endpoint 前说明原因并按 origin 请求；安装时不要求全站访问。
@@ -72,7 +72,7 @@ Channels、Schedules 和自我配置 Tool 是可选高级功能。只有用户�
 5. 说明 optional host permissions 的逐域名申请方式。
 6. 测试账号或审核说明不得包含真实用户 token；说明 Local Ollama 和可选 Provider 的测试方式。
 7. 对 `run_js` 明确说明默认关闭、临时调用逐次批准、精确 Schedule 授权复用和 `userScripts` 用途。
-8. Remote Code 字段如实选择使用远程逻辑，并说明模型返回的 JavaScript 只通过 Chrome 135+ 的 `userScripts.execute()` 执行；总开关必须开启，临时调用逐次批准，Schedule 只复用由用户检查过且 Schedule、完整 URL、world、代码均相同的批准；代码中没有 `eval` / `new Function` 回退。不要选择 “No” 隐瞒该功能。
+8. Remote Code 字段如实选择使用远程逻辑，并说明模型返回的控制器 JavaScript 在 Manifest Sandbox 中执行，L3-L5 页面子代码通过 Chrome 135+ 的 `userScripts.execute()` 注入；总开关必须开启，临时调用逐次批准，Schedule 只复用 Schedule、L0-L5 等级、capabilities、页面目标和代码均相同的批准；代码中没有 `eval` / `new Function` 回退。不要选择 “No” 隐瞒该功能。
 9. Reviewer notes 中给出复现步骤：接受首次披露、启用 JavaScript 总开关、要求模型返回一个只读取 `document.title` 的 `run_js`，确认审批框会显示目标站点和完整代码，拒绝时不执行。再创建同一 Schedule，确认首次批准后完全相同的执行可复用授权、修改代码会重新询问、Settings 可清除授权。
 10. Reviewer notes 如实披露 Codex CLI 与 GitHub Copilot public Client ID 的临时兼容用途，并提供 `OAUTH.md`。这不保证审核接受这些应用身份；若审核要求发布者自有客户端，应在提交前替换默认值或移除对应 OAuth 集成。
 

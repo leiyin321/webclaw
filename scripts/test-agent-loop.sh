@@ -19,8 +19,18 @@ for test_file in \
   scripts/test-json-schema-validator.mjs \
   scripts/test-knowledge-base.mjs \
   scripts/test-preview-sandbox.mjs \
+  scripts/test-run-js-policy.mjs \
   scripts/test-tool-registry.mjs \
+  scripts/test-web-search.mjs \
   scripts/test-vfs-tools.mjs \
+  scripts/test-rich-document-core.mjs \
+  scripts/test-docx-engine.mjs \
+  scripts/test-pdf-engine.mjs \
+  scripts/test-xlsx-engine.mjs \
+  scripts/test-pptx-engine.mjs \
+  scripts/test-document-artifact-store.mjs \
+  scripts/test-document-images.mjs \
+  scripts/test-document-sandbox-runtime.mjs \
   scripts/test-document-service.mjs \
   scripts/test-agent-tool-scheduler.mjs
 do

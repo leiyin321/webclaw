@@ -50,9 +50,9 @@ WebClaw does not inject a persistent script into every website. It requests an o
 
 Bookmarks, browsing history, downloads, recently closed tabs or windows, tab groups, clipboard access, and local notifications are all optional Tools disabled by default. They can be used only after the user enables the Tool and grants the matching Chrome optional permission; ungranted Tools are not exposed to the model. Results may enter the active conversation and be sent to the model provider selected by the user when required by the task. History deletion, bookmark changes, downloads, and clipboard writes remain subject to Chrome permissions and produce Tool results.
 
-`run_js` 默认关闭。即使用户打开总开关，临时会话中的每次执行仍会显示目标页面和代码并要求批准。Schedule 可以在首次批准后保存完全相同操作的授权；指纹绑定 Schedule ID、完整目标 URL、执行 world 和代码，任一变化都会重新询问。保存记录包含哈希和简短范围说明，不另存一份源代码，并可在 Settings 的 Privacy & control 中清除。被批准的代码可能读取或修改页面可见内容，以及该页面脚本本身可访问的 Cookie、localStorage、sessionStorage 和 IndexedDB；它不能绕过浏览器同源策略、HttpOnly Cookie、Chrome 权限或操作系统权限。
+`run_js` 默认关闭。代码控制器在 Manifest Sandbox 中运行，并按 L0-L5 等级通过受控 RPC 使用 VFS、网络、页面或白名单 Chrome API。临时会话中的每次执行都会显示等级、VFS 路径范围、网络 origin、页面 tab/world、Chrome 方法和代码并要求批准；后台在每次 RPC 时再次校验范围。Schedule 授权指纹绑定 Schedule ID、等级、规范化 capabilities、页面目标和代码，任一变化都会重新询问。L5 不开放扩展凭证存储、identity、runtime、permissions、scripting 或 userScripts API。页面子代码仍受浏览器同源策略和 HttpOnly Cookie 限制。
 
-`run_js` is disabled by default. Even after the global setting is enabled, every ad-hoc execution shows the target page and source and requires approval. A Schedule may save approval for an exact operation after first approval; its fingerprint binds the Schedule ID, full target URL, execution world, and code, and any change asks again. The saved record contains a hash and short scope description rather than a second copy of the source, and can be cleared under Settings > Privacy & control. Approved code may read or change page-visible content and page-accessible cookies, localStorage, sessionStorage, and IndexedDB. It cannot bypass the same-origin policy, HttpOnly cookies, Chrome permissions, or operating-system permissions.
+`run_js` is disabled by default. Its controller runs in a Manifest Sandbox and uses capability-scoped RPC for VFS, network, page, or allowlisted Chrome APIs according to an L0-L5 level. Every ad-hoc execution shows the level, VFS scopes, network origins, page tab/world targets, Chrome methods, and source; the background validates every RPC again. A Schedule fingerprint binds the Schedule ID, level, normalized capabilities, page targets, and code. L5 does not expose credential storage, identity, runtime, permissions, scripting, or userScripts APIs. Page subcode remains subject to same-origin and HttpOnly restrictions.
 
 ## 3. 发送给模型 Provider 的数据 / Data Sent to Model Providers
 
@@ -81,6 +81,10 @@ Data is sent directly from the browser to the user-configured service, such as l
 启用 Channel 后，来自微信或 Telegram 的消息和相关媒体会进入当前活跃会话，并可发送给当前模型 Provider；模型回复会返回原始会话。企业微信通知通过独立的 `qiyewechat_notification` Tool 发送。自定义 HTTP Tool 只在被调用时访问其配置的 endpoint。
 
 When a Channel is enabled, messages and related media from WeChat or Telegram enter the active session and may be sent to the active model provider; model replies return to the originating conversation. Enterprise WeChat notifications are sent through the separate `qiyewechat_notification` Tool. A custom HTTP Tool accesses its configured endpoint only when invoked.
+
+调用 `web_search` 时，搜索查询、国家、语言和时间筛选参数会发送到用户配置的 Brave Search API endpoint；Brave 返回的标题、URL 和摘要会进入当前 Tool Result。相同查询可在扩展 Service Worker 内存中短期缓存，浏览器或扩展重启后缓存消失。未配置 Brave 或允许的 Brave 调用失败时，`web_search` 可以打开用户选择的浏览器搜索引擎作为回退，并读取其结果页。
+
+When `web_search` is called, the query and any country, language, or time filters are sent to the user-configured Brave Search API endpoint; returned titles, URLs, and snippets enter the current Tool result. Identical queries may be cached briefly in extension service-worker memory and the cache disappears when the browser or extension restarts. If Brave is not configured or an allowed Brave request fails, `web_search` may open the user-selected browser search engine as a fallback and read its result page.
 
 当 Channel 发起的任务需要产品内操作确认或 Codex 设备登录时，WebClaw 会把授权原因、短期回复码、授权网址或设备码发送回原 Channel 联系人。操作回复码绑定具体 Channel 和联系人并在十分钟后失效。最近路由仅用于把授权提示送回发起会话。OAuth token 成功签发后会复用并刷新，直到退出、撤销或失效。
 

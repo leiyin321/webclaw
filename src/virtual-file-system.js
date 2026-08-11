@@ -228,6 +228,13 @@ export async function vfsMove(source, destination) {
   return runVirtualFileSystemShell(`mv ${quoteShellPath(source)} ${quoteShellPath(destination)}`, { cwd: "/" });
 }
 
+export async function vfsResolveDestination(source, destination) {
+  await ensureFileSystem();
+  const normalizedSource = normalizePath(source, "/");
+  const normalizedDestination = normalizePath(destination, "/");
+  return resolveDestination(normalizedSource, normalizedDestination, "/");
+}
+
 export async function vfsCopy(source, destination) {
   assertNotTrashPath(normalizePath(source, "/"), "copy");
   assertNotTrashPath(normalizePath(destination, "/"), "copy items into");

@@ -87,9 +87,9 @@ for (const path of ["PRIVACY.md", "SECURITY.md", "OAUTH.md", "STORE_LISTING.md",
 }
 
 const oauthClients = readText("src/oauth-clients.js");
-const runtimeJavaScriptSource = readdirSync(resolve(root, "src"))
-  .filter((name) => name.endsWith(".js"))
-  .map((name) => readText(`src/${name}`))
+const runtimeJavaScriptSource = recursiveFiles(resolve(root, "src"))
+  .filter((path) => path.endsWith(".js"))
+  .map((path) => readFileSync(path, "utf8"))
   .join("\n");
 const source = runtimeJavaScriptSource;
 const codexCliClientId = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -117,16 +117,38 @@ requireCondition(
 requireCondition(!/client(?:_|)secret\s*:/i.test(oauthClients), "OAuth client secrets must not be configured in the extension");
 requireCondition(!/\bnew\s+Function\s*\(/.test(runtimeJavaScriptSource), "runtime code must not contain new Function");
 requireCondition(!/\beval\s*\(/.test(runtimeJavaScriptSource), "runtime code must not contain eval");
+requireCondition(!/\bimport\s*\(/.test(readText("src/document-service.js")), "document service worker code must not use dynamic import()");
+requireCondition(manifest.sandbox?.pages?.includes("src/document-engine-sandbox.html"), "document engine page must be declared as a manifest sandbox page");
+requireCondition(manifest.sandbox?.pages?.includes("src/script-runner-sandbox.html"), "run_js script runner must be declared as a manifest sandbox page");
+requireCondition(
+  readText("src/script-runner-sandbox.html").includes("connect-src 'none'") &&
+    readText("src/script-runner-sandbox.html").includes("worker-src blob:") &&
+    readText("src/script-runner-sandbox.js").includes("new Worker(url)") &&
+    readText("src/script-runner-sandbox.js").includes("worker.terminate()") &&
+    readText("src/script-runner-offscreen.js").includes("WEBCLAW_SCRIPT_SANDBOX_RPC") &&
+    source.includes("handleRunJsRpcMessage") &&
+    source.includes("runJsChromeMethodAllowed") &&
+    source.includes("Script RPC call limit exceeded"),
+  "run_js L0-L5 sandbox or capability-scoped RPC boundary is incomplete"
+);
+requireCondition(readText("src/document-engine-sandbox.html").includes("../build/document/document-sandbox.js"), "document sandbox page must load the packaged sandbox bundle");
+requireCondition(existsSync(resolve(root, "build/document/document-sandbox.js")), "document sandbox bundle is missing; run npm run build:documents");
+if (existsSync(resolve(root, "build/document"))) {
+  const documentBundles = readdirSync(resolve(root, "build/document")).filter((name) => name.endsWith(".js"));
+  requireCondition(documentBundles.join(",") === "document-sandbox.js", "document engines must be packaged only in document-sandbox.js");
+  const sandboxBundle = existsSync(resolve(root, "build/document/document-sandbox.js")) ? readText("build/document/document-sandbox.js") : "";
+  requireCondition(!/\bimport\s*\(/.test(sandboxBundle), "document sandbox bundle must not contain dynamic imports");
+}
 requireCondition(
   builtinToolDefinition("qiyewechat_notification")?.name === "qiyewechat_notification" &&
     builtinToolDefinition("send_wecom_message") === null &&
     source.includes("canonicalizeToolCall(hydrateToolArgs(toolObject, objects))") &&
-    source.includes("title: definition.name === QIYEWECHAT_NOTIFICATION_TOOL_NAME"),
+    source.includes("[QIYEWECHAT_NOTIFICATION_TOOL_NAME, WEB_SEARCH_TOOL_NAME].includes(definition.name)"),
   "enterprise WeChat Tool canonical-name handling is missing"
 );
 const removedBuiltinToolNames = [
   "get_page_context", "click", "type_text", "navigate", "chrome_api", "wait", "send_wecom_message",
-  "browser_clipboard", "fs_mkdir", "fs_move", "fs_delete", "fs_restore", "fs_purge", "fs_empty_trash"
+  "browser_clipboard", "fs_mkdir", "fs_move", "fs_delete", "fs_restore", "fs_purge", "fs_empty_trash", "search_web"
 ];
 requireCondition(
   removedBuiltinToolNames.every((name) => builtinToolDefinition(name) === null),
@@ -138,6 +160,14 @@ requireCondition(
     readText("STORE_LISTING.md").includes("Tool name 与 Display name 使用同一规范名称") &&
     source.includes("The canonical Tool name and Display name are both qiyewechat_notification"),
   "enterprise WeChat Tool canonical name is not synchronized across documentation and default knowledge"
+);
+requireCondition(
+  builtinToolDefinition("web_search")?.name === "web_search" &&
+    builtinToolDefinition("search_web") === null &&
+    readText("README.md").includes("Tool name 与 Display name 均固定为 `web_search`") &&
+    readText("README.en.md").includes("Tool name and Display name are both fixed to `web_search`") &&
+    source.includes("The canonical Tool name and Display name are both web_search"),
+  "web_search canonical name and browser fallback documentation are not synchronized"
 );
 requireCondition(
   source.includes("webclawOperationApprovalGrants") && source.includes("schedule-run-js:"),
@@ -178,7 +208,7 @@ requireCondition(
   "controlled active Provider switching and rollback are missing"
 );
 requireCondition(
-  source.includes("webclaw-default-manual: 0.7.0-r1") &&
+  source.includes("webclaw-default-manual: 0.7.1-r1") &&
     source.includes("REPLACEABLE_DEFAULT_KNOWLEDGE_MANUAL_HASHES") &&
     source.includes("qxBFf1iNGSrbPVRGoSSOQUH8Mu9b6rgnrTBznpwsH1s") &&
     source.includes("qmON25C52Otm3zxd8xOE_dlGJ9DX-j61ECdtgLwChHA") &&
@@ -188,8 +218,9 @@ requireCondition(
     source.includes("AUoWZDFRlU1yysJ_EojdS8ROqAgFMuvXzZz5yYheR8g") &&
     source.includes("ebvLDmJq-nzX4Kn5D2uASmSHK55uO-X6VMG8Fhg6Rwo") &&
     source.includes("8Q4-Lrp4wlIcHOAUmRZJZXbY-hxxTEOPi4HUEYIWegw") &&
+    source.includes("yw9YuL1Vy3_VyqxVFkDzr5e4fJ3Nkhc-Z37vJmeoaOk") &&
     source.includes("expectedVersion: existing.entry.version") &&
-    source.includes('"webclaw", "manual", "operations", "0.7.0"'),
+    source.includes('"webclaw", "manual", "operations", "0.7.1"'),
   "versioned default knowledge manual migration is missing"
 );
 requireCondition(
@@ -409,6 +440,13 @@ const mismatchedTools = [
   ...[...panelTools].filter((name) => !backgroundTools.has(name))
 ];
 requireCondition(backgroundTools.size > 0 && mismatchedTools.length === 0, `built-in Tool registry projections differ: ${mismatchedTools.join(", ")}`);
+
+function recursiveFiles(directory) {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = resolve(directory, entry.name);
+    return entry.isDirectory() ? recursiveFiles(path) : [path];
+  });
+}
 
 if (errors.length > 0) {
   console.error("Release validation failed:");

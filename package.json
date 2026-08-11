@@ -1,0 +1,20 @@
+{
+  "name": "webclaw-document-build",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build:documents": "node scripts/build-document-bundles.mjs",
+    "test:documents": "node scripts/test-rich-document-core.mjs && node scripts/test-docx-engine.mjs && node scripts/test-pdf-engine.mjs && node scripts/test-xlsx-engine.mjs && node scripts/test-pptx-engine.mjs && node scripts/test-document-artifact-store.mjs && node scripts/test-document-images.mjs && node scripts/test-document-sandbox-runtime.mjs && node scripts/test-document-service.mjs",
+    "test:documents:bundle": "npm run build:documents && test -s build/document/document-sandbox.js"
+  },
+  "devDependencies": {
+    "docx": "9.7.1",
+    "esbuild": "0.28.2",
+    "exceljs": "4.4.0",
+    "pdfmake": "0.3.11",
+    "pptxgenjs": "4.0.1"
+  }
+}

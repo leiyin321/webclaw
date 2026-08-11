@@ -28,7 +28,7 @@ or message channels.
 - Preview pages run in an isolated Extension Sandbox. They receive a project-scoped `localStorage` compatibility layer persisted in this browser, without access to extension credentials. This compatibility layer is not the real website-origin `localStorage`.
 - Restricted `fs_shell`: provides `pwd`, `cd`, `ls`, `stat`, `mkdir`, `touch`, `cat`, `cp`, `mv`, and `rm` in that extension-private filesystem without running a real system shell. `cd` updates the current session's working directory.
 - Local knowledge base: indexes VFS text files in browser-local IndexedDB with collection/path/tag/time filters and `knowledge_reindex`; a WebClaw operation manual is created and indexed on first startup.
-- Office documents: the unified `documents` Tool bundle provides full Markdown operations, basic DOCX/XLSX/PPTX creation and rebuild editing, ASCII-text PDF creation, and bounded DOCX/XLSX/PPTX/PDF projection reading, export, preview, and revision recovery.
+- Office documents: the unified `documents` Tool bundle provides full Markdown operations, Rich Schema creation for DOCX/XLSX/PPTX/PDF, rebuild editing for DOCX/XLSX/PPTX, and bounded projection reading, export, and revision recovery for all four binary formats; unsupported capabilities are reported through `warnings` and `partial` fidelity.
 - Dynamic Tool exposure: each run starts with a compact core set; `tool_search` loads matching enabled Tools by task, category, or bundle for that run, reducing ambiguity for smaller models.
 - Workspace memory: initializes `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, and daily memory files, then injects bounded workspace context before each agent run.
 - Bounded structured tool trajectories: preserves tool outcomes and failure reasons for later turns and cross-provider continuation.
@@ -73,15 +73,16 @@ A Workflow remains a persistent reusable custom Tool, while a Task is an ephemer
 - [Chrome Web Store listing material](STORE_LISTING.md)
 - [Agent Loop architecture and recovery semantics](docs/agent-loop-architecture.md)
 - [0.6.1 Tool upgrade plan (Chinese)](docs/tool-upgrade-plan.md)
-- [0.7.0 Office document capability plan and implementation status (Chinese)](docs/office-document-capability-plan.md)
+- [0.7.x Office document capability plan and implementation status (Chinese)](docs/office-document-capability-plan.md)
+- [0.7.x Rich document generation implementation plan (Chinese)](docs/rich-document-generation-plan.md)
 - [License](LICENSE)
 
 ## Load in Chrome
 
-1. Open `chrome://extensions`.
-2. Enable Developer mode.
-3. Click Load unpacked.
-4. Select this repository directory.
+1. Run `npm ci && npm run build:documents` in the repository.
+2. Open `chrome://extensions`.
+3. Enable Developer mode.
+4. Click Load unpacked and select this repository directory.
 5. Click the WebClaw extension icon to open the side panel.
 
 ## Development Checks
@@ -89,6 +90,9 @@ A Workflow remains a persistent reusable custom Tool, while a Task is an ephemer
 Run the same syntax, Agent Loop, and release checks used by CI:
 
 ```bash
+npm ci
+npm run build:documents
+npm run test:documents
 ./scripts/check-syntax.sh
 node scripts/test-agent-runtime.mjs
 ./scripts/test-agent-loop.sh
@@ -96,6 +100,8 @@ node scripts/test-provider-client-metadata.mjs
 node scripts/test-openai-compatible-structured-output.mjs
 node scripts/validate-release.mjs
 ```
+
+Complex document generation is delivered in phases described in the [rich document generation plan](docs/rich-document-generation-plan.md). The current 0.7.x work includes first-generation DOCX, PDF, XLSX, and PPTX engines; charts, CJK PDF fonts, complex style-preserving edits, and visual QA remain planned enhancements, and engine `warnings` are the formal capability boundary.
 
 ## Provider setup
 
@@ -246,7 +252,9 @@ WebClaw uses the `translate_page` tool to collect visible text nodes, translate 
 
 Models do not know live data by themselves. WebClaw adds live data by exposing browser and search tools to the agent.
 
-For current or recent facts, WebClaw can use `search_web` to open a search page, inspect the results, navigate to a likely source, read the page with `page_snapshot` or `page_extract`, and summarize the result. This is the general path for questions such as match results, news, public schedules, prices, and recently changed facts.
+For current or recent facts, WebClaw uses the single canonical `web_search` Tool. Configure its Brave Search API key in Tools to receive normalized titles, URLs, and snippets with bounded caching. Without a Brave key, or when an allowed Brave fallback is needed, the same Tool opens the configured browser search engine. Search results are untrusted external content; inspect reliable result pages with `page_snapshot` or `page_extract` before answering.
+
+To configure it, open Settings -> Tools, edit `web_search`, select Auto or Brave Search API, enter the API key issued by the Brave Search API dashboard, and save. Tool name and Display name are both fixed to `web_search`; the retired `search_web` identifier is not exposed, while its browser-search behavior remains the internal fallback.
 
 For example:
 
@@ -264,10 +272,11 @@ The direct weather tool geocodes the location with Open-Meteo, fetches current c
 
 ## Security notes
 
-- JavaScript execution is disabled by default. After enabling it, every ad-hoc `run_js` call shows the target and source and requires approval. A Schedule can remember an exact operation after its first approval; changing the Schedule, full target URL, execution world, or code requires another approval.
+- JavaScript execution is disabled by default. `run_js` uses cumulative L0-L5 levels: L0 isolated compute, L1 scoped VFS RPC, L2 declared-origin HTTP RPC, L3 USER_SCRIPT page RPC, L4 MAIN-world page RPC, and L5 allowlisted Chrome API RPC. The controller always runs in a Manifest Sandbox.
+- Every ad-hoc run shows its level, capability scopes, targets, and source for approval. A Schedule can remember an exact operation; changing its Schedule, level, capabilities, page targets, or code requires another approval.
 - Saved Schedule operation approvals can be cleared under Settings > Privacy & control. Revoking the Chrome origin permission still requires a new browser grant and is never bypassed by the saved operation approval.
-- `run_js` requires Chrome 135 or newer and uses only `userScripts.execute()`; there is no `eval` / `new Function` fallback. In Chrome 138+, enable `Allow User Scripts` for WebClaw on the extension details page if Chrome reports that the API is unavailable.
-- `userScripts` injection is not blocked by page CSP dynamic-evaluation rules, but it cannot bypass the same-origin policy, HttpOnly cookies, extension permissions, or operating-system permissions.
+- L3-L5 page subcalls require Chrome 135 or newer and use `userScripts.execute()`; there is no `eval` / `new Function` fallback. In Chrome 138+, enable `Allow User Scripts` for WebClaw on the extension details page if Chrome reports that the API is unavailable.
+- RPC validates every VFS path, network origin, tab/world, and Chrome method. L5 does not expose extension internals such as `identity`, `storage`, `runtime`, `permissions`, `scripting`, or `userScripts`. See [run_js L0-L5](docs/run-js-capability-levels.md).
 - `run_js` accepts inline `code` or `vfsPath` for a VFS `.js`, `.mjs`, or `.cjs` file; provide exactly one.
 - Use `http_request` for cross-origin webhooks or APIs that pages cannot call because of CORS. It supports timeouts, JSON, forms, multipart VFS files, binary responses, and saving directly to VFS. HTTP(S) access uses optional host permissions requested per origin with a reason before first use.
 - `fs_shell` only operates on the IndexedDB-backed virtual filesystem and cannot access local machine files. It supports `pwd`, `cd`, `ls`, `stat`, `mkdir`, `touch`, `cat`, `cp`, `mv`, and `rm`; `cd` validates the target directory, updates the current session working directory, and makes later relative paths resolve from it. It rejects pipes, redirection, command substitution, and multi-command input; `rm` moves entries into `/.trash`.

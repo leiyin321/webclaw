@@ -12,6 +12,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Install build dependencies
+        run: npm ci
+      - name: Build document bundles
+        run: npm run build:documents
+      - name: Test document core
+        run: npm run test:documents
       - name: Check JavaScript syntax
         run: ./scripts/check-syntax.sh
       - name: Test Agent Runtime

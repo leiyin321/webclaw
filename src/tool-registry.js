@@ -119,27 +119,50 @@ const BUILTIN_TOOL_DEFINITIONS = [
     object({ selector: string({ minLength: 1 }), path: string({ minLength: 1 }), filename: string() }, ["selector", "path"]),
     { selector: "input[type=file]", path: "/uploads/document.pdf" }, write("chrome:active-tab", "unknown", "interactive"),
     { hostPermissions: ["active_tab_origin"] }),
-  definition("run_js", "page", "Execute inline JavaScript or a VFS JavaScript file in the active page. Requires the setting plus explicit approval. Provide exactly one of code or vfsPath.",
+  definition("run_js", "page", "Execute JavaScript in a cumulative L0-L5 capability sandbox. L0 is isolated compute; L1 adds scoped VFS RPC; L2 adds declared-origin HTTP RPC; L3 adds USER_SCRIPT page RPC; L4 adds MAIN-world page RPC; L5 adds allowlisted Chrome API RPC. Requires the setting plus explicit approval.",
     object({
       code: string({ description: "Inline JavaScript source. Provide code or vfsPath, not both." }),
       vfsPath: string({ description: "VFS path to a .js, .mjs, or .cjs file. Provide code or vfsPath, not both." }),
-      world: string({ enum: ["user_script", "main"] })
-    }),
-    { vfsPath: "/workspace/test.js" }, write("chrome:active-tab", "unknown", "interactive"),
-    { permissions: ["userScripts"], hostPermissions: ["active_tab_origin"], advanced: true }),
+      level: string({ enum: ["L0", "L1", "L2", "L3", "L4", "L5"] }),
+      input: openObject("Structured input available to the script as input."),
+      timeoutMs: integer({ minimum: 100, maximum: 120000 }),
+      capabilities: object({
+        vfs: object({
+          read: array(string(), { description: "Allowed absolute VFS paths or path scopes ending in /* or /**." }),
+          write: array(string(), { description: "Allowed absolute VFS paths or path scopes ending in /* or /**." })
+        }),
+        network: object({
+          origins: array(string(), { description: "Allowed HTTP(S) origins, such as https://api.example.com or https://*.example.com/*." })
+        }),
+        page: object({
+          tabIds: array(integer({ minimum: 0 })),
+          worlds: array(string({ enum: ["USER_SCRIPT", "MAIN"] }))
+        }),
+        chrome: array(string(), { description: "Allowlisted Chrome methods such as tabs.query or bookmarks.search. Namespace wildcards such as tabs.* are accepted." })
+      })
+    }, ["level"]),
+    { vfsPath: "/workspace/test.js", level: "L1", capabilities: { vfs: { read: ["/workspace/**"], write: ["/workspace/**"] } } },
+    write("sandbox:declared-capabilities", "unknown", "interactive"),
+    { permissions: ["userScripts"], hostPermissions: ["args.capabilities.network.origins", "args.capabilities.page.tabIds"], advanced: true }),
   definition("translate_page", "page", "Translate visible text on the active page and replace it in-place.",
     object({ targetLanguage: string({ minLength: 1 }) }),
     { targetLanguage: "Chinese" }, write("chrome:active-tab", "unknown", "interactive"),
     { hostPermissions: ["active_tab_origin"], bundle: "convenience" }),
-  definition("search_web", "network", "Open a search page and read the search results context.",
+  definition("web_search", "network", "Search the current web through the configured Brave Search API, with the browser search page as the internal fallback.",
     object({
       query: string({ minLength: 1 }),
-      engine: string({ enum: ["duckduckgo", "bing", "google"] }),
-      newTab: boolean()
+      count: integer({ minimum: 1, maximum: 10 }),
+      country: string(),
+      language: string(),
+      search_lang: string(),
+      ui_lang: string(),
+      freshness: string({ enum: ["day", "week", "month", "year"] }),
+      date_after: string(),
+      date_before: string()
     }, ["query"]),
-    { query: "today Beijing weather", engine: "duckduckgo", newTab: true },
+    { query: "latest Chrome extension platform changes", count: 5, freshness: "month" },
     write("chrome:active-tab", "unknown", "interactive"),
-    { permissions: ["tabs"], hostPermissions: ["search_engine_origin"], bundle: "convenience" }),
+    { permissions: ["tabs"], hostPermissions: ["web_search_provider_origin"], bundle: "convenience" }),
   definition("get_weather", "network", "Fetch current weather from Open-Meteo.",
     object({ location: string({ minLength: 1 }), language: string() }, ["location"]),
     { location: "Beijing", language: "zh" }, read("tool:get_weather"),
@@ -339,11 +362,11 @@ const BUILTIN_TOOL_DEFINITIONS = [
     { path: "/workspace/documents/report.md", output: "markdown", maxChars: 12000 },
     read("document:args.path"), { bundle: "documents" }),
   definition("document_schema", "document", "Return the exact versioned create, edit, or export schema for a supported document format.",
-    object({ format: string({ minLength: 1 }), operation: string({ enum: ["read", "create", "edit", "export"] }), actions: array(string()) }, ["format", "operation"]),
-    { format: "markdown", operation: "edit", actions: ["replace_text", "insert_after_heading"] },
+    object({ format: string({ minLength: 1 }), operation: string({ enum: ["read", "create", "edit", "export"] }), mode: string({ enum: ["basic", "rich"] }), schemaVersion: string(), actions: array(string()) }, ["format", "operation"]),
+    { format: "markdown", operation: "edit", mode: "basic", actions: ["replace_text", "insert_after_heading"] },
     read("document:schema"), { bundle: "documents" }),
   definition("document_create", "document", "Create a supported document in VFS from a versioned format-specific structured specification.",
-    object({ path: string({ minLength: 1 }), format: string({ minLength: 1 }), schemaVersion: string({ minLength: 1 }), spec: openObject(), overwrite: boolean(), expectedVersion: integer({ minimum: 0 }), expectedHash: string(), createParents: boolean() }, ["path", "format", "schemaVersion", "spec"]),
+    object({ path: string({ minLength: 1 }), format: string({ minLength: 1 }), schemaVersion: string({ minLength: 1 }), templateId: string(), spec: openObject(), overwrite: boolean(), expectedVersion: integer({ minimum: 0 }), expectedHash: string(), createParents: boolean() }, ["path", "format", "schemaVersion", "spec"]),
     { path: "/workspace/documents/report.md", format: "markdown", schemaVersion: "markdown-1", spec: { content: "# Report\n" }, createParents: true },
     write("document:args.path", "retry_safe"), { bundle: "documents" }),
   definition("document_edit", "document", "Apply version-checked structured edits to a supported VFS document and return the new version, hash, changes, and warnings.",
@@ -421,7 +444,8 @@ const REMOVED_TOOL_NAMES = new Set([
   "fs_delete",
   "fs_restore",
   "fs_purge",
-  "fs_empty_trash"
+  "fs_empty_trash",
+  "search_web"
 ]);
 
 export function builtinToolDefinitions() {

@@ -20,6 +20,7 @@ import {
 } from "./provider-client-metadata.js";
 import { normalizeOpenAICompatibleApiProtocol } from "./openai-compatible-api.js";
 import { buildVfsPreviewDocument } from "./vfs-preview.js";
+import { normalizeWebSearchConfig } from "./web-search.js";
 import {
   builtinToolUiDefinitions,
   isRemovedBuiltinToolName
@@ -96,6 +97,7 @@ const PROVIDER_DEFAULTS = {
 };
 
 const QIYEWECHAT_NOTIFICATION_TOOL_NAME = "qiyewechat_notification";
+const WEB_SEARCH_TOOL_NAME = "web_search";
 
 const BUILTIN_TOOLS = builtinToolUiDefinitions();
 
@@ -241,6 +243,14 @@ const elements = {
   toolWorkflowInstruction: document.querySelector("#toolWorkflowInstruction"),
   toolWorkflowMaxSteps: document.querySelector("#toolWorkflowMaxSteps"),
   toolQiyeWechatWebhookUrl: document.querySelector("#toolQiyeWechatWebhookUrl"),
+  toolWebSearchProvider: document.querySelector("#toolWebSearchProvider"),
+  toolWebSearchBraveApiKey: document.querySelector("#toolWebSearchBraveApiKey"),
+  toolWebSearchBraveBaseUrl: document.querySelector("#toolWebSearchBraveBaseUrl"),
+  toolWebSearchBrowserEngine: document.querySelector("#toolWebSearchBrowserEngine"),
+  toolWebSearchFallback: document.querySelector("#toolWebSearchFallback"),
+  toolWebSearchMaxResults: document.querySelector("#toolWebSearchMaxResults"),
+  toolWebSearchTimeoutSeconds: document.querySelector("#toolWebSearchTimeoutSeconds"),
+  toolWebSearchCacheTtlMinutes: document.querySelector("#toolWebSearchCacheTtlMinutes"),
   skillCount: document.querySelector("#skillCount"),
   skillList: document.querySelector("#skillList"),
   addSkill: document.querySelector("#addSkill"),
@@ -637,7 +647,15 @@ function bindToolDirtyEvents() {
     elements.toolWorkflowInputSchema,
     elements.toolWorkflowInstruction,
     elements.toolWorkflowMaxSteps,
-    elements.toolQiyeWechatWebhookUrl
+    elements.toolQiyeWechatWebhookUrl,
+    elements.toolWebSearchProvider,
+    elements.toolWebSearchBraveApiKey,
+    elements.toolWebSearchBraveBaseUrl,
+    elements.toolWebSearchBrowserEngine,
+    elements.toolWebSearchFallback,
+    elements.toolWebSearchMaxResults,
+    elements.toolWebSearchTimeoutSeconds,
+    elements.toolWebSearchCacheTtlMinutes
   ].forEach((element) => {
     element.addEventListener("input", markToolDirty);
     element.addEventListener("change", markToolDirty);
@@ -2321,7 +2339,7 @@ function renderToolList() {
       const edit = document.createElement("button");
       edit.type = "button";
       edit.className = "secondary";
-      edit.textContent = tool.builtin && tool.name !== QIYEWECHAT_NOTIFICATION_TOOL_NAME ? "View" : "Edit";
+      edit.textContent = tool.builtin && ![QIYEWECHAT_NOTIFICATION_TOOL_NAME, WEB_SEARCH_TOOL_NAME].includes(tool.name) ? "View" : "Edit";
       edit.addEventListener("click", () => openToolModal(tool.name));
 
       item.append(enabled, text, edit);
@@ -2405,7 +2423,7 @@ function renderToolModal() {
   elements.toolName.value = toolDraft.name || "";
   elements.toolName.disabled = Boolean(toolDraft.builtin);
   elements.toolTitle.value = toolDraft.title || "";
-  elements.toolTitle.disabled = toolDraft.name === QIYEWECHAT_NOTIFICATION_TOOL_NAME;
+  elements.toolTitle.disabled = [QIYEWECHAT_NOTIFICATION_TOOL_NAME, WEB_SEARCH_TOOL_NAME].includes(toolDraft.name);
   elements.toolDescription.value = toolDraft.description || "";
   elements.toolType.value = toolDraft.type || "http";
   elements.toolType.disabled = Boolean(toolDraft.builtin);
@@ -2423,8 +2441,19 @@ function renderToolModal() {
   elements.toolWorkflowInstruction.value = config.instruction;
   elements.toolWorkflowMaxSteps.value = config.maxSteps;
   elements.toolQiyeWechatWebhookUrl.value = String(toolDraft.config?.webhookUrl || "");
+  const webSearchConfig = normalizeWebSearchConfig(toolDraft.config);
+  elements.toolWebSearchProvider.value = webSearchConfig.provider;
+  elements.toolWebSearchBraveApiKey.value = webSearchConfig.braveApiKey;
+  elements.toolWebSearchBraveBaseUrl.value = webSearchConfig.braveBaseUrl;
+  elements.toolWebSearchBrowserEngine.value = webSearchConfig.browserEngine;
+  elements.toolWebSearchFallback.checked = webSearchConfig.fallbackToBrowser;
+  elements.toolWebSearchMaxResults.value = webSearchConfig.maxResults;
+  elements.toolWebSearchTimeoutSeconds.value = webSearchConfig.timeoutSeconds;
+  elements.toolWebSearchCacheTtlMinutes.value = webSearchConfig.cacheTtlMinutes;
   const activeSection = toolDraft.name === QIYEWECHAT_NOTIFICATION_TOOL_NAME
     ? QIYEWECHAT_NOTIFICATION_TOOL_NAME
+    : toolDraft.name === WEB_SEARCH_TOOL_NAME
+      ? WEB_SEARCH_TOOL_NAME
     : toolDraft.type || "http";
   document.querySelectorAll(".tool-section").forEach((section) => {
     section.classList.toggle("hidden", section.dataset.toolSection !== activeSection);
@@ -2482,6 +2511,17 @@ async function saveToolModal() {
       "WebClaw needs access to this enterprise WeChat webhook only when the qiyewechat_notification tool sends a notification you requested."
     ))) return;
   }
+  if (nextTool.name === WEB_SEARCH_TOOL_NAME && nextTool.enabled) {
+    const webSearchConfig = normalizeWebSearchConfig(nextTool.config);
+    if (webSearchConfig.provider === "brave" && !webSearchConfig.braveApiKey) {
+      elements.status.textContent = "Brave Search API key is required when provider is Brave.";
+      return;
+    }
+    if (webSearchConfig.braveApiKey && !(await requestOriginPermissionsForUrls(
+      [webSearchConfig.braveBaseUrl],
+      "WebClaw needs access to the configured Brave Search API endpoint to send search queries and receive structured results."
+    ))) return;
+  }
   settings.tools = toolDraftIsNew
     ? [...tools, nextTool]
     : tools.map((tool) => (tool.id === nextTool.id || tool.name === nextTool.name ? nextTool : tool));
@@ -2512,8 +2552,8 @@ function syncToolFormToDraft() {
   toolDraft = {
     ...toolDraft,
     name: toolDraft.builtin ? toolDraft.name : normalizeToolName(elements.toolName.value),
-    title: toolDraft.name === QIYEWECHAT_NOTIFICATION_TOOL_NAME
-      ? QIYEWECHAT_NOTIFICATION_TOOL_NAME
+    title: [QIYEWECHAT_NOTIFICATION_TOOL_NAME, WEB_SEARCH_TOOL_NAME].includes(toolDraft.name)
+      ? toolDraft.name
       : elements.toolTitle.value.trim() || elements.toolName.value.trim(),
     description: elements.toolDescription.value.trim(),
     type: toolDraft.builtin ? toolDraft.type : elements.toolType.value,
@@ -2527,7 +2567,17 @@ function syncToolFormToDraft() {
       inputSchema,
       instruction: elements.toolWorkflowInstruction.value.trim(),
       maxSteps: Number(elements.toolWorkflowMaxSteps.value || 4),
-      webhookUrl: elements.toolQiyeWechatWebhookUrl.value.trim()
+      webhookUrl: elements.toolQiyeWechatWebhookUrl.value.trim(),
+      ...normalizeWebSearchConfig({
+        provider: elements.toolWebSearchProvider.value,
+        braveApiKey: elements.toolWebSearchBraveApiKey.value,
+        braveBaseUrl: elements.toolWebSearchBraveBaseUrl.value,
+        browserEngine: elements.toolWebSearchBrowserEngine.value,
+        fallbackToBrowser: elements.toolWebSearchFallback.checked,
+        maxResults: elements.toolWebSearchMaxResults.value,
+        timeoutSeconds: elements.toolWebSearchTimeoutSeconds.value,
+        cacheTtlMinutes: elements.toolWebSearchCacheTtlMinutes.value
+      })
     }
   };
 }
@@ -4540,15 +4590,17 @@ function normalizePanelTools(value, options = {}) {
     return {
       ...definition,
       id: definition.name,
-      title: definition.name === QIYEWECHAT_NOTIFICATION_TOOL_NAME
-        ? QIYEWECHAT_NOTIFICATION_TOOL_NAME
+      title: [QIYEWECHAT_NOTIFICATION_TOOL_NAME, WEB_SEARCH_TOOL_NAME].includes(definition.name)
+        ? definition.name
         : String(raw.title || definition.title),
       description,
       enabled: matched ? raw.enabled !== false : !DEFAULT_DISABLED_BUILTIN_TOOLS.has(definition.name),
       advanced: ADVANCED_BUILTIN_TOOLS.has(definition.name),
       config: definition.name === QIYEWECHAT_NOTIFICATION_TOOL_NAME
         ? { webhookUrl: String(raw.config?.webhookUrl || options.legacyWeComWebhookUrl || "") }
-        : {}
+        : definition.name === WEB_SEARCH_TOOL_NAME
+          ? normalizeWebSearchConfig(raw.config)
+          : {}
     };
   });
   for (const raw of rawTools) {
@@ -4578,8 +4630,8 @@ function normalizePanelTool(tool) {
   return {
     id: String(tool.id || name),
     name,
-    title: builtin && name === QIYEWECHAT_NOTIFICATION_TOOL_NAME
-      ? QIYEWECHAT_NOTIFICATION_TOOL_NAME
+    title: builtin && [QIYEWECHAT_NOTIFICATION_TOOL_NAME, WEB_SEARCH_TOOL_NAME].includes(name)
+      ? name
       : String(tool.title || name),
     type,
     description: String(tool.description || ""),
@@ -4589,7 +4641,9 @@ function normalizePanelTool(tool) {
     config: builtin
       ? name === QIYEWECHAT_NOTIFICATION_TOOL_NAME
         ? { webhookUrl: String(tool.config?.webhookUrl || "") }
-        : {}
+        : name === WEB_SEARCH_TOOL_NAME
+          ? normalizeWebSearchConfig(tool.config)
+          : {}
       : normalizeToolConfig(tool.config || {})
   };
 }

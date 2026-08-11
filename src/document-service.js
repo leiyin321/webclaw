@@ -7,6 +7,11 @@ import {
   vfsWriteFile
 } from "./virtual-file-system.js";
 import { deleteDocumentRevision, deleteDocumentRevisions, getDocumentRevision, listDocumentRevisions, saveDocumentRevision } from "./document-revision-store.js";
+import { takeDocumentArtifact } from "./document-artifact-store.js";
+import { DocumentSpecError } from "./document-core/document-errors.js";
+import { richDocumentSchemaDefinition } from "./document-core/document-schema-registry.js";
+import { RICH_DOCUMENT_SCHEMA_VERSIONS, normalizeRichDocumentSpec } from "./document-core/rich-document.js";
+import { listDocumentTemplates } from "./document-core/template-registry.js";
 
 const MARKDOWN_SCHEMA_VERSION = "markdown-1";
 const MARKDOWN_EXTENSIONS = new Set(["md", "markdown", "mdown", "mkdn"]);
@@ -30,6 +35,11 @@ export async function documentInspect(path, options = {}) {
     size: stat.entry.size,
     version: stat.entry.version,
     ...(await vfsHash(target)),
+    generation: OFFICE_FORMATS.has(format) ? {
+      richSchemaVersion: RICH_DOCUMENT_SCHEMA_VERSIONS[format] || null,
+      templates: listDocumentTemplates(format),
+      status: RICH_DOCUMENT_SCHEMA_VERSIONS[format] ? (["docx", "pdf", "xlsx", "pptx"].includes(format) ? "engine_ready" : "schema_ready_engine_pending") : "unsupported"
+    } : null,
     capabilities: format === "markdown"
       ? { read: true, create: true, edit: "full", render: "html", export: ["markdown", "html"] }
       : OFFICE_FORMATS.has(format)
@@ -106,6 +116,10 @@ export async function documentRead(path, options = {}) {
 export function documentSchema(format, operation, options = {}) {
   const normalizedFormat = String(format || "").toLowerCase();
   const normalizedOperation = String(operation || "").toLowerCase();
+  if (options.mode === "rich" || options.schemaVersion === RICH_DOCUMENT_SCHEMA_VERSIONS[normalizedFormat]) {
+    const richDefinition = richDocumentSchemaDefinition(normalizedFormat, normalizedOperation, options.actions);
+    if (richDefinition) return richDefinition;
+  }
   if (normalizedFormat !== "markdown") {
     if (["xlsx", "docx", "pptx"].includes(normalizedFormat) && ["create", "edit"].includes(normalizedOperation)) {
       return {
@@ -232,9 +246,23 @@ export function documentSchema(format, operation, options = {}) {
   };
 }
 
-export async function documentCreate(args = {}) {
+export async function documentCreate(args = {}, options = {}) {
+  throwIfDocumentAborted(options.signal);
   const target = requiredPath(args.path);
   requireFormat(args.format, target);
+  if (isRichSchemaVersion(args.schemaVersion)) {
+    const format = String(args.format).toLowerCase();
+    requireSchemaVersionValue(args.schemaVersion, RICH_DOCUMENT_SCHEMA_VERSIONS[format]);
+    const spec = normalizeRichDocumentSpec(format, args.spec || {}, { templateId: args.templateId });
+    await preflightDocumentCreate(target, args);
+    const generated = await generateRichDocumentArtifact(format, spec, options);
+    throwIfDocumentAborted(options.signal);
+    const artifact = await takeDocumentArtifact(generated.artifactId);
+    throwIfDocumentAborted(options.signal);
+    const overwriteVersion = await prepareDocumentCreate(target, args);
+    const written = await vfsWriteFile(target, artifact.blob, { mimeType: richDocumentMimeType(format), createParents: args.createParents !== false, ...(overwriteVersion !== undefined ? { expectedVersion: overwriteVersion } : {}) });
+    return { path: target, format, schemaVersion: args.schemaVersion, version: written.entry.version, ...(await vfsHash(target)), fidelity: generated.fidelity, warnings: generated.warnings };
+  }
   if (String(args.format).toLowerCase() === "xlsx") return documentCreateXlsx(target, args);
   if (String(args.format).toLowerCase() === "docx") return documentCreateDocx(target, args);
   if (String(args.format).toLowerCase() === "pptx") return documentCreatePptx(target, args);
@@ -251,7 +279,8 @@ export async function documentCreate(args = {}) {
   return { path: target, format: "markdown", version: result.entry.version, contentChars: content.length, fidelity: "full", warnings: [] };
 }
 
-export async function documentEdit(args = {}) {
+export async function documentEdit(args = {}, options = {}) {
+  throwIfDocumentAborted(options.signal);
   const target = requiredPath(args.path);
   requireFormat(args.format, target);
   if (String(args.format).toLowerCase() === "xlsx") return documentEditXlsx(target, args);
@@ -1123,6 +1152,22 @@ async function prepareDocumentCreate(target, args) {
   return stat.entry.version;
 }
 
+async function preflightDocumentCreate(target, args) {
+  if (!args.overwrite) {
+    try {
+      await vfsStat(target);
+      throw new Error(`Document already exists: ${target}. Set overwrite=true only when replacement is intentional.`);
+    } catch (error) {
+      if (!/No such file/i.test(error.message || "")) throw error;
+    }
+    return;
+  }
+  const stat = await vfsStat(target);
+  const currentHash = (await vfsHash(target)).hash;
+  if (args.expectedVersion === undefined && !args.expectedHash) throw new Error("Document overwrite requires expectedVersion or expectedHash. Inspect the document first.");
+  assertExpectedVersion(args, stat.entry.version, currentHash);
+}
+
 async function snapshotCurrentDocument(target, stat, hash) {
   return saveDocumentRevision(target, await vfsGetFileBlob(target), {
     version: stat.entry.version,
@@ -1163,6 +1208,84 @@ function requiredRevisionId(value) {
   const id = String(value || "").trim();
   if (!id) throw new Error("revisionId is required.");
   return id;
+}
+
+function isRichSchemaVersion(value) {
+  return Object.values(RICH_DOCUMENT_SCHEMA_VERSIONS).includes(String(value || ""));
+}
+
+async function generateRichDocumentArtifact(format, spec, options = {}) {
+  if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage) throw new DocumentSpecError("document_generation_engine_unavailable", "The rich document engine is only available inside WebClaw.", { format }, { stage: "engine", suggestedActions: ["run_in_extension", "use_basic_schema"] });
+  await ensureRichDocumentOffscreen();
+  const requestId = crypto.randomUUID().replaceAll("-", "");
+  try {
+    const response = await sendDocumentGenerationMessage({ type: "WEBCLAW_DOCUMENT_GENERATE", requestId, format, spec }, options.signal);
+    if (!response?.ok || !response.result?.artifactId) throw new Error(response?.error || "Document offscreen engine returned an invalid result.");
+    return response.result;
+  } catch (error) {
+    if (error instanceof DocumentSpecError) throw error;
+    throw new DocumentSpecError("document_generation_engine_failed", `${format.toUpperCase()} generation failed: ${error.message || error}`, { format, schemaVersion: RICH_DOCUMENT_SCHEMA_VERSIONS[format] }, { stage: "engine", retryable: true, cause: error });
+  }
+}
+
+async function sendDocumentGenerationMessage(message, signal) {
+  throwIfDocumentAborted(signal);
+  let abortReject;
+  const abortPromise = new Promise((_, reject) => { abortReject = reject; });
+  const abort = () => {
+    chrome.runtime.sendMessage({ type: "WEBCLAW_DOCUMENT_CANCEL", requestId: message.requestId }).catch(() => {});
+    const error = new Error("Stopped");
+    error.name = "AbortError";
+    abortReject(error);
+  };
+  signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) abort();
+  try {
+    return await Promise.race([sendDocumentGenerationMessageWithRetry(message), abortPromise]);
+  } finally {
+    signal?.removeEventListener("abort", abort);
+  }
+}
+
+async function sendDocumentGenerationMessageWithRetry(message) {
+  let lastError;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      const response = await chrome.runtime.sendMessage(message);
+      if (response !== undefined) return response;
+    } catch (error) {
+      lastError = error;
+      if (!/receiving end does not exist|message port closed/i.test(String(error?.message || error))) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw lastError || new Error("Document offscreen engine did not become ready.");
+}
+
+function throwIfDocumentAborted(signal) {
+  if (!signal?.aborted) return;
+  const error = new Error("Stopped");
+  error.name = "AbortError";
+  throw error;
+}
+
+async function ensureRichDocumentOffscreen() {
+  if (!chrome.offscreen?.createDocument) throw new Error("Chrome offscreen documents are unavailable.");
+  if (chrome.offscreen.hasDocument && await chrome.offscreen.hasDocument()) return;
+  try {
+    await chrome.offscreen.createDocument({ url: "src/chrome-ai-offscreen.html", reasons: ["DOM_SCRAPING", "CLIPBOARD"], justification: "Generate user-requested local documents in a sandboxed extension frame." });
+  } catch (error) {
+    if (!String(error?.message || error).includes("Only a single offscreen document")) throw error;
+  }
+}
+
+function richDocumentMimeType(format) {
+  return {
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    pdf: "application/pdf",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  }[format] || "application/octet-stream";
 }
 
 function extensionOf(path) {
