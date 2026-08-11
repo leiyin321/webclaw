@@ -1,4 +1,5 @@
 import { vfsReadFile } from "./virtual-file-system.js";
+import { documentRead } from "./document-service.js";
 
 const DB_NAME = "webclaw-knowledge";
 const DB_VERSION = 1;
@@ -8,13 +9,26 @@ const MAX_SOURCE_CHARS = 200_000;
 const MAX_CHUNKS_PER_DOCUMENT = 400;
 
 export async function knowledgeIngestVfsFile(path, options = {}) {
-  const source = await vfsReadFile(path, { maxChars: MAX_SOURCE_CHARS });
-  if (!source.isText) throw new Error("knowledge_ingest currently supports text files only.");
+  let source = await vfsReadFile(path, { maxChars: MAX_SOURCE_CHARS });
+  if (!source.isText) {
+    const projection = await documentRead(path, { output: "markdown", maxChars: MAX_SOURCE_CHARS });
+    source = {
+      path: projection.path,
+      content: projection.content,
+      isText: true,
+      truncated: projection.truncated,
+      entry: { version: projection.version, size: projection.size },
+      projectionFormat: projection.format,
+      projectionLocators: projection.locators || [],
+      projectionWarnings: projection.warnings
+    };
+  }
   if (source.truncated) throw new Error(`Knowledge source is larger than ${MAX_SOURCE_CHARS} characters. Split it before ingesting.`);
   const text = normalizeText(source.content);
   if (!text) throw new Error("Knowledge source is empty.");
   const documentId = `vfs:${source.path}`;
   const chunks = splitText(text, clamp(options.chunkChars, 500, 4000, 1600));
+  const chunkLocators = locateChunks(text, chunks, source.projectionLocators || []);
   if (chunks.length > MAX_CHUNKS_PER_DOCUMENT) throw new Error(`Knowledge source has too many chunks (${chunks.length}). Split it before ingesting.`);
   const document = {
     id: documentId,
@@ -26,7 +40,8 @@ export async function knowledgeIngestVfsFile(path, options = {}) {
     sourceSize: source.entry.size,
     updatedAt: Date.now(),
     chunkCount: chunks.length,
-    charCount: text.length
+    charCount: text.length,
+    projectionFormat: source.projectionFormat || "text"
   };
   const db = await openDatabase();
   const transaction = db.transaction([DOCUMENTS, CHUNKS], "readwrite");
@@ -45,7 +60,7 @@ export async function knowledgeIngestVfsFile(path, options = {}) {
   }
   await deleteDocumentChunks(chunkStore, documentId);
   documents.put(document);
-  chunks.forEach((content, index) => chunkStore.put({ id: `${documentId}:${index}`, documentId, index, content }));
+  chunks.forEach((content, index) => chunkStore.put({ id: `${documentId}:${index}`, documentId, index, content, sourceLocator: chunkLocators[index] || null }));
   await transactionDone(transaction);
   db.close();
   return { ok: true, document, chunks: chunks.length };
@@ -77,7 +92,8 @@ export async function knowledgeSearch(query, options = {}) {
       tags: document.tags,
       chunkIndex: chunk.index,
       score: Number(score.toFixed(3)),
-      content: excerpt(chunk.content, terms, maxChars)
+      content: excerpt(chunk.content, terms, maxChars),
+      sourceLocator: chunk.sourceLocator || null
     }));
   return { query: String(query), results };
 }
@@ -102,6 +118,7 @@ export async function knowledgeRead(documentId, options = {}) {
     chunkStart: start,
     chunkEnd: selected.at(-1)?.index ?? start,
     content: content.slice(0, maxChars),
+    sourceLocators: selected.map((chunk) => chunk.sourceLocator || null),
     truncated: content.length > maxChars
   };
 }
@@ -230,6 +247,22 @@ function splitText(text, chunkChars) {
     remaining = remaining.slice(end).trim();
   }
   return chunks.filter(Boolean);
+}
+
+function locateChunks(text, chunks, locators) {
+  if (!Array.isArray(locators) || !locators.length) return [];
+  if (locators.every((locator) => locator.offsetStart === undefined || locator.offsetEnd === undefined)) {
+    return chunks.map(() => locators.map(({ offsetStart, offsetEnd, ...locator }) => locator));
+  }
+  let cursor = 0;
+  return chunks.map((chunk) => {
+    const start = Math.max(cursor, text.indexOf(chunk, cursor));
+    const safeStart = start < 0 ? cursor : start;
+    const end = safeStart + chunk.length;
+    cursor = end;
+    const matched = locators.filter((locator) => Number(locator.offsetEnd || 0) > safeStart && Number(locator.offsetStart || 0) < end);
+    return matched.length ? matched.map(({ offsetStart, offsetEnd, ...locator }) => locator) : null;
+  });
 }
 
 function scoreChunk(content, terms, normalizedQuery) {

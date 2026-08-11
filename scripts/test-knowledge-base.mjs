@@ -38,4 +38,11 @@ assert.equal(metadataUpdate.metadataUpdated, true);
 assert.equal((await knowledgeStatus({ collection: "project" })).documents, 0);
 assert.equal((await knowledgeStatus({ collection: "archive" })).documents, 1);
 
+await vfsWriteFile("/workspace/reference.pdf", new Blob(["%PDF-1.4\n/Type /Page\nBT (knowledge pdf) ET"], { type: "application/pdf" }), { mimeType: "application/pdf", createParents: true });
+const projected = await knowledgeIngestVfsFile("/workspace/reference.pdf", { collection: "documents" });
+assert.equal(projected.document.projectionFormat, "pdf");
+const pdfSearch = await knowledgeSearch("knowledge pdf", { collection: "documents" });
+assert.match(pdfSearch.results[0].content, /knowledge pdf/);
+assert.equal(pdfSearch.results[0].sourceLocator, null);
+
 console.log("Knowledge base tests passed.");

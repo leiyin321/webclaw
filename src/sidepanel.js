@@ -3612,10 +3612,19 @@ function renderWorkspaceList(entries) {
 }
 
 function isWebPreviewFile(name) {
-  return /\.(?:html?|xhtml|svg)$/i.test(String(name || ""));
+  return /\.(?:html?|xhtml|svg|md|markdown|mdown|mkdn|docx|xlsx|pptx|pdf)$/i.test(String(name || ""));
 }
 
 async function openWorkspacePreview(path) {
+  if (/\.(?:md|markdown|mdown|mkdn|docx|xlsx|pptx|pdf)$/i.test(String(path || ""))) {
+    const previewWindow = window.open(chrome.runtime.getURL(`src/document-viewer.html?path=${encodeURIComponent(path)}`), "_blank");
+    if (!previewWindow) {
+      elements.status.textContent = "Preview was blocked by the browser. Allow pop-ups for WebClaw and try again.";
+      return;
+    }
+    elements.status.textContent = `Preview opened: ${path}`;
+    return;
+  }
   const previewWindow = window.open(chrome.runtime.getURL("src/preview-sandbox.html"), "_blank");
   if (!previewWindow) {
     elements.status.textContent = "Preview was blocked by the browser. Allow pop-ups for WebClaw and try again.";

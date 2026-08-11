@@ -57,7 +57,8 @@ Load the unpacked extension in a clean Chrome profile and verify:
 - clearing or deleting a session removes its related Agent RunStore records, while a running Turn remains present when a session already contains 100 completed Turn records;
 - a long session compacts older context, remains usable after reload, and preserves recent messages, Tool errors, and unfinished work without showing the generated summary as a user message;
 - the global Max steps field accepts a large positive integer without an artificial UI maximum;
-- the file manager selects a directory on single click and enters it on double click, while HTML/HTM/XHTML/SVG Preview opens a top-level sandbox tab;
+- the file manager selects a directory on single click and enters it on double click, while HTML/HTM/XHTML/SVG Preview opens a top-level sandbox tab and Markdown/DOCX/XLSX/PPTX/PDF Preview opens the independent bounded document viewer;
+- `document_schema` returns format-specific create fields, generated DOCX/XLSX/PPTX files open in at least one target Office application, PDF non-ASCII creation fails clearly, edits create restorable revisions, and permanent revision purge requires explicit confirmation;
 - a static preview loads relative CSS, JavaScript, images, fonts, and JSON, executes inline page JavaScript, and persists its project-scoped localStorage compatibility layer after reload; verify that this is not treated as real website-origin storage;
 - Provider sign-in, model refresh, Channels, and enabled Schedules work only after their origins and disclosures are granted;
 - settings, sessions, VFS, knowledge, and credentials persist across extension reloads;

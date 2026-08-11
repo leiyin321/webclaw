@@ -2,6 +2,17 @@
 
 All notable changes to WebClaw will be documented in this file.
 
+## 0.7.0
+
+- Add one provider-independent document layer with eight Tools for inspecting, reading, creating, editing, rendering, exporting, and revising VFS documents.
+- Support full Markdown workflows, basic DOCX/XLSX/PPTX generation and rebuild editing, ASCII text PDF generation, and bounded read projections for DOCX, XLSX, PPTX, and PDF.
+- Add format-specific versioned schemas, optimistic version/hash checks, automatic pre-write snapshots, restore-before-replace snapshots, revision retention limits, and confirmed permanent revision purge.
+- Add bounded Markdown/JSON Office projections with paragraph, cell, and slide locators; reject unsupported PDF page locators rather than attributing whole-document text to one page.
+- Add Office/PDF projection export to Markdown or JSON and independent document previews from the VFS file manager.
+- Harden OOXML ZIP parsing and generation with entry/path/size limits, valid ZIP version metadata, CRC verification tests, and no macro, external link, formula, embedded script, or remote conversion execution.
+- Integrate supported document projections with the local knowledge base while retaining original VFS files and truthful source-location limits.
+- Document fidelity limits explicitly: rebuild editing does not preserve unsupported Office structures, PDF extraction is conservative, and built-in PDF creation rejects non-ASCII text until embedded-font support is available.
+
 ## 0.6.1
 
 - Centralize built-in Tool definitions, JSON Schemas, UI metadata, and scheduler effects in one Tool Registry.

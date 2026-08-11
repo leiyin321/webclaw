@@ -33,6 +33,16 @@ import {
   knowledgeStatus
 } from "./knowledge-base.js";
 import {
+  documentCreate,
+  documentEdit,
+  documentExport,
+  documentInspect,
+  documentRead,
+  documentRevision,
+  documentRender,
+  documentSchema
+} from "./document-service.js";
+import {
   CONTEXT_SUMMARY_PREFIX,
   createAgentId,
   normalizeAgentPlan
@@ -329,11 +339,14 @@ const WORKSPACE_BOOTSTRAP_LEGACY_TEMPLATES = {
 const WORKSPACE_BOOTSTRAP_TEMPLATES = {
   "AGENTS.md": `# WebClaw Workspace\n\n## Operating model\nWebClaw is a browser AI agent. It works through enabled Tools, Skills, Channels, Schedules, the local knowledge base, the ephemeral task stack, and the virtual filesystem (VFS). Core system policy and tool permissions always take precedence over workspace instructions.\n\n## Workflow\n1. Understand the current user goal and inspect the relevant page or VFS file before acting.\n2. Prefer existing Tools and Skills. Use a Skill for reusable guidance; use a Tool for deterministic actions.\n3. Use task_push only for a genuinely separable subtask. Pass minimal structured context and a precise outputSchema, then wait for its verified result.\n4. For questions about imported material, use knowledge_search then knowledge_read. Cite the returned VFS path and do not claim support from a source you did not retrieve.\n5. Verify tool results. Never claim a browser action, message delivery, file change, or network request succeeded without a confirming result.\n6. Keep the active session coherent across side panel and connected channels. Use prior successful tool trajectories as verified examples, especially after switching providers.\n\n## Workspace discipline\n- Read a file before changing it. Use fs_edit or expectedVersion for existing files.\n- Put durable facts, decisions, constraints, and open loops in MEMORY.md. Put dated working notes in memory/YYYY-MM-DD.md.\n- Put source files in /workspace/knowledge and index text material with knowledge_ingest. The index is local metadata and chunks; the original source remains in VFS.\n- Put reusable website or task instructions in Skills; put stable page parsing logic in VFS JavaScript only when normal Tools are insufficient.\n- Never store passwords, OAuth tokens, cookies, API keys, private message contents, or other secrets in workspace memory.`,
   "SOUL.md": `# Soul\n\nWebClaw is calm, practical, precise, and honest about uncertainty. It acts only when an action clearly follows from the user request and reports outcomes grounded in tool results.\n\nUse the user's language when practical. Prefer concise answers with concrete next steps. Avoid inventing page state, external facts, completed actions, or capabilities. When an action is risky, irreversible, public, or sends a message, verify the target and content first.\n\nLearn from successful work without blindly repeating it: reuse verified tool argument patterns, and use errors to correct the next call.`,
-  "TOOLS.md": `# Tool Notes\n\n## Discovery\nOnly a compact core Tool set is initially visible. Call tool_search with a task description, category, or bundle before using an enabled capability that is not loaded in the current run. Loading is run-scoped and never changes global settings.\n\n## Browser\nUse page_snapshot before unfamiliar page interaction. Use page_action for click, type, select, check, hover, focus, keypress, scroll, and submit; use page_wait to verify asynchronous state. Use page_extract for bounded links, tables, forms, metadata, JSON-LD, text, or selector data. Use browser_tabs for tab lifecycle, page_screenshot to save the visible tab to VFS, and page_file_input to place a VFS file in a page file input. page_storage accesses only the active origin's localStorage/sessionStorage, never cookies. Optional browser-personal-data Tools require their matching Chrome permission. Use browser_clipboard_read for clipboard reads and browser_clipboard_write for writes; never request write access for a read-only task. Use run_js only for logic normal Tools cannot express; ad-hoc calls require approval every time.\n\n## Tasks\nUse task_push for a separable child task that benefits from an independent model context. Provide complete instruction, minimal JSON context, a precise outputSchema, and a reasonable maxSteps value. The parent waits for the validated output. Use task_stack to inspect active frames and budget. Tasks are ephemeral and do not replace reusable Workflow Tools.\n\n## VFS and knowledge\n/workspace is durable agent context. Use fs_stat for metadata, fs_glob to discover paths, fs_hash to verify content identity, and fs_diff to compare text files. Use fs_manage for mkdir, move, copy, touch, and recoverable trash operations; use fs_trash for list, restore, purge, and empty. The fs_shell rm command also moves items to /.trash. Use fs_archive for portable VFS archives and fs_preview_open for static-site previews. /workspace/knowledge holds source files, while the local knowledge index stores only chunks and metadata. Use knowledge_ingest for text sources, knowledge_search for retrieval, knowledge_read for additional context, and knowledge_reindex after source changes. /inbox stores channel media, /skills stores reusable scripts or references, and /exports stores output.\n\n## Network and messaging\nUse search_web for current facts, get_weather for weather, and background http_request for cross-origin requests. http_request can send JSON, URL-encoded forms, and multipart VFS files, and can save bounded binary responses to VFS. qiyewechat_notification uses the webhook configured on that Tool. Connected Channels receive and reply through the active chat session.\n\n## Configuration\nTools, Skills, Schedules, Providers, and Channels are configuration-managed. Self-management and Schedules are optional advanced features. Inspect configuration first, propose a validated patch, then apply it. Do not invent direct chrome.storage writes.\n\n## Recovery\nTool results use an ok/data/error/meta envelope in model context. For ok:false, read the error and supplied valid example, then correct arguments or choose another approach. Never repeat an invalid call unchanged.`,
+  "TOOLS.md": `# Tool Notes\n\n## Discovery\nOnly a compact core Tool set is initially visible. Call tool_search with a task description, category, or bundle before using an enabled capability that is not loaded in the current run. Loading is run-scoped and never changes global settings.\n\n## Browser\nUse page_snapshot before unfamiliar page interaction. Use page_action for click, type, select, check, hover, focus, keypress, scroll, and submit; use page_wait to verify asynchronous state. Use page_extract for bounded links, tables, forms, metadata, JSON-LD, text, or selector data. Use browser_tabs for tab lifecycle, page_screenshot to save the visible tab to VFS, and page_file_input to place a VFS file in a page file input. page_storage accesses only the active origin's localStorage/sessionStorage, never cookies. Optional browser-personal-data Tools require their matching Chrome permission. Use browser_clipboard_read for clipboard reads and browser_clipboard_write for writes; never request write access for a read-only task. Use run_js only for logic normal Tools cannot express; ad-hoc calls require approval every time.\n\n## Tasks\nUse task_push for a separable child task that benefits from an independent model context. Provide complete instruction, minimal JSON context, a precise outputSchema, and a reasonable maxSteps value. The parent waits for the validated output. Use task_stack to inspect active frames and budget. Tasks are ephemeral and do not replace reusable Workflow Tools.\n\n## Documents\nCall document_inspect first to identify format, version, hash, and capabilities. The current browser phase implements Markdown only. Call document_schema with format=markdown and the operation (create, edit, or export) before creating or changing a Markdown document. Use document_create for a new absolute VFS path, document_read with a line_range or heading locator for bounded context, and document_edit with expectedVersion or expectedHash for conflict-safe changes. Use document_render for a VFS HTML preview and document_export for Markdown or HTML output. Office adapters for DOCX, XLSX, PPTX, and PDF are planned and must not be claimed as supported until document_inspect reports capabilities.\n\n## VFS and knowledge\n/workspace is durable agent context. Use fs_stat for metadata, fs_glob to discover paths, fs_hash to verify content identity, and fs_diff to compare text files. Use fs_manage for mkdir, move, copy, touch, and recoverable trash operations; use fs_trash for list, restore, purge, and empty. The fs_shell rm command also moves items to /.trash. Use fs_archive for portable VFS archives and fs_preview_open for static-site previews. /workspace/knowledge holds source files, while the local knowledge index stores only chunks and metadata. Use knowledge_ingest for text sources, knowledge_search for retrieval, knowledge_read for additional context, and knowledge_reindex after source changes. /inbox stores channel media, /skills stores reusable scripts or references, and /exports stores output.\n\n## Network and messaging\nUse search_web for current facts, get_weather for weather, and background http_request for cross-origin requests. http_request can send JSON, URL-encoded forms, and multipart VFS files, and can save bounded binary responses to VFS. qiyewechat_notification uses the webhook configured on that Tool. Connected Channels receive and reply through the active chat session.\n\n## Configuration\nTools, Skills, Schedules, Providers, and Channels are configuration-managed. Self-management and Schedules are optional advanced features. Inspect configuration first, propose a validated patch, then apply it. Do not invent direct chrome.storage writes.\n\n## Recovery\nTool results use an ok/data/error/meta envelope in model context. For ok:false, read the error and supplied valid example, then correct arguments or choose another approach. Never repeat an invalid call unchanged.`,
   "IDENTITY.md": `# Identity\n\nName: WebClaw\nRole: A Chrome extension AI agent with browser tools, connected chat channels, model providers, schedules, and a virtual filesystem.\n\nWebClaw operates within Chrome extension permissions and configured services. VFS scripts and Skills can extend reusable workflows, but they cannot grant permissions that the extension does not have.`,
   "USER.md": `# User Preferences\n\nRecord only durable preferences that the user explicitly states or repeatedly demonstrates. Examples: preferred language, preferred output format, notification conventions, recurring project context, and risk tolerance.\n\nDo not infer sensitive personal data. Do not store credentials, access tokens, cookies, private media, or temporary one-off requests.`,
   "MEMORY.md": `# Long-Term Memory\n\n## What belongs here\n- Stable user preferences and working conventions\n- Confirmed project facts, decisions, constraints, and unresolved tasks\n- Reusable provider, channel, or workflow conventions that remain valid\n\n## What does not belong here\n- Raw chat transcripts, large page captures, tool dumps, secrets, tokens, cookies, passwords, or transient details\n\nKeep entries short, dated when useful, and remove stale information. Use daily files under memory/ for temporary execution notes before promoting durable facts here.`
 };
+WORKSPACE_BOOTSTRAP_TEMPLATES["TOOLS.md"] = WORKSPACE_BOOTSTRAP_TEMPLATES["TOOLS.md"]
+  .replace("The current browser phase implements Markdown only.", "Markdown supports full operations; DOCX, XLSX, and PPTX support basic creation and rebuild editing; PDF supports ASCII text-page creation; all four binary formats support bounded read projections.")
+  .replace("Office adapters for DOCX, XLSX, PPTX, and PDF are planned and must not be claimed as supported until document_inspect reports capabilities.", "Office/PDF projections preserve original bytes and report fidelity=projection with warnings. Use document_revision to list or restore automatic pre-write snapshots, and purge only with confirm=true. Do not claim unsupported layout preservation, formula recalculation, page-isolated PDF extraction, or OCR.");
 const DEFAULT_KNOWLEDGE_MANUAL_PATH = "/workspace/knowledge/WEBCLAW_MANUAL.md";
 const REPLACEABLE_DEFAULT_KNOWLEDGE_MANUAL_HASHES = new Set([
   "nm8OatV55Up1ouTgkfddjbPZPh1Cby_vZKzjJYN0iug",
@@ -351,10 +364,10 @@ const REPLACEABLE_DEFAULT_KNOWLEDGE_MANUAL_HASHES = new Set([
   "ebvLDmJq-nzX4Kn5D2uASmSHK55uO-X6VMG8Fhg6Rwo",
   "8Q4-Lrp4wlIcHOAUmRZJZXbY-hxxTEOPi4HUEYIWegw"
 ]);
-const DEFAULT_KNOWLEDGE_MANUAL = `<!-- webclaw-default-manual: 0.6.1-r2 -->
+const DEFAULT_KNOWLEDGE_MANUAL = `<!-- webclaw-default-manual: 0.7.0-r1 -->
 # WebClaw Operation Manual
 
-Built-in operating reference for WebClaw 0.6.1. The file is stored in VFS and indexed into the local knowledge base. WebClaw upgrades an unchanged historical default copy, but preserves a copy that the user has edited.
+Built-in operating reference for WebClaw 0.7.0. The file is stored in VFS and indexed into the local knowledge base. WebClaw upgrades an unchanged historical default copy, but preserves a copy that the user has edited.
 
 ## 1. What WebClaw is
 WebClaw is a Chrome extension AI agent. It can converse in the side panel and through connected WeChat or Telegram channels, use configured model providers, operate the active browser tab, use a browser-backed virtual filesystem (VFS), run schedules, and retain durable workspace context.
@@ -491,6 +504,9 @@ For existing files, read first and pass expectedVersion to fs_write or fs_edit w
 
 Listing / shows the VFS root directories. Text reads support startLine and endLine. Binary images and files can be preserved as original Blob data, downloaded through the file manager, or attached to supported model requests; they are not operating-system paths.
 
+## 7.1 Document tools
+The document layer supports full Markdown operations, basic DOCX/XLSX/PPTX creation and rebuild editing, ASCII text-page PDF creation, and bounded read projections for DOCX, XLSX, PPTX, and PDF. Use document_inspect first; it reports the format, hash, version, structure, and capabilities. For create, edit, or export, call document_schema first and pass its schemaVersion. document_read supports bounded Markdown/JSON output with line, heading, DOCX paragraph, XLSX cell, or PPTX slide locators. PDF page isolation is not implemented, so do not use a pdf_page locator or attribute whole-document text to one page. document_edit supports Markdown and DOCX/XLSX/PPTX with editMode=rebuild; existing files require expectedVersion or expectedHash to prevent stale overwrites. Document writes automatically snapshot the prior VFS Blob. document_revision lists, snapshots, restores, or permanently purges revisions; restore also snapshots the current file first, and purge requires confirm=true. document_render writes a Markdown HTML preview to VFS. document_export writes Markdown/HTML sources or Office/PDF projections to Markdown/JSON at a different path. The file manager opens Markdown and Office/PDF projections in an independent viewer. Rebuild edits do not preserve styles, charts, macros, images, fields, animations, or external links. The built-in PDF writer rejects non-ASCII text and does not support forms, images, annotations, embedded fonts, or arbitrary layout.
+
 ## 8. Workspace bootstrap and memory
 At agent startup, WebClaw reads bounded context from:
 - AGENTS.md: operating rules.
@@ -597,6 +613,7 @@ function buildAgentSystemPrompt(settings) {
     hasTool("run_js") ? "Prefer selectors and normal tools for page operations. Use run_js only when normal tools are insufficient. run_js accepts exactly one of inline code or vfsPath for a virtual .js file." : "",
     hasTool("task_push") ? "For a genuinely separable part of a large task, task_push creates an ephemeral child task with an independent context. Pass only the needed context and a precise outputSchema, wait for its structured result, and keep simple sequential work in the current task. A child task may use task_push again within the task-stack budget." : "",
     hasTool("fs_shell") ? "The current virtual filesystem working directory is provided in the system context; fs_shell resolves relative paths from it. When the user asks to change directories, call fs_shell with command `cd <path>` and wait for its result; do not merely claim that the directory changed. Use an explicit cwd only when intentionally operating elsewhere." : "",
+    hasTool("document_inspect") ? "For document work, call document_inspect first. Markdown has full support; DOCX/XLSX/PPTX have basic create and rebuild-edit support; PDF has ASCII text creation; all binary formats have bounded projections. Call document_schema before document_create, document_edit, or document_export, pass schemaVersion, and use expectedVersion or expectedHash for existing-file writes. Respect fidelity and warnings, and never claim PDF page isolation when it is unavailable." : "",
     hasTool("propose_webclaw_config_patch")
       ? "You can improve WebClaw by first calling list_webclaw_config, then propose_webclaw_config_patch, then apply_webclaw_config_patch after the proposal is validated. Use set_active_provider with an existing providerId to change the default Provider; never attempt to read or write Provider credentials. Never invent raw chrome.storage writes. Prefer a skill for reusable knowledge, a tool for executable capability, and a schedule for recurring work."
       : ""
@@ -1086,6 +1103,8 @@ async function handleMessage(message, sender) {
     case "WEBCLAW_ENSURE_WORKSPACE_DEFAULTS":
       await initializeWorkspaceDefaults();
       return { ok: true };
+    case "WEBCLAW_DOCUMENT_READ_VIEW":
+      return { ok: true, result: await documentRead(required(message.path, "path"), { maxChars: 200_000 }) };
     case "WEBCLAW_SAVE_SETTINGS":
       return { ok: true, settings: await saveSettings(message.settings || {}) };
     case "WEBCLAW_WECHAT_STORAGE_GET":
@@ -4356,7 +4375,7 @@ async function ensureDefaultKnowledgeManual() {
   }
   await knowledgeIngestVfsFile(DEFAULT_KNOWLEDGE_MANUAL_PATH, {
     title: "WebClaw Operation Manual",
-    tags: ["webclaw", "manual", "operations", "0.6.1"]
+    tags: ["webclaw", "manual", "operations", "0.7.0"]
   });
 }
 
@@ -6076,6 +6095,22 @@ async function dispatchTool(name, args, settings, options = {}) {
       return runFsArchive(args);
     case "fs_preview_open":
       return openVfsPreview(args);
+    case "document_inspect":
+      return documentInspect(required(args.path, "path"), args);
+    case "document_read":
+      return documentRead(required(args.path, "path"), args);
+    case "document_schema":
+      return documentSchema(required(args.format, "format"), required(args.operation, "operation"), args);
+    case "document_create":
+      return documentCreate(args);
+    case "document_edit":
+      return documentEdit(args);
+    case "document_render":
+      return documentRender(args);
+    case "document_export":
+      return documentExport(args);
+    case "document_revision":
+      return documentRevision(args);
     case "knowledge_ingest":
       return knowledgeIngestVfsFile(required(args.path, "path"), args);
     case "knowledge_search":

@@ -28,6 +28,7 @@ or message channels.
 - Preview pages run in an isolated Extension Sandbox. They receive a project-scoped `localStorage` compatibility layer persisted in this browser, without access to extension credentials. This compatibility layer is not the real website-origin `localStorage`.
 - Restricted `fs_shell`: provides `pwd`, `cd`, `ls`, `stat`, `mkdir`, `touch`, `cat`, `cp`, `mv`, and `rm` in that extension-private filesystem without running a real system shell. `cd` updates the current session's working directory.
 - Local knowledge base: indexes VFS text files in browser-local IndexedDB with collection/path/tag/time filters and `knowledge_reindex`; a WebClaw operation manual is created and indexed on first startup.
+- Office documents: the unified `documents` Tool bundle provides full Markdown operations, basic DOCX/XLSX/PPTX creation and rebuild editing, ASCII-text PDF creation, and bounded DOCX/XLSX/PPTX/PDF projection reading, export, preview, and revision recovery.
 - Dynamic Tool exposure: each run starts with a compact core set; `tool_search` loads matching enabled Tools by task, category, or bundle for that run, reducing ambiguity for smaller models.
 - Workspace memory: initializes `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, and daily memory files, then injects bounded workspace context before each agent run.
 - Bounded structured tool trajectories: preserves tool outcomes and failure reasons for later turns and cross-provider continuation.
@@ -72,6 +73,7 @@ A Workflow remains a persistent reusable custom Tool, while a Task is an ephemer
 - [Chrome Web Store listing material](STORE_LISTING.md)
 - [Agent Loop architecture and recovery semantics](docs/agent-loop-architecture.md)
 - [0.6.1 Tool upgrade plan (Chinese)](docs/tool-upgrade-plan.md)
+- [0.7.0 Office document capability plan and implementation status (Chinese)](docs/office-document-capability-plan.md)
 - [License](LICENSE)
 
 ## Load in Chrome

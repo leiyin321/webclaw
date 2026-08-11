@@ -11,7 +11,7 @@ import {
 const definitions = builtinToolDefinitions();
 const names = definitions.map((tool) => tool.name);
 
-assert.equal(definitions.length, 53);
+assert.equal(definitions.length, 61);
 assert.equal(new Set(names).size, names.length);
 assert.deepEqual(builtinToolUiDefinitions().map((tool) => tool.name), names);
 for (const removed of ["get_page_context", "click", "type_text", "navigate", "chrome_api", "wait", "send_wecom_message", "browser_clipboard", "fs_mkdir", "fs_move", "fs_delete", "fs_restore", "fs_purge", "fs_empty_trash"]) {
@@ -19,7 +19,9 @@ for (const removed of ["get_page_context", "click", "type_text", "navigate", "ch
   assert.equal(isRemovedBuiltinToolName(removed), true, `${removed} must remain reserved after removal`);
 }
 
-assert.equal(definitions.length, 53, "0.6.1 must expose the reviewed canonical built-in Tool set");
+assert.equal(definitions.length, 61, "the reviewed canonical built-in Tool set count changed; update this assertion intentionally");
+assert.ok(definitions.find((tool) => tool.name === "document_create").inputSchema.properties.expectedHash);
+assert.doesNotMatch(definitions.find((tool) => tool.name === "document_read").inputSchema.properties.locator.description, /pdf_page/);
 for (const definition of definitions) {
   assert.ok(definition.inputSchema && definition.inputSchema.type === "object", `${definition.name} must have an object input Schema`);
   assert.ok(Array.isArray(definition.effects) && definition.effects.length > 0, `${definition.name} must declare effects`);

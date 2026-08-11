@@ -1,6 +1,6 @@
 # WebClaw 隐私政策 / Privacy Policy
 
-生效日期 / Effective date: 2026-07-25
+生效日期 / Effective date: 2026-08-11
 
 WebClaw 是一个“用户控制的浏览器 AI 助手”。它的单一用途是让用户在 Chrome 中与自己选择的模型对话，并在用户授权后执行网页操作、Tool、Channel 和可选的高级自动化。WebClaw 项目不运营用于转发提示词、网页内容或模型响应的后端服务。
 
@@ -17,6 +17,7 @@ WebClaw 可在 Chrome 扩展存储和浏览器 IndexedDB 中保存：
 - Tools、Skills、Schedules、Channels 及其启用状态；
 - Telegram bot token、企业微信机器人 webhook、微信登录凭证和通道状态；
 - 虚拟文件系统（VFS）、知识库索引以及 Channel 接收的图片或文件；
+- DocumentService 在修改或恢复 VFS 文档前保存的本地 revision Blob；每个路径会按数量和容量自动裁剪，用户也可以通过确认的清理操作永久删除；
 - VFS 静态预览使用的项目级 `localStorage` 兼容数据；这些数据保存在扩展的浏览器存储中，不是网页真实 origin 的存储，也不包含扩展凭证；
 - 用户对产品披露、外部 Provider 和站点权限作出的选择；
 - 最近的 Channel 授权回复路由，以及用户保存的精确 Schedule 操作授权指纹。
@@ -30,6 +31,7 @@ WebClaw may store the following in Chrome extension storage and browser IndexedD
 - Tools, Skills, Schedules, Channels, and their enabled state;
 - Telegram bot tokens, enterprise WeChat robot webhooks, WeChat credentials, and channel state;
 - the virtual file system (VFS), local knowledge index, and images or files received from Channels;
+- local revision Blobs saved by DocumentService before changing or restoring a VFS document; revisions are automatically pruned by per-path count and size limits and can also be permanently purged through a confirmed action;
 - project-scoped `localStorage` compatibility data used by VFS static previews; it is stored in extension browser storage, is not the website's real origin storage, and does not include extension credentials;
 - user choices for product disclosure, external providers, and site permissions;
 - recent Channel routes used for authorization replies and fingerprints of exact Schedule operations approved by the user.
@@ -96,9 +98,9 @@ WebClaw does not sell or rent personal data, use it for advertising or credit de
 
 ## 6. 保留、删除和撤销 / Retention, Deletion, and Revocation
 
-本地数据会保留到用户在 WebClaw 中删除相应会话、文件、Provider、Channel、Tool、Skill 或 Schedule，清除扩展存储，或卸载扩展。卸载扩展不会自动撤销第三方账户已经签发的 OAuth token；用户还应在相应服务的账户安全页面撤销授权。第三方已经接收的数据由其自身保留政策管理。
+本地数据会保留到用户在 WebClaw 中删除相应会话、文件、文档 revision、Provider、Channel、Tool、Skill 或 Schedule，清除扩展存储，或卸载扩展。文档 revision 还会由 DocumentService 的本地保留上限自动裁剪。卸载扩展不会自动撤销第三方账户已经签发的 OAuth token；用户还应在相应服务的账户安全页面撤销授权。第三方已经接收的数据由其自身保留政策管理。
 
-Local data remains until the user deletes the corresponding conversation, file, Provider, Channel, Tool, Skill, or Schedule; clears extension storage; or uninstalls the extension. Uninstalling does not automatically revoke OAuth tokens already issued by a third party; users should also revoke access from that service's account-security page. Data already received by a third party is governed by that party's retention policy.
+Local data remains until the user deletes the corresponding conversation, file, document revision, Provider, Channel, Tool, Skill, or Schedule; clears extension storage; or uninstalls the extension. Document revisions are also automatically pruned by DocumentService retention limits. Uninstalling does not automatically revoke OAuth tokens already issued by a third party; users should also revoke access from that service's account-security page. Data already received by a third party is governed by that party's retention policy.
 
 用户可以在 Chrome 的扩展详情页撤销站点访问权限。撤销后，相关网页、Provider、Channel 或网络 Tool 将无法工作，直到用户再次明确授权。
 

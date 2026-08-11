@@ -22,6 +22,7 @@ WebClaw 目前是实验性的浏览器原生 Agent 框架，适合本地开发�
 - VFS 静态网页预览：文件管理器中的 HTML/HTM/XHTML/SVG 文件可直接打开到独立 Chrome 标签页，预览运行时会从 VFS 加载同目录的 CSS、JS、图片、字体和 JSON 资源。
 - 预览页面运行在隔离的 Extension Sandbox 中；网页可使用由 WebClaw 提供的项目级 `localStorage` 兼容层，数据保存在浏览器本地，不访问扩展凭证。该兼容层不是网站真实 origin 的 `localStorage`。
 - 本地知识库：将 VFS 文本文件索引到浏览器本地 IndexedDB，支持 collection/path/tag/time 过滤和 `knowledge_reindex`；首次启动会创建并索引 WebClaw 操作手册。
+- 办公文档：统一的 `documents` Tool bundle 支持 Markdown 完整操作、DOCX/XLSX/PPTX 基础创建与 rebuild 编辑、ASCII 文本 PDF 创建，以及 DOCX/XLSX/PPTX/PDF 的受限投影读取、导出、预览和 revision 恢复。
 - 动态 Tool 暴露：每轮只向模型注入核心能力，模型可调用 `tool_search` 按任务、分类或 bundle 加载当前运行所需的已启用 Tool，减少小模型选择歧义。
 - 工作区记忆：自动初始化 `AGENTS.md`、`SOUL.md`、`TOOLS.md`、`IDENTITY.md`、`USER.md`、`MEMORY.md` 及每日记忆文件，并在每次 Agent 运行前按上下文预算注入。
 - 受控 Tool 轨迹：保留受限长度的工具结果和失败原因，用于后续会话与 Provider 切换时的自我纠错。
@@ -70,6 +71,7 @@ Workflow 仍是持久化、可复用的自定义 Tool；Task 是仅在一次执�
 - [Chrome Web Store 上架资料](STORE_LISTING.md)
 - [Agent Loop 架构与恢复语义](docs/agent-loop-architecture.md)
 - [0.6.1 Tool 升级改造规划](docs/tool-upgrade-plan.md)
+- [0.7.0 办公文档能力设计与实现状态](docs/office-document-capability-plan.md)
 - [许可证](LICENSE)
 
 ## 在 Chrome 中加载

@@ -178,7 +178,7 @@ requireCondition(
   "controlled active Provider switching and rollback are missing"
 );
 requireCondition(
-  source.includes("webclaw-default-manual: 0.6.1-r2") &&
+  source.includes("webclaw-default-manual: 0.7.0-r1") &&
     source.includes("REPLACEABLE_DEFAULT_KNOWLEDGE_MANUAL_HASHES") &&
     source.includes("qxBFf1iNGSrbPVRGoSSOQUH8Mu9b6rgnrTBznpwsH1s") &&
     source.includes("qmON25C52Otm3zxd8xOE_dlGJ9DX-j61ECdtgLwChHA") &&
@@ -189,7 +189,7 @@ requireCondition(
     source.includes("ebvLDmJq-nzX4Kn5D2uASmSHK55uO-X6VMG8Fhg6Rwo") &&
     source.includes("8Q4-Lrp4wlIcHOAUmRZJZXbY-hxxTEOPi4HUEYIWegw") &&
     source.includes("expectedVersion: existing.entry.version") &&
-    source.includes('"webclaw", "manual", "operations", "0.6.1"'),
+    source.includes('"webclaw", "manual", "operations", "0.7.0"'),
   "versioned default knowledge manual migration is missing"
 );
 requireCondition(

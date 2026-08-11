@@ -21,6 +21,7 @@ for test_file in \
   scripts/test-preview-sandbox.mjs \
   scripts/test-tool-registry.mjs \
   scripts/test-vfs-tools.mjs \
+  scripts/test-document-service.mjs \
   scripts/test-agent-tool-scheduler.mjs
 do
   node "$test_file"

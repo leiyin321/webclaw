@@ -328,6 +328,40 @@ const BUILTIN_TOOL_DEFINITIONS = [
   definition("fs_preview_open", "vfs", "Open an HTML, HTM, XHTML, or SVG VFS file in WebClaw's isolated static-site preview tab.",
     object({ path: string({ minLength: 1 }) }, ["path"]), { path: "/workspace/site/index.html" },
     write("chrome:tabs", "unknown", "interactive"), { permissions: ["tabs"] }),
+  definition("document_inspect", "document", "Inspect a VFS document format, structure, version, hash, capabilities, and warnings without returning the full content.",
+    object({ path: string({ minLength: 1 }), includeOutline: boolean() }, ["path"]),
+    { path: "/workspace/documents/report.md", includeOutline: true },
+    read("document:args.path"), { bundle: "documents" }),
+  definition("document_read", "document", "Read a bounded Markdown, DOCX, XLSX, PPTX, or PDF projection by line range, heading, paragraph, cell, or slide when supported. PDF page isolation is unavailable.",
+    object({
+      path: string({ minLength: 1 }), locator: openObject("Optional line_range, heading, docx_paragraph, xlsx_cell, or pptx_slide locator."), output: string({ enum: ["markdown", "json"] }), maxChars: integer({ minimum: 500, maximum: 200000 })
+    }, ["path"]),
+    { path: "/workspace/documents/report.md", output: "markdown", maxChars: 12000 },
+    read("document:args.path"), { bundle: "documents" }),
+  definition("document_schema", "document", "Return the exact versioned create, edit, or export schema for a supported document format.",
+    object({ format: string({ minLength: 1 }), operation: string({ enum: ["read", "create", "edit", "export"] }), actions: array(string()) }, ["format", "operation"]),
+    { format: "markdown", operation: "edit", actions: ["replace_text", "insert_after_heading"] },
+    read("document:schema"), { bundle: "documents" }),
+  definition("document_create", "document", "Create a supported document in VFS from a versioned format-specific structured specification.",
+    object({ path: string({ minLength: 1 }), format: string({ minLength: 1 }), schemaVersion: string({ minLength: 1 }), spec: openObject(), overwrite: boolean(), expectedVersion: integer({ minimum: 0 }), expectedHash: string(), createParents: boolean() }, ["path", "format", "schemaVersion", "spec"]),
+    { path: "/workspace/documents/report.md", format: "markdown", schemaVersion: "markdown-1", spec: { content: "# Report\n" }, createParents: true },
+    write("document:args.path", "retry_safe"), { bundle: "documents" }),
+  definition("document_edit", "document", "Apply version-checked structured edits to a supported VFS document and return the new version, hash, changes, and warnings.",
+    object({ path: string({ minLength: 1 }), format: string({ minLength: 1 }), schemaVersion: string({ minLength: 1 }), expectedVersion: integer({ minimum: 0 }), expectedHash: string(), editMode: string({ enum: ["preserve", "rebuild"] }), operations: array(openObject("Format-specific document edit operation."), { minItems: 1, maxItems: 100 }) }, ["path", "format", "schemaVersion", "operations"]),
+    { path: "/workspace/documents/report.md", format: "markdown", schemaVersion: "markdown-1", expectedVersion: 1, operations: [{ op: "replace_text", oldText: "Draft", newText: "Final" }] },
+    write("document:args.path", "retry_safe"), { bundle: "documents" }),
+  definition("document_render", "document", "Render a supported document to a safe local VFS HTML preview for inspection or model visual review.",
+    object({ path: string({ minLength: 1 }), outputPath: string(), title: string(), selection: openObject() }, ["path"]),
+    { path: "/workspace/documents/report.md", outputPath: "/cache/document-previews/report.html" },
+    write("document:args.path", "retry_safe"), { bundle: "documents" }),
+  definition("document_export", "document", "Export a supported document to another supported VFS representation without overwriting the source.",
+    object({ path: string({ minLength: 1 }), targetFormat: string({ enum: ["markdown", "html", "json"] }), outputPath: string({ minLength: 1 }), options: openObject() }, ["path", "targetFormat", "outputPath"]),
+    { path: "/workspace/documents/report.md", targetFormat: "html", outputPath: "/exports/report.html" },
+    write("document:args.path", "retry_safe"), { bundle: "documents" }),
+  definition("document_revision", "document", "Create, list, restore, or permanently purge versioned VFS document snapshots with optimistic concurrency checks.",
+    object({ action: string({ enum: ["snapshot", "list", "restore", "purge"] }), path: string({ minLength: 1 }), revisionId: string(), expectedVersion: integer({ minimum: 0 }), expectedHash: string(), limit: integer({ minimum: 1, maximum: 200 }), confirm: boolean() }, ["action", "path"]),
+    { action: "list", path: "/workspace/documents/report.md", limit: 20 },
+    write("document:args.path", "action_dependent"), { bundle: "documents" }),
   definition("knowledge_ingest", "knowledge", "Index a text file from VFS for local knowledge search.",
     object({ path: string({ minLength: 1 }), title: string(), tags: array(string()), collection: string() }, ["path"]),
     { path: "/workspace/knowledge/product-notes.md", tags: ["product", "notes"] },
@@ -453,6 +487,7 @@ export function builtinToolExecutionMetadata(name, args = {}) {
 function resolveResourceKeys(kind, args) {
   if (kind === "network:args.url") return [`network:${safeOrigin(args.url)}`];
   if (kind === "vfs:args.path") return [`vfs:${String(args.path || "/workspace")}`];
+  if (kind === "document:args.path") return [`vfs:${String(args.path || "/workspace")}`];
   if (kind === "vfs:args.from+args.to") return [
     `vfs:${String(args.from || "/")}`,
     `vfs:${String(args.to || "/")}`
