@@ -4,9 +4,12 @@ All notable changes to WebClaw will be documented in this file.
 
 ## Unreleased
 
+## 0.7.4
+
 - Fix `extension` run_js RPC startup in Manifest Sandbox workers where `crypto.randomUUID()` is unavailable by using a run-local monotonic call ID.
 - Add safe Markdown rendering for assistant final and streaming responses in the Side Panel. The renderer supports headings, bold/italic/deletion, ordered and unordered lists, task items, blockquotes, separators, inline code, fenced code blocks, tables, and links. User, Channel, Tool, Plan, and Task messages remain plain text so structured execution output is not reinterpreted as HTML.
 - Keep the original Markdown source separately from rendered DOM so streaming deltas append correctly and persisted sessions render consistently after reload. Raw HTML is escaped, `javascript:` and relative links are blocked in chat, and remote images are represented as inert links instead of being fetched automatically. See [chat Markdown rendering](docs/chat-markdown-rendering.md).
+- Update bilingual README documentation, the built-in operation manual, release validation, and regression coverage for the chat rendering and sandbox compatibility changes.
 
 ## 0.7.3
 

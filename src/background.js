@@ -400,12 +400,13 @@ const REPLACEABLE_DEFAULT_KNOWLEDGE_MANUAL_HASHES = new Set([
   "yw9YuL1Vy3_VyqxVFkDzr5e4fJ3Nkhc-Z37vJmeoaOk",
   "t22iHPwq8td1DdSnld0Ey3QPw3A9eaQzClv8D4EfT38",
   "lD_L4uzIxOylcZH0I5DOQISmKUDao_KdL4tyvp0Y0Gw",
-  "Fv9ygZ0Hf9ctlpzqjAHk8zAEi6qi2uk40UEca0bxtfY"
+  "Fv9ygZ0Hf9ctlpzqjAHk8zAEi6qi2uk40UEca0bxtfY",
+  "M77prNJ7uN7d-V84ce-edBw-93j6A3KELtFDhMjkZ_0"
 ]);
-const DEFAULT_KNOWLEDGE_MANUAL = `<!-- webclaw-default-manual: 0.7.3-r1 -->
+const DEFAULT_KNOWLEDGE_MANUAL = `<!-- webclaw-default-manual: 0.7.4-r1 -->
 # WebClaw Operation Manual
 
-Built-in operating reference for WebClaw 0.7.3. The file is stored in VFS and indexed into the local knowledge base. WebClaw upgrades an unchanged historical default copy, but preserves a copy that the user has edited.
+Built-in operating reference for WebClaw 0.7.4. The file is stored in VFS and indexed into the local knowledge base. WebClaw upgrades an unchanged historical default copy, but preserves a copy that the user has edited.
 
 ## 1. What WebClaw is
 WebClaw is a Chrome extension AI agent. It can converse in the side panel and through connected WeChat or Telegram channels, use configured model providers, operate the active browser tab, use a browser-backed virtual filesystem (VFS), run schedules, and retain durable workspace context.
@@ -427,6 +428,7 @@ WebClaw is user controlled:
 - When history exceeds the active model adapter's budget, WebClaw compacts older messages into bounded factual execution state while retaining recent context. The summary must preserve goals, constraints, verified Tool results, relevant errors, identifiers, and unfinished work.
 - Create a new session for unrelated work. Clear a session to remove its conversation history; durable workspace files and the knowledge index are separate.
 - Switching providers does not erase the session. Reuse prior verified tool results, but re-check current browser state before acting.
+- Assistant final responses and streaming text are displayed as safe Markdown in the Side Panel; Tool calls, Tool results, Plans, Tasks, and Channel messages remain structured or plain text.
 
 ## 2.1 Agent execution and recovery
 - Every Provider uses the same AgentRunner state machine. Visible states include model sampling, response normalization, action validation, Tool execution, observation recording, progress evaluation, bounded recovery, completion, failure, interruption, and stuck detection.
@@ -4457,7 +4459,7 @@ async function ensureDefaultKnowledgeManual() {
   }
   await knowledgeIngestVfsFile(DEFAULT_KNOWLEDGE_MANUAL_PATH, {
     title: "WebClaw Operation Manual",
-    tags: ["webclaw", "manual", "operations", "0.7.3"]
+    tags: ["webclaw", "manual", "operations", "0.7.4"]
   });
 }
 

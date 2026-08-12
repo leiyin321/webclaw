@@ -7,8 +7,9 @@ Use this checklist for GitHub and Chrome Web Store releases.
 1. Start from a clean release branch.
 2. Update `manifest.json` version using Chrome's one-to-four integer format.
 3. Add the matching section to `CHANGELOG.md`.
-4. Confirm credentials and Client Secrets are absent. The temporary public Codex CLI and GitHub Copilot compatibility Client IDs must each appear only in `src/oauth-clients.js`, be disclosed in `OAUTH.md`, and be replaced with distributor-controlled identities when practical. Do not add any other borrowed OAuth Client ID.
-5. Review `PRIVACY.md`, `OAUTH.md`, `STORE_LISTING.md`, and permission justifications.
+4. Review all user-facing documentation against the diff: `README.md`, `README.en.md`, `CHANGELOG.md`, relevant `docs/` files, `PRIVACY.md`, `OAUTH.md`, and `STORE_LISTING.md`. Add or update a focused document when a behavior or security boundary changes.
+5. Confirm credentials and Client Secrets are absent. The temporary public Codex CLI and GitHub Copilot compatibility Client IDs must each appear only in `src/oauth-clients.js`, be disclosed in `OAUTH.md`, and be replaced with distributor-controlled identities when practical. Do not add any other borrowed OAuth Client ID.
+6. Review `PRIVACY.md`, `OAUTH.md`, `STORE_LISTING.md`, and permission justifications.
 
 ## 2. Validate
 
