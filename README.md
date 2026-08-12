@@ -70,6 +70,7 @@ Workflow 仍是持久化、可复用的自定义 Tool；Task 是仅在一次执�
 - [OAuth 配置与发布建议](OAUTH.md)
 - [Chrome Web Store 上架资料](STORE_LISTING.md)
 - [Agent Loop 架构与恢复语义](docs/agent-loop-architecture.md)
+- [会话 Markdown 渲染说明](docs/chat-markdown-rendering.md)
 - [0.6.1 Tool 升级改造规划](docs/tool-upgrade-plan.md)
 - [0.7.x 办公文档能力设计与实现状态](docs/office-document-capability-plan.md)
 - [0.7.x 复杂样式文档生成迭代计划](docs/rich-document-generation-plan.md)

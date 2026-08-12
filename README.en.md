@@ -72,6 +72,7 @@ A Workflow remains a persistent reusable custom Tool, while a Task is an ephemer
 - [Release checklist](RELEASE.md)
 - [Chrome Web Store listing material](STORE_LISTING.md)
 - [Agent Loop architecture and recovery semantics](docs/agent-loop-architecture.md)
+- [Chat Markdown rendering](docs/chat-markdown-rendering.md)
 - [0.6.1 Tool upgrade plan (Chinese)](docs/tool-upgrade-plan.md)
 - [0.7.x Office document capability plan and implementation status (Chinese)](docs/office-document-capability-plan.md)
 - [0.7.x Rich document generation implementation plan (Chinese)](docs/rich-document-generation-plan.md)
