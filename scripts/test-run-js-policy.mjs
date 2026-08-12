@@ -1,44 +1,72 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  RUN_JS_LEVELS,
+  RUN_JS_RUNTIMES,
   normalizeRunJsCapabilities,
-  normalizeRunJsLevel,
+  normalizeRunJsRuntime,
+  normalizeRunJsTarget,
   normalizeVfsPath,
   pageMatchesRunJsApproval,
   pathMatchesRunJsScope,
-  runJsChromeMethodAllowed,
   runJsOptionalPermissions,
+  runJsRpcMethodAllowed,
   urlMatchesRunJsOrigin
 } from "../src/run-js-policy.js";
 
-assert.deepEqual(Object.keys(RUN_JS_LEVELS), ["L0", "L1", "L2", "L3", "L4", "L5"]);
-assert.equal(normalizeRunJsLevel("l4"), "L4");
-assert.throws(() => normalizeRunJsLevel("extension"), /Invalid run_js level/);
+assert.deepEqual(RUN_JS_RUNTIMES, ["compute", "page-isolated", "page-main", "extension"]);
+assert.equal(normalizeRunJsRuntime("PAGE-MAIN"), "page-main");
+assert.throws(() => normalizeRunJsRuntime("L3"), /Invalid run_js runtime/);
 
-assert.deepEqual(normalizeRunJsCapabilities({}, "L0"), {
-  vfs: { read: [], write: [] }, network: { origins: [] }, page: { tabIds: [], worlds: [] }, chrome: []
+const emptyCapabilities = { methods: [], vfs: { read: [], write: [] }, network: { origins: [] } };
+assert.deepEqual(normalizeRunJsCapabilities({}, "compute"), emptyCapabilities);
+assert.deepEqual(normalizeRunJsCapabilities({}, "page-isolated"), emptyCapabilities);
+assert.throws(() => normalizeRunJsCapabilities({ methods: ["vfs.read"] }, "compute"), /does not accept RPC/);
+assert.throws(() => normalizeRunJsCapabilities({}, "extension"), /at least one/);
+
+const extensionCapabilities = normalizeRunJsCapabilities({
+  methods: ["vfs.read", "vfs.write", "http.request", "chrome.tabs.query"],
+  vfs: { read: ["/workspace/data/**"], write: ["/workspace/output/**"] },
+  network: { origins: ["https://api.example.com"] }
+}, "extension");
+assert.deepEqual(extensionCapabilities.methods, ["vfs.read", "vfs.write", "http.request", "chrome.tabs.query"]);
+assert.deepEqual(extensionCapabilities.network.origins, ["https://api.example.com/*"]);
+assert.throws(
+  () => normalizeRunJsCapabilities({ methods: ["vfs.read"] }, "extension"),
+  /require capabilities.vfs.read/
+);
+assert.throws(
+  () => normalizeRunJsCapabilities({ methods: ["http.request"] }, "extension"),
+  /requires capabilities.network.origins/
+);
+assert.deepEqual(normalizeRunJsCapabilities({
+  methods: ["http.request"],
+  vfs: { read: ["/workspace/upload.bin"], write: ["/workspace/download.bin"] },
+  network: { origins: ["https://api.example.com"] }
+}, "extension").vfs, {
+  read: ["/workspace/upload.bin"],
+  write: ["/workspace/download.bin"]
 });
-assert.deepEqual(normalizeRunJsCapabilities({}, "L1").vfs, {
-  read: ["/workspace/**"], write: ["/workspace/**"]
-});
-assert.deepEqual(normalizeRunJsCapabilities({}, "L2").vfs, { read: [], write: [] });
-assert.deepEqual(normalizeRunJsCapabilities({}, "L3").page.worlds, ["USER_SCRIPT"]);
-assert.deepEqual(normalizeRunJsCapabilities({}, "L4").page.worlds, ["USER_SCRIPT", "MAIN"]);
-assert.deepEqual(normalizeRunJsCapabilities({ chrome: ["bookmarks.search"] }, "L5").page, { tabIds: [], worlds: [] });
-assert.deepEqual(normalizeRunJsCapabilities({ page: {}, chrome: ["tabs.query"] }, "L5").page.worlds, ["USER_SCRIPT", "MAIN"]);
 assert.throws(
-  () => normalizeRunJsCapabilities({ page: { worlds: ["MAIN"] } }, "L3"),
-  /MAIN world requires/
+  () => normalizeRunJsCapabilities({ methods: ["chrome.tabs.*"] }, "extension"),
+  /wildcards are not allowed/
 );
 assert.throws(
-  () => normalizeRunJsCapabilities({ network: { origins: ["https://example.com"] } }, "L1"),
-  /Network capabilities require/
+  () => normalizeRunJsCapabilities({ methods: ["chrome.tabs.query"], chrome: ["tabs.query"] }, "extension"),
+  /unsupported fields: chrome/
 );
 assert.throws(
-  () => normalizeRunJsCapabilities({ chrome: ["tabs.query"] }, "L4"),
-  /Chrome API capabilities require/
+  () => normalizeRunJsCapabilities({ methods: ["chrome.identity.getAuthToken"] }, "extension"),
+  /Unsupported run_js RPC method/
 );
+
+assert.deepEqual(normalizeRunJsTarget({}, "compute"), { tab: "", tabId: null });
+assert.deepEqual(normalizeRunJsTarget({ tab: "active" }, "page-isolated"), { tab: "active", tabId: null });
+assert.deepEqual(normalizeRunJsTarget({ tabId: 12 }, "page-main"), { tab: "", tabId: 12 });
+assert.throws(() => normalizeRunJsTarget({}, "page-main"), /requires target/);
+assert.throws(() => normalizeRunJsTarget({ tab: "active", tabId: 12 }, "page-main"), /either/);
+assert.throws(() => normalizeRunJsTarget({ tabId: null }, "page-main"), /non-negative integer/);
+assert.throws(() => normalizeRunJsTarget({ tabId: "12" }, "page-main"), /non-negative integer/);
+assert.throws(() => normalizeRunJsTarget({ tab: "active" }, "extension"), /does not accept a page target/);
 
 assert.equal(normalizeVfsPath("/workspace/a/../b"), "/workspace/b");
 assert.throws(() => normalizeVfsPath("/../secret"), /escapes/);
@@ -67,18 +95,22 @@ assert.equal(urlMatchesRunJsOrigin("https://example.net/v1", ["https://example.c
 assert.equal(urlMatchesRunJsOrigin("http://localhost:11434/api/tags", ["http://localhost:11434/*"]), true);
 assert.equal(urlMatchesRunJsOrigin("http://localhost:11435/api/tags", ["http://localhost:11434/*"]), false);
 
-assert.equal(runJsChromeMethodAllowed("tabs.query", ["tabs.query"]), true);
-assert.equal(runJsChromeMethodAllowed("tabs.create", ["tabs.*"]), true);
-assert.equal(runJsChromeMethodAllowed("storage.local.get", ["storage.*"]), false);
-assert.throws(() => normalizeRunJsCapabilities({ chrome: ["identity.getAuthToken"] }, "L5"), /Unsupported run_js Chrome method/);
-assert.deepEqual(runJsOptionalPermissions(["bookmarks.search", "history.search", "tabs.query"]), ["bookmarks", "history"]);
+assert.equal(runJsRpcMethodAllowed("chrome.tabs.query", ["chrome.tabs.query"]), true);
+assert.equal(runJsRpcMethodAllowed("chrome.tabs.create", ["chrome.tabs.query"]), false);
+assert.equal(runJsRpcMethodAllowed("chrome.storage.local.get", ["chrome.storage.local.get"]), false);
+assert.deepEqual(
+  runJsOptionalPermissions(["chrome.bookmarks.search", "chrome.history.search", "chrome.tabs.query"]),
+  ["bookmarks", "history"]
+);
 
 const manifest = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
 assert.equal(manifest.sandbox.pages.includes("src/script-runner-sandbox.html"), true);
 const sandbox = readFileSync(new URL("../src/script-runner-sandbox.js", import.meta.url), "utf8");
 assert.equal(sandbox.includes("new Worker(url)"), true);
 assert.equal(sandbox.includes("worker.terminate()"), true);
+assert.equal(sandbox.includes('runtime === "extension"'), true);
+assert.equal(sandbox.includes("page: Object.freeze"), false);
 assert.equal(/\beval\s*\(/.test(sandbox), false);
 assert.equal(/\bnew\s+Function\s*\(/.test(sandbox), false);
 
-console.log("run_js capability policy tests passed");
+console.log("run_js runtime policy tests passed");

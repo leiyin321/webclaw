@@ -267,12 +267,12 @@ WebClaw 支持把外部消息通道接入当前活跃会话：
 
 ## 安全说明
 
-- JavaScript 执行默认关闭。`run_js` 使用累积式 L0-L5 能力等级：L0 隔离计算、L1 增加受限 VFS RPC、L2 增加声明域名的 HTTP RPC、L3 增加 USER_SCRIPT 页面 RPC、L4 增加 MAIN 页面 RPC、L5 增加白名单 Chrome API RPC。脚本控制器始终运行在 Manifest Sandbox 中。
-- 临时会话中的 `run_js` 每次都会显示等级、能力范围、目标和代码并要求批准。Schedule 可以记住完全相同的操作；Schedule、等级、能力、页面目标或代码任一变化都会重新询问。
+- `run_js` 使用四种互斥运行环境：`compute` 隔离计算、`page-isolated` USER_SCRIPT 页面代码、`page-main` MAIN 页面代码、`extension` 显式白名单 RPC。它们不是累积权限等级。`compute` 无外部能力，可直接执行；其余环境默认关闭并要求批准。
+- 临时会话中的非 compute 执行会显示 runtime、RPC scope 或页面目标及代码。Schedule 可以记住完全相同的操作；Schedule、runtime、capabilities、页面目标或代码任一变化都会重新询问。
 - 已保存的 Schedule 操作授权位于 Settings 的 Privacy & control，可随时全部清除。Chrome 域名权限被撤销后仍必须在浏览器中重新授予，保存的操作授权不会绕过它。
-- L3-L5 页面子调用要求 Chrome 135 或更高版本，并使用 Chrome `userScripts.execute()`，不提供 `eval` / `new Function` 回退。Chrome 138 及以上如果提示 API 不可用，请在扩展详情页打开 **Allow User Scripts** 后重新加载扩展。
-- RPC 会逐次校验 VFS 路径、网络 origin、tab/world 和 Chrome 方法；L5 不开放 `identity`、`storage`、`runtime`、`permissions`、`scripting`、`userScripts` 等扩展内部 API。详细接口见 [run_js L0-L5 设计](docs/run-js-capability-levels.md)。
-- `run_js` 可直接接收 `code`，或通过 `vfsPath` 执行 VFS 内的 `.js`、`.mjs`、`.cjs` 文件；两者只能提供一个。
+- 两种页面 runtime 要求 Chrome 135 或更高版本，并使用 Chrome `userScripts.execute()` 直接执行普通 `window`/`document` 代码，不再使用嵌套页面 RPC。Chrome 138 及以上如果提示 API 不可用，请在扩展详情页打开 **Allow User Scripts** 后重新加载扩展。
+- `extension` 只暴露 `webclaw.*`；每次 RPC 都会校验精确 methods、VFS 路径、网络 origin 和 Chrome optional permission。不会开放 `identity`、`storage`、`runtime`、`permissions`、`scripting`、`userScripts` 等控制 API。详细接口见 [run_js execution runtimes](docs/run-js-runtimes.md)。
+- `run_js` 可接收 `code`，或通过 `vfsPath` 执行 VFS 内的 `.js`、`.mjs`、`.cjs` 文件；两者只能提供一个。无授权的 `compute` 只接受内联代码。
 - `http_request` 在扩展 background 中执行，用于调用页面 JS 因 CORS 无法调用的接口或 webhook；支持超时、JSON、表单、VFS multipart 文件、二进制响应和直接保存到 VFS。
 - `fs_shell` 仅操作扩展 IndexedDB 中的虚拟文件系统；支持 `pwd`、`cd`、`ls`、`stat`、`mkdir`、`touch`、`cat`、`cp`、`mv`、`rm`。`cd` 会校验目标目录并更新当前会话的工作目录，后续相对路径从该目录解析；它不访问本机文件，也拒绝管道、重定向、命令替换和多命令输入，`rm` 会移动到 `/.trash`。
 - `fs_manage` 统一执行 mkdir、move、copy、touch 和可恢复删除；`fs_trash` 统一执行 list、restore、purge 和 empty。恢复默认拒绝同名覆盖，可选择 `onConflict: "rename"` 自动改名，或在 `confirmOverwrite: true` 时把现有目标移入回收站后恢复；purge 与 empty 只处理 `/.trash`，并要求 `confirm: true`。

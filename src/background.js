@@ -110,18 +110,18 @@ import {
   webSearchResults
 } from "./web-search.js";
 import {
-  RUN_JS_LEVELS,
   normalizeRunJsCapabilities,
-  normalizeRunJsLevel,
+  normalizeRunJsRuntime,
+  normalizeRunJsTarget,
   normalizeVfsPath,
   pageMatchesRunJsApproval,
   pathMatchesRunJsScope,
-  runJsChromeMethodAllowed,
   runJsOptionalPermissions,
+  runJsRpcMethodAllowed,
   urlMatchesRunJsOrigin
 } from "./run-js-policy.js";
 
-const PRODUCT_DISCLOSURE_VERSION = 1;
+const PRODUCT_DISCLOSURE_VERSION = 2;
 const agentRunStore = createAgentRunStore();
 const agentService = createAgentService({ execute: runAgent });
 
@@ -370,10 +370,17 @@ WORKSPACE_BOOTSTRAP_TEMPLATES["TOOLS.md"] = WORKSPACE_BOOTSTRAP_TEMPLATES["TOOLS
   .replaceAll("search_web", "web_search")
   .replace(
     "Use run_js only for logic normal Tools cannot express; ad-hoc calls require approval every time.",
-    "Use run_js only for logic normal Tools cannot express; ad-hoc calls require approval every time. Choose the lowest L0-L5 level and declare narrow capabilities. The outer controller always runs in a Manifest Sandbox and has input, webclaw, and the controlled chrome proxy, but no page window/document/localStorage. Use webclaw.vfs at L1+, webclaw.http.request at L2+, and webclaw.page.run at L3+; put DOM code inside page.run's code string (USER_SCRIPT first, MAIN only at L4+). At L2-L5 explicitly declare every lower-level VFS/network scope; at L5 explicitly declare page scope and each allowlisted Chrome method. Return JSON-serializable results and correct scope/level errors instead of retrying unchanged."
+    "Use run_js only for logic normal Tools cannot express. Select one non-cumulative runtime: compute for approval-free isolated calculation; page-isolated for ordinary window/document code in USER_SCRIPT; page-main only for website-owned JavaScript globals in MAIN; extension for a Manifest Sandbox controller using explicitly declared webclaw.vfs, webclaw.http, or webclaw.chrome RPC methods. Page runtimes use direct page code and never webclaw.page.run. The extension runtime has no page globals and exposes no global chrome proxy. Declare every exact RPC method plus narrow VFS/network scopes, return JSON-serializable results, and correct runtime/method/scope errors instead of retrying unchanged."
   )
   .replace("The current browser phase implements Markdown only.", "Markdown supports full operations; DOCX supports rich creation with schemaVersion=docx-2 plus basic rebuild editing; PDF supports rich text/table creation with schemaVersion=pdf-2 plus ASCII text-page fallback; XLSX supports rich worksheet creation with schemaVersion=xlsx-2 while charts remain a declared warning; PPTX supports rich slide, image, table, and common native chart creation with schemaVersion=pptx-2 plus basic rebuild editing; all four binary formats support bounded read projections.")
   .replace("Office adapters for DOCX, XLSX, PPTX, and PDF are planned and must not be claimed as supported until document_inspect reports capabilities.", "Office/PDF projections preserve original bytes and report fidelity=projection with warnings. Use document_revision to list or restore automatic pre-write snapshots, and purge only with confirm=true. Do not claim unsupported layout preservation, formula recalculation, page-isolated PDF extraction, or OCR.");
+const REPLACEABLE_WORKSPACE_TEMPLATE_HASHES = Object.freeze({
+  "TOOLS.md": new Set([
+    "SrbAKeFLmbsG8bXtt8nOdNQxIDB6LYO53ytdy5wTGeE",
+    "GtOgr9Xxs9JBFQ3ZiFboJgUpLvgju8F2jinIU1YHRmU",
+    "RzUjP_Mhrywu7-60z_Ij3Oto3zV37NSuOX-DyCvE_JE"
+  ])
+});
 const DEFAULT_KNOWLEDGE_MANUAL_PATH = "/workspace/knowledge/WEBCLAW_MANUAL.md";
 const REPLACEABLE_DEFAULT_KNOWLEDGE_MANUAL_HASHES = new Set([
   "nm8OatV55Up1ouTgkfddjbPZPh1Cby_vZKzjJYN0iug",
@@ -391,12 +398,14 @@ const REPLACEABLE_DEFAULT_KNOWLEDGE_MANUAL_HASHES = new Set([
   "ebvLDmJq-nzX4Kn5D2uASmSHK55uO-X6VMG8Fhg6Rwo",
   "8Q4-Lrp4wlIcHOAUmRZJZXbY-hxxTEOPi4HUEYIWegw",
   "yw9YuL1Vy3_VyqxVFkDzr5e4fJ3Nkhc-Z37vJmeoaOk",
-  "t22iHPwq8td1DdSnld0Ey3QPw3A9eaQzClv8D4EfT38"
+  "t22iHPwq8td1DdSnld0Ey3QPw3A9eaQzClv8D4EfT38",
+  "lD_L4uzIxOylcZH0I5DOQISmKUDao_KdL4tyvp0Y0Gw",
+  "Fv9ygZ0Hf9ctlpzqjAHk8zAEi6qi2uk40UEca0bxtfY"
 ]);
-const DEFAULT_KNOWLEDGE_MANUAL = `<!-- webclaw-default-manual: 0.7.2-r1 -->
+const DEFAULT_KNOWLEDGE_MANUAL = `<!-- webclaw-default-manual: 0.7.3-r1 -->
 # WebClaw Operation Manual
 
-Built-in operating reference for WebClaw 0.7.2. The file is stored in VFS and indexed into the local knowledge base. WebClaw upgrades an unchanged historical default copy, but preserves a copy that the user has edited.
+Built-in operating reference for WebClaw 0.7.3. The file is stored in VFS and indexed into the local knowledge base. WebClaw upgrades an unchanged historical default copy, but preserves a copy that the user has edited.
 
 ## 1. What WebClaw is
 WebClaw is a Chrome extension AI agent. It can converse in the side panel and through connected WeChat or Telegram channels, use configured model providers, operate the active browser tab, use a browser-backed virtual filesystem (VFS), run schedules, and retain durable workspace context.
@@ -465,7 +474,7 @@ Example:
 {"tool":{"name":"task_push","args":{"title":"Verify sources","instruction":"Check the supplied sources and return reliable entries.","context":{"sources":["https://example.com"]},"outputSchema":{"type":"object","properties":{"reliable":{"type":"array","items":{"type":"string"}},"summary":{"type":"string"}},"required":["reliable","summary"],"additionalProperties":false},"maxSteps":6}}}
 
 ## 4. Browser operations
-Use normal browser tools before run_js. Ad-hoc run_js calls require approval every time. An exact scheduled operation may reuse a saved approval until its Schedule, L0-L5 level, normalized capabilities, page targets, or code changes.
+Use normal browser tools before run_js. The compute runtime is approval-free and has no external capabilities. Other runtimes require approval. An exact scheduled operation may reuse a saved approval until its Schedule, runtime, normalized capabilities, page target, or code changes.
 
 Only a compact core set is initially exposed to the model. Use tool_search to find and load another enabled Tool into the current run. A loaded Tool does not become globally enabled, and optional Chrome permissions still require user approval.
 
@@ -487,22 +496,21 @@ Then use a selector returned by the context:
 
 Do not claim a page was changed unless the tool result confirms it. Re-read page context after important navigation or submission.
 
-## 5. JavaScript capability runtime
-run_js requires the Allow agent JavaScript execution setting.
+## 5. JavaScript runtime
+run_js has four mutually exclusive runtimes. They are execution environments, not cumulative permission levels. The Allow agent JavaScript execution setting applies to page-isolated, page-main, and extension; compute remains available because it has no external capability.
 
-- Inline form: {"tool":{"name":"run_js","args":{"level":"L0","code":"return input.values.reduce((a, b) => a + b, 0);","input":{"values":[1,2,3]}}}}
-- VFS form: {"tool":{"name":"run_js","args":{"level":"L1","vfsPath":"/workspace/scripts/report.js","capabilities":{"vfs":{"read":["/workspace/data/**"],"write":["/workspace/reports/**"]}}}}}
-- Provide exactly one of code or vfsPath.
-- Always choose the lowest sufficient level: L0 isolated compute; L1 scoped VFS; L2 declared-origin HTTP; L3 USER_SCRIPT page access; L4 MAIN-world page access; L5 allowlisted Chrome methods.
-- The controller always runs in a Manifest Sandbox. Use webclaw.vfs.*, webclaw.http.request, webclaw.page.run, or the L5 chrome proxy; do not assume browser globals exist in the controller.
-- capabilities are the actual approved scope. L1 alone defaults VFS to /workspace/** for convenience; at L2-L5, lower-level VFS/network scopes must be explicit. L3/L4 bind the active tab when tabIds are omitted; L5 gets page access only when capabilities.page is present. Network origins and L5 Chrome methods must always be declared.
-- Every ad-hoc execution shows level, scopes, targets, and source. Rejecting approval executes nothing. RPC calls outside the approved scope return Tool errors.
-- L3 page calls use webclaw.page.run({world:"USER_SCRIPT",code:"return document.title;"}); use MAIN only at L4+ when page-owned globals are required.
-- Correct L3 pattern: controller code calls const page = await webclaw.page.run({world:"USER_SCRIPT", code:"const ok=confirm('Continue?'); return {answer:ok?'yes':'no'};"}); then returns page.result. Do not put confirm, document, window, or localStorage directly in controller code.
-- L2 HTTP pattern: declare capabilities.network.origins, then call await webclaw.http.request({url,method,json}). Do not use direct controller fetch. If the same controller also reads/writes VFS, explicitly declare capabilities.vfs because L2-L5 do not inherit L1's default scope.
-- L5 Chrome pattern: declare capabilities.chrome:["tabs.query"] and call await chrome.tabs.query({...}). L5 page access is separate and still requires capabilities.page.
-- L5 exposes only allowlisted tabs, windows, bookmarks, history, downloads, sessions, tabGroups, and notifications methods. It never exposes extension credential storage or identity/runtime/permissions/scripting/userScripts APIs.
+- Compute: {"tool":{"name":"run_js","args":{"runtime":"compute","code":"return input.values.reduce((a,b)=>a+b,0);","input":{"values":[1,2,3]}}}}
+- Isolated page: {"tool":{"name":"run_js","args":{"runtime":"page-isolated","code":"const ok=confirm('Continue?'); return {ok,title:document.title};","target":{"tab":"active"}}}}
+- Main page: use runtime page-main only when code must access website-owned JavaScript globals. It has the same direct window/document syntax but runs in MAIN.
+- Extension RPC: {"tool":{"name":"run_js","args":{"runtime":"extension","code":"const file=await webclaw.vfs.read('/workspace/data.json'); return JSON.parse(file.content);","capabilities":{"methods":["vfs.read"],"vfs":{"read":["/workspace/data.json"]}}}}}
+- Provide exactly one of code or vfsPath. compute permits inline code only because loading a VFS source would no longer be pure approval-free computation.
+- page-isolated and page-main require target.tab=active or one target.tabId. Write ordinary page JavaScript directly. Never wrap it in webclaw.page.run.
+- extension runs in a Manifest Sandbox and has input plus webclaw.vfs, webclaw.http, and webclaw.chrome. It has no window/document and no global chrome object.
+- One script never spans page and extension environments. When work needs both, use separate run_js calls and pass only the required JSON-serializable result through the Agent loop.
+- Every extension RPC method must appear exactly in capabilities.methods and in WebClaw's built-in Registry. Wildcards are rejected. VFS paths and HTTP origins require matching scopes.
+- Use webclaw.http.request for background cross-origin HTTP. Use webclaw.chrome.tabs.query rather than chrome.tabs.query. identity, storage, runtime, permissions, scripting, userScripts, alarms, and sidePanel are not exposed.
 - Keep scripts narrow, return JSON-serializable data, and use normal Tools when they are sufficient.
+- timeoutMs and Stop limit how long WebClaw waits for page code, but cannot undo page-side effects that already started.
 
 ## 6. Web search, weather, and HTTP
 - web_search: use for current facts. It returns normalized untrusted external results through Brave Search when configured and otherwise uses the browser fallback. Inspect reliable result pages before answering.
@@ -600,7 +608,7 @@ For reusable page logic, store a small JavaScript file in VFS and call it throug
 Before sending a message externally, verify destination, summary, format, and whether the user asked to send it.
 
 ## 12. Schedules
-Schedules are optional advanced features. They use natural-language or supported cron-like expressions and run through Chrome alarms while Chrome and the extension are available. Create schedules for recurring retrieval, summaries, or notifications. Keep their instructions specific, avoid duplicate sends, and use durable files or knowledge sources for state when needed. An exact scheduled run_js operation can reuse its first saved approval; changing its Schedule, L0-L5 level, normalized capabilities, page targets, or code requires approval again. Saved scheduled approvals can be cleared in Settings.
+Schedules are optional advanced features. They use natural-language or supported cron-like expressions and run through Chrome alarms while Chrome and the extension are available. Create schedules for recurring retrieval, summaries, or notifications. Keep their instructions specific, avoid duplicate sends, and use durable files or knowledge sources for state when needed. An exact scheduled run_js operation can reuse its first saved approval; changing its Schedule, runtime, normalized capabilities, page target, or code requires approval again. Saved scheduled approvals can be cleared in Settings.
 
 ## 13. Error recovery
 When a TOOL_RESULT has ok:false:
@@ -646,7 +654,7 @@ function buildAgentSystemPrompt(settings) {
     hasTool("knowledge_search") ? "For questions about imported workspace material, use knowledge_search first and knowledge_read only for the needed chunks; cite the returned VFS path." : "",
     hasTool("translate_page") ? "When the user asks to translate the current page, call translate_page directly without calling page_snapshot first." : "",
     hasTool("page_snapshot") ? "Use page_snapshot before interacting with an unfamiliar page for non-translation tasks. Prefer page_action and page_wait over run_js for normal interaction." : "",
-    hasTool("run_js") ? "Prefer normal Tools when sufficient. run_js accepts exactly one of inline code or vfsPath plus an explicit L0-L5 level. Choose the lowest sufficient level and declare narrow capabilities: L0 compute, L1 VFS, L2 HTTP, L3 USER_SCRIPT page, L4 MAIN page, L5 allowlisted Chrome APIs." : "",
+    hasTool("run_js") ? "Prefer normal Tools when sufficient. run_js selects one non-cumulative runtime: compute, page-isolated, page-main, or extension. Page code uses window/document directly; extension code uses only exact declared webclaw RPC methods." : "",
     hasTool("task_push") ? "For a genuinely separable part of a large task, task_push creates an ephemeral child task with an independent context. Pass only the needed context and a precise outputSchema, wait for its structured result, and keep simple sequential work in the current task. A child task may use task_push again within the task-stack budget." : "",
     hasTool("fs_shell") ? "The current virtual filesystem working directory is provided in the system context; fs_shell resolves relative paths from it. When the user asks to change directories, call fs_shell with command `cd <path>` and wait for its result; do not merely claim that the directory changed. Use an explicit cwd only when intentionally operating elsewhere." : "",
     hasTool("document_inspect") ? "For document work, call document_inspect first. Markdown has full support. DOCX, XLSX, PPTX, and PDF support versioned Rich Schema creation; DOCX, XLSX, and PPTX also support basic rebuild editing, and all four binary formats have bounded projections. Call document_schema with mode=rich before rich creation, use exactly the returned schemaVersion, and pass expectedVersion or expectedHash for existing-file writes. Treat fidelity and warnings as the formal capability boundary: CJK PDF text, XLSX charts, PDF page isolation, and style-preserving Office edits remain limited or unavailable." : "",
@@ -657,13 +665,13 @@ function buildAgentSystemPrompt(settings) {
   const runJsNote = hasTool("run_js")
     ? `
 run_js rules:
-- Provide exactly one of code or vfsPath and always return JSON-serializable data. Controller code is an async-function body in a Manifest Sandbox; it has input, webclaw, and the controlled chrome proxy. It does not run in the page, so never use window, document, confirm, localStorage, or page globals directly in controller code.
-- Choose the lowest sufficient level. L0: computation only. L1: webclaw.vfs.*. L2: webclaw.http.request. L3: webclaw.page.run in USER_SCRIPT. L4: adds page MAIN. L5: declared allowlisted chrome methods.
-- Page pattern: const page = await webclaw.page.run({world:"USER_SCRIPT", code:"return {title:document.title};"}); return page.result; Put all DOM/page-global logic inside the nested code string. Omit tabId to bind the active tab. Try USER_SCRIPT first; use MAIN only for page-owned JavaScript globals.
-- HTTP pattern: const response = await webclaw.http.request({url:"https://api.example.com/data",method:"GET"}); return response; Declare that origin in capabilities.network.origins. Do not use direct fetch.
-- VFS pattern: await webclaw.vfs.read(path, options) or await webclaw.vfs.write(path, content, options). L1 alone defaults to /workspace/**; L2-L5 require explicit capabilities.vfs scopes for every VFS operation, including destinations and created parents.
-- Chrome pattern at L5: declare the exact method in capabilities.chrome, then call await chrome.tabs.query(...), or webclaw.chrome.tabs.query(...). L5 has no page access unless capabilities.page is also present.
-- Read a run_js error literally. Raise the level or widen only the missing scope; do not repeat the same invalid arguments. Never claim success without the returned RPC/result.`
+- Choose exactly one runtime; runtimes are not cumulative. compute is isolated and approval-free. page-isolated is direct USER_SCRIPT page code. page-main is direct MAIN-world page code. extension is a Manifest Sandbox controller with explicitly declared RPC.
+- Provide exactly one of code or vfsPath and return JSON-serializable data. compute accepts inline code only. All code is an async-function body with top-level await and return.
+- Page pattern: runtime page-isolated, code "const ok=confirm('Continue?'); return {ok,title:document.title};", target {tab:"active"}. Use window/document/localStorage directly. Never call webclaw.page.run. Use page-main only for website-owned JavaScript globals.
+- Extension pattern: declare every exact method in capabilities.methods, then call webclaw.vfs.*, webclaw.http.request, or webclaw.chrome.*. There is no global chrome object and no page DOM.
+- A script cannot combine page globals with extension RPC. Split that workflow into separate run_js calls and pass the bounded result through the Agent loop.
+- VFS read/write paths and HTTP origins must be explicitly scoped. RPC wildcards are invalid. A declared method outside WebClaw's built-in allowlist remains denied.
+- Read a run_js error literally. Correct the runtime, method declaration, target, path, or origin identified by the error; do not repeat unchanged arguments. Never claim success without the returned result.`
     : "";
   const skillNotes = skills
     .map((skill) => `## ${skill.title || skill.name}\n${skill.content}`)
@@ -4244,7 +4252,8 @@ function createJournaledApprovalRequester(requestApproval, context) {
       allowLabel: String(approval?.allowLabel || "Allow once"),
       rememberByDefault: approval?.rememberByDefault === true,
       grantKey: String(approval?.grantKey || ""),
-      origins: uniqueStrings(approval?.origins)
+      origins: uniqueStrings(approval?.origins),
+      permissions: uniqueStrings(approval?.permissions)
     };
     if (recoveredApproval && approvalFingerprintMatches(recoveredApproval.approval, safeApproval)) {
       const decision = {
@@ -4299,8 +4308,12 @@ function approvalFingerprintMatches(expected, actual) {
   if (!expected || !actual) return false;
   return String(expected.kind || "") === String(actual.kind || "") &&
     String(expected.title || "") === String(actual.title || "") &&
+    String(expected.reason || "") === String(actual.reason || "") &&
+    String(expected.details || "") === String(actual.details || "") &&
+    String(expected.allowLabel || "") === String(actual.allowLabel || "") &&
     String(expected.grantKey || "") === String(actual.grantKey || "") &&
-    JSON.stringify(uniqueStrings(expected.origins)) === JSON.stringify(uniqueStrings(actual.origins));
+    JSON.stringify(uniqueStrings(expected.origins)) === JSON.stringify(uniqueStrings(actual.origins)) &&
+    JSON.stringify(uniqueStrings(expected.permissions)) === JSON.stringify(uniqueStrings(actual.permissions));
 }
 
 async function checkpointAgentRun(journal, checkpoint) {
@@ -4397,7 +4410,12 @@ async function ensureWorkspaceBootstrapFiles() {
       await vfsWriteFile(path, content, { mimeType: "text/markdown", createParents: true });
       continue;
     }
-    if (String(existing.content || "").trim() === String(WORKSPACE_BOOTSTRAP_LEGACY_TEMPLATES[name] || "").trim()) {
+    const existingContent = String(existing.content || "");
+    const isLegacyTemplate = existingContent.trim() === String(WORKSPACE_BOOTSTRAP_LEGACY_TEMPLATES[name] || "").trim();
+    const isReplaceableDefault = REPLACEABLE_WORKSPACE_TEMPLATE_HASHES[name]?.has(
+      await sha256Base64Url(existingContent)
+    ) === true;
+    if (isLegacyTemplate || isReplaceableDefault) {
       try {
         await vfsWriteFile(path, content, {
           mimeType: "text/markdown",
@@ -4439,7 +4457,7 @@ async function ensureDefaultKnowledgeManual() {
   }
   await knowledgeIngestVfsFile(DEFAULT_KNOWLEDGE_MANUAL_PATH, {
     title: "WebClaw Operation Manual",
-    tags: ["webclaw", "manual", "operations", "0.7.2"]
+    tags: ["webclaw", "manual", "operations", "0.7.3"]
   });
 }
 
@@ -4593,11 +4611,11 @@ function buildToolRecoveryGuidance(settings, toolName) {
   const runJsRecovery = toolName === "run_js"
     ? [
         "RUN_JS_RECOVERY:",
-        "- Keep controller code in the Manifest Sandbox. Put window/document/confirm/localStorage logic inside webclaw.page.run({world, code}).",
-        "- Match resources to the lowest level: compute=L0, VFS=L1, HTTP=L2, USER_SCRIPT page=L3, MAIN page=L4, Chrome methods=L5.",
-        "- Level is only a ceiling. Declare exact VFS paths, network origins, page worlds/tabs, and Chrome methods; at L2-L5 VFS scopes must be explicit.",
-        "- Use webclaw.http.request instead of direct fetch. Omit page.tabIds to target the active approved tab.",
-        "- Correct only the level or scope named by the error. Do not repeat unchanged arguments."
+        "- Select one runtime: compute, page-isolated, page-main, or extension. Old level and webclaw.page.run calls are invalid.",
+        "- In page-isolated/page-main, write window/document/confirm/localStorage code directly and provide target.tab=active or target.tabId.",
+        "- In extension, use only webclaw.vfs, webclaw.http, and webclaw.chrome. Declare each exact RPC path in capabilities.methods; wildcards and the global chrome object are invalid.",
+        "- Add matching VFS read/write scopes and HTTP origins. Page runtimes cannot call extension RPC, and extension cannot access page globals.",
+        "- Correct only the runtime, target, method, path, or origin named by the error. Do not repeat unchanged arguments."
       ].join("\n")
     : "";
   return [
@@ -6106,7 +6124,7 @@ async function dispatchTool(name, args, settings, options = {}) {
     case "page_file_input":
       return setPageFileInput(args, options);
     case "run_js":
-      if (!settings.allowUnsafePageJs) {
+      if (normalizeRunJsRuntime(args.runtime) !== "compute" && !settings.allowUnsafePageJs) {
         throw new Error("JavaScript execution is disabled. Enable it in WebClaw settings first.");
       }
       return runJavaScript(args, options);
@@ -7270,7 +7288,13 @@ function parseJsonObjectOrEmpty(text, label) {
 
 async function requestInteractiveApproval(options, approval) {
   const missingOrigins = uniqueStrings(approval?.origins);
-  if (approval?.grantKey && missingOrigins.length === 0 && await hasOperationApprovalGrant(approval.grantKey)) {
+  const missingPermissions = uniqueStrings(approval?.permissions);
+  if (
+    approval?.grantKey &&
+    missingOrigins.length === 0 &&
+    missingPermissions.length === 0 &&
+    await hasOperationApprovalGrant(approval.grantKey)
+  ) {
     return { approved: true, remembered: true };
   }
   if (typeof options?.requestApproval !== "function") {
@@ -7437,123 +7461,178 @@ async function sendToTab(tabId, payload) {
 }
 
 async function runJavaScript(args, options = {}) {
-  const source = await resolvePageJavaScriptSource(args);
+  const runtime = normalizeRunJsRuntime(args.runtime);
+  if (runtime === "compute" && String(args.vfsPath || "").trim()) {
+    throw new Error("run_js compute requires inline code because an unapproved VFS source would not be pure computation.");
+  }
+  const target = normalizeRunJsTarget(args.target, runtime);
+  const capabilities = normalizeRunJsCapabilities(args.capabilities, runtime);
+  const source = await resolveRunJavaScriptSource(args);
   const code = source.code;
-  const level = normalizeRunJsLevel(args.level);
-  const capabilities = normalizeRunJsCapabilities(args.capabilities, level);
-  const pageTabs = await resolveRunJsPageTabs(capabilities, level);
-  capabilities.page.tabIds = pageTabs.map((tab) => tab.id);
+  const pageTab = await resolveRunJsPageTab(target, runtime);
   const requestedOrigins = uniqueStrings([
     ...capabilities.network.origins,
-    ...pageTabs.map((tab) => originPatternForUrl(tab.url)).filter(Boolean)
+    ...(pageTab ? [originPatternForUrl(pageTab.url)].filter(Boolean) : [])
   ]);
-  const requestedPermissions = runJsOptionalPermissions(capabilities.chrome);
-  const missingOrigins = await missingOriginPermissions(requestedOrigins);
-  const missingPermissions = await missingOptionalPermissions(requestedPermissions);
+  const requestedPermissions = runJsOptionalPermissions(capabilities.methods);
   const sourceLabel = source.label?.type === "vfs"
     ? `${source.label.path} (version ${source.label.version})`
     : "inline model output";
-  const scheduleScope = options.authorizationScope?.type === "schedule" ? options.authorizationScope : null;
+  const scheduleScope = runtime !== "compute" && options.authorizationScope?.type === "schedule"
+    ? options.authorizationScope
+    : null;
   const grantFingerprint = scheduleScope
     ? await sha256Base64Url(JSON.stringify({
         scheduleId: String(scheduleScope.id || ""),
-        level,
+        runtime,
         capabilities,
-        targetUrls: pageTabs.map((tab) => String(tab.url || "")),
+        targetUrl: String(pageTab?.url || ""),
         code
       }))
     : "";
-  const capabilityDetails = formatRunJsCapabilities(level, capabilities, pageTabs);
-  const approval = await requestInteractiveApproval(options, {
-    kind: "run_js",
-    title: "Allow JavaScript execution",
-    reason: scheduleScope
-      ? "This scheduled script can use only the displayed capability scope. Approval is remembered only for this exact Schedule, level, capabilities, targets, and code."
-      : "This script can use only the displayed capability scope. Review its level, targets, data access, and source before allowing this execution.",
-    details: [
-      `Source: ${sourceLabel}`,
-      ...capabilityDetails,
-      scheduleScope ? `Schedule: ${scheduleScope.title || scheduleScope.id}` : "",
-      "",
-      truncateText(code, 12000)
-    ].filter((line) => line !== "").join("\n"),
-    origins: missingOrigins,
-    permissions: missingPermissions,
-    allowLabel: scheduleScope ? "Allow exact scheduled operation" : "Run this code",
-    grantKey: grantFingerprint ? `schedule-run-js:${grantFingerprint}` : "",
-    grantScope: scheduleScope ? `Schedule ${scheduleScope.title || scheduleScope.id}, ${level}` : "",
-    rememberByDefault: Boolean(grantFingerprint)
-  });
-  if (!approval.approved) throw new Error(approval.error || "JavaScript execution was denied by the user.");
-  await assertOriginPermissions(requestedOrigins);
-  await assertOptionalPermissions(requestedPermissions);
-  if (RUN_JS_LEVELS[level] >= RUN_JS_LEVELS.L3 && !chrome.userScripts?.execute) {
-    throw new Error(
-      "Page-capable run_js levels require Chrome userScripts.execute. In chrome://extensions, open WebClaw details, enable Allow User Scripts, then reload the extension."
-    );
+
+  if (runtime !== "compute") {
+    const approval = await requestInteractiveApproval(options, {
+      kind: "run_js",
+      title: "Allow JavaScript execution",
+      reason: scheduleScope
+        ? "This scheduled script can use only the displayed runtime and capability scope. Approval is remembered only for this exact Schedule, runtime, capabilities, target, and code."
+        : runJsApprovalReason(runtime),
+      details: [
+        `Source: ${sourceLabel}`,
+        ...formatRunJsCapabilities(runtime, capabilities, pageTab),
+        scheduleScope ? `Schedule: ${scheduleScope.title || scheduleScope.id}` : "",
+        "",
+        code
+      ].filter((line) => line !== "").join("\n"),
+      origins: await missingOriginPermissions(requestedOrigins),
+      permissions: await missingOptionalPermissions(requestedPermissions),
+      allowLabel: scheduleScope ? "Allow exact scheduled operation" : "Run this code",
+      grantKey: grantFingerprint ? `schedule-run-js:${grantFingerprint}` : "",
+      grantScope: scheduleScope ? `Schedule ${scheduleScope.title || scheduleScope.id}, ${runtime}` : "",
+      rememberByDefault: Boolean(grantFingerprint)
+    });
+    if (!approval.approved) throw new Error(approval.error || "JavaScript execution was denied by the user.");
+    await assertOriginPermissions(requestedOrigins);
+    await assertOptionalPermissions(requestedPermissions);
   }
+
+  if (["page-isolated", "page-main"].includes(runtime)) {
+    if (!chrome.userScripts?.execute) {
+      throw new Error(
+        "Page run_js runtimes require Chrome userScripts.execute. In chrome://extensions, open WebClaw details, enable Allow User Scripts, then reload the extension."
+      );
+    }
+    const currentTab = await chrome.tabs.get(pageTab.id);
+    if (!pageMatchesRunJsApproval(pageTab, currentTab)) {
+      throw new Error(`run_js page target navigated after approval. Request a new approval for ${currentTab.url || currentTab.pendingUrl || "the current page"}.`);
+    }
+    if (options.signal?.aborted) throw new Error("Stopped");
+    const timeoutMs = Math.floor(clampNumber(args.timeoutMs, 100, 120_000, 30_000));
+    const result = await waitForPageJavaScript(
+      runUserScriptJavaScript(
+        currentTab,
+        code,
+        runtime === "page-main" ? "MAIN" : "USER_SCRIPT",
+        args.input
+      ),
+      timeoutMs,
+      options.signal
+    );
+    if (options.signal?.aborted) throw new Error("Stopped");
+    return { ...result, runtime, source: source.label };
+  }
+
+  return executeSandboxRunJavaScript({ runtime, code, capabilities, source: source.label }, args, options);
+}
+
+async function waitForPageJavaScript(execution, timeoutMs, signal) {
+  if (signal?.aborted) throw new Error("Stopped");
+  let timer = null;
+  let abort = null;
+  const interruption = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`Page JavaScript timed out after ${timeoutMs} ms. WebClaw stopped waiting; page-side effects already started cannot be rolled back.`)),
+      timeoutMs
+    );
+    if (signal) {
+      abort = () => reject(new Error("Stopped. WebClaw stopped waiting for page JavaScript; page-side effects already started cannot be rolled back."));
+      signal.addEventListener("abort", abort, { once: true });
+    }
+  });
+  try {
+    return await Promise.race([execution, interruption]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+    if (abort) signal.removeEventListener("abort", abort);
+  }
+}
+
+function runJsApprovalReason(runtime) {
+  if (runtime === "page-main") {
+    return "This code runs in the website MAIN JavaScript world, where it can access page-owned globals and the website can observe or interfere with it. Review the target and source before allowing it.";
+  }
+  if (runtime === "page-isolated") {
+    return "This code runs against the selected page in Chrome's isolated USER_SCRIPT world. Review the target and source before allowing it.";
+  }
+  return "This controller runs in a Manifest Sandbox and can call only the displayed extension RPC methods and resource scopes. Review them and the source before allowing it.";
+}
+
+async function executeSandboxRunJavaScript(runSpec, args, options) {
   await ensureChromeAIOffscreenDocument();
   const requestId = crypto.randomUUID();
   const timeoutMs = Math.floor(clampNumber(args.timeoutMs, 100, 120_000, 30_000));
   const run = {
     requestId,
-    level,
-    capabilities,
-    pageTabs: new Map(pageTabs.map((tab) => [tab.id, tab])),
+    runtime: runSpec.runtime,
+    capabilities: runSpec.capabilities,
     options,
     deadline: Date.now() + timeoutMs,
     rpcCalls: 0
   };
-  activeScriptRuns.set(requestId, run);
+  if (run.runtime === "extension") activeScriptRuns.set(requestId, run);
   const abort = () => chrome.runtime.sendMessage({ type: "WEBCLAW_SCRIPT_CANCEL", requestId, error: "Script execution was stopped." }).catch(() => {});
   options.signal?.addEventListener("abort", abort, { once: true });
   try {
     const response = await chrome.runtime.sendMessage({
       type: "WEBCLAW_SCRIPT_EXECUTE",
       requestId,
-      code,
+      runtime: run.runtime,
+      code: runSpec.code,
       input: args.input && typeof args.input === "object" ? args.input : {},
       timeoutMs
     });
     if (!response?.ok) throw new Error(response?.error || "Script execution failed.");
-    return { ok: true, result: response.result, level, capabilities, source: source.label };
+    return { ok: true, result: response.result, runtime: run.runtime, capabilities: run.capabilities, source: runSpec.source };
   } finally {
     activeScriptRuns.delete(requestId);
     options.signal?.removeEventListener("abort", abort);
   }
 }
 
-async function resolveRunJsPageTabs(capabilities, level) {
-  if (RUN_JS_LEVELS[level] < RUN_JS_LEVELS.L3) return [];
-  if (!capabilities.page.worlds.length) return [];
-  const tabIds = capabilities.page.tabIds.length
-    ? capabilities.page.tabIds
-    : [(await getActiveTab())?.id].filter((id) => Number.isInteger(id));
-  if (!tabIds.length) throw new Error("No active page tab found for the requested run_js page capability.");
-  const tabs = [];
-  for (const tabId of tabIds) {
-    let tab;
+async function resolveRunJsPageTab(target, runtime) {
+  if (!["page-isolated", "page-main"].includes(runtime)) return null;
+  let tab;
+  if (target.tab === "active") tab = await getActiveTab();
+  else {
     try {
-      tab = await chrome.tabs.get(tabId);
+      tab = await chrome.tabs.get(target.tabId);
     } catch {
-      throw new Error(`run_js page capability references a missing tab: ${tabId}`);
+      throw new Error(`run_js page target references a missing tab: ${target.tabId}`);
     }
-    if (!isInjectableTab(tab)) throw new Error(`Tab ${tabId} cannot run WebClaw JavaScript: ${tab.url || "unknown URL"}`);
-    tabs.push(tab);
   }
-  return tabs;
+  if (!tab?.id) throw new Error("No page tab found for the requested run_js target.");
+  if (!isInjectableTab(tab)) throw new Error(`Tab ${tab.id} cannot run WebClaw JavaScript: ${tab.url || "unknown URL"}`);
+  return tab;
 }
 
-function formatRunJsCapabilities(level, capabilities, pageTabs) {
-  const lines = [`Level: ${level}`];
+function formatRunJsCapabilities(runtime, capabilities, pageTab) {
+  const lines = [`Runtime: ${runtime}`];
+  if (capabilities.methods.length) lines.push(`RPC methods: ${capabilities.methods.join(", ")}`);
   if (capabilities.vfs.read.length) lines.push(`VFS read: ${capabilities.vfs.read.join(", ")}`);
   if (capabilities.vfs.write.length) lines.push(`VFS write: ${capabilities.vfs.write.join(", ")}`);
   if (capabilities.network.origins.length) lines.push(`Network: ${capabilities.network.origins.join(", ")}`);
-  if (pageTabs.length) {
-    lines.push(`Pages: ${pageTabs.map((tab) => `${tab.id} ${tab.url || "unknown"}`).join(", ")}`);
-    lines.push(`Page worlds: ${capabilities.page.worlds.join(", ")}`);
-  }
-  if (capabilities.chrome.length) lines.push(`Chrome APIs: ${capabilities.chrome.join(", ")}`);
+  if (pageTab) lines.push(`Page: ${pageTab.id} ${pageTab.url || "unknown"}`);
   return lines;
 }
 
@@ -7565,16 +7644,19 @@ async function handleRunJsRpcMessage(message, sender) {
   const requestId = String(message.requestId || "");
   const run = activeScriptRuns.get(requestId);
   if (!run) throw new Error("Script RPC rejected: run is no longer active.");
+  if (run.runtime !== "extension") throw new Error("Script RPC rejected: only the extension runtime exposes RPC methods.");
   if (Date.now() > run.deadline) throw new Error("Script RPC rejected: run has expired.");
   run.rpcCalls += 1;
   if (run.rpcCalls > 100) throw new Error("Script RPC call limit exceeded (100 calls per run).");
   const path = String(message.path || "");
   const args = Array.isArray(message.args) ? message.args : [];
+  if (!runJsRpcMethodAllowed(path, run.capabilities.methods)) {
+    throw new Error(`Script RPC denied: ${path || "(empty)"} was not explicitly declared or is not in WebClaw's allowlist.`);
+  }
   assertRunJsRpcValueSize(args, 1_000_000, "arguments");
   let result;
   if (path.startsWith("vfs.")) result = await executeRunJsVfsRpc(run, path.slice(4), args);
   else if (path === "http.request") result = await executeRunJsHttpRpc(run, args);
-  else if (path === "page.run") result = await executeRunJsPageRpc(run, args);
   else if (path.startsWith("chrome.")) result = await executeRunJsChromeRpc(run, path.slice(7), args);
   else throw new Error(`Unknown or unavailable script RPC method: ${path}`);
   assertRunJsRpcResultSize(result);
@@ -7582,7 +7664,6 @@ async function handleRunJsRpcMessage(message, sender) {
 }
 
 async function executeRunJsVfsRpc(run, method, args) {
-  if (RUN_JS_LEVELS[run.level] < RUN_JS_LEVELS.L1) throw new Error(`webclaw.vfs.${method} requires run_js level L1 or higher.`);
   const [first, second] = args;
   const readPath = (value) => assertRunJsVfsPath(run, value, "read");
   const writePath = (value) => assertRunJsVfsPath(run, value, "write");
@@ -7643,7 +7724,6 @@ async function executeRunJsVfsRpc(run, method, args) {
 }
 
 async function executeRunJsHttpRpc(run, args) {
-  if (RUN_JS_LEVELS[run.level] < RUN_JS_LEVELS.L2) throw new Error("webclaw.http.request requires run_js level L2 or higher.");
   const request = rpcObject(args[0]);
   const url = required(request.url, "url");
   if (!urlMatchesRunJsOrigin(url, run.capabilities.network.origins)) {
@@ -7660,40 +7740,7 @@ async function executeRunJsHttpRpc(run, args) {
   return httpRequest(request, { signal: run.options.signal });
 }
 
-async function executeRunJsPageRpc(run, args) {
-  if (RUN_JS_LEVELS[run.level] < RUN_JS_LEVELS.L3) throw new Error("webclaw.page.run requires run_js level L3 or higher.");
-  const request = rpcObject(args[0]);
-  const tabId = request.tabId === undefined
-    ? run.capabilities.page.tabIds[0]
-    : Number(request.tabId);
-  const approvedTab = run.pageTabs.get(tabId);
-  if (!approvedTab) throw new Error(`Script page RPC denied: tab ${tabId} is outside the declared capability.`);
-  let tab;
-  try {
-    tab = await chrome.tabs.get(tabId);
-  } catch {
-    throw new Error(`Script page RPC denied: approved tab ${tabId} no longer exists.`);
-  }
-  if (!pageMatchesRunJsApproval(approvedTab, tab)) {
-    throw new Error(`Script page RPC denied: tab ${tabId} navigated after approval. Request a new run_js approval for ${tab.url || tab.pendingUrl || "the current page"}.`);
-  }
-  const world = String(request.world || "USER_SCRIPT").toUpperCase();
-  if (!run.capabilities.page.worlds.includes(world)) {
-    throw new Error(`Script page RPC denied: ${world} is outside the declared worlds.`);
-  }
-  if (world === "MAIN" && RUN_JS_LEVELS[run.level] < RUN_JS_LEVELS.L4) {
-    throw new Error("Script page MAIN world requires run_js level L4 or higher.");
-  }
-  const code = required(request.code, "code");
-  if (code.length > 200_000) throw new Error("Script page RPC code exceeds 200,000 characters.");
-  return runUserScriptJavaScript(tab, code, world);
-}
-
 async function executeRunJsChromeRpc(run, method, args) {
-  if (RUN_JS_LEVELS[run.level] < RUN_JS_LEVELS.L5) throw new Error(`chrome.${method} requires run_js level L5.`);
-  if (!runJsChromeMethodAllowed(method, run.capabilities.chrome)) {
-    throw new Error(`Script Chrome RPC denied: chrome.${method} was not declared or is not in WebClaw's allowlist.`);
-  }
   const [namespace, name] = method.split(".");
   const api = chrome[namespace]?.[name];
   if (typeof api !== "function") throw new Error(`Chrome API is unavailable in this browser: chrome.${method}`);
@@ -7857,11 +7904,14 @@ async function blobToMessageDataUrl(blob) {
   return `data:${blob.type || "application/octet-stream"};base64,${btoa(binary)}`;
 }
 
-async function resolvePageJavaScriptSource(args) {
+async function resolveRunJavaScriptSource(args) {
   const inlineCode = String(args.code || "");
   const vfsPath = String(args.vfsPath || "").trim();
   if (inlineCode.trim() && vfsPath) throw new Error("Provide either code or vfsPath for run_js, not both.");
-  if (inlineCode.trim()) return { code: inlineCode, label: { type: "inline" } };
+  if (inlineCode.trim()) {
+    if (inlineCode.length > 200_000) throw new Error("run_js inline code exceeds the 200,000 character limit.");
+    return { code: inlineCode, label: { type: "inline" } };
+  }
   if (!vfsPath) throw new Error("run_js requires code or vfsPath.");
   if (!/\.(?:js|mjs|cjs)$/i.test(vfsPath)) {
     throw new Error("run_js vfsPath must reference a .js, .mjs, or .cjs file.");
@@ -7877,15 +7927,30 @@ async function resolvePageJavaScriptSource(args) {
   };
 }
 
-async function runUserScriptJavaScript(tab, code, world) {
+async function runUserScriptJavaScript(tab, code, world, input = {}) {
+  const serializedInput = JSON.stringify(input && typeof input === "object" ? input : {});
+  const serializedApprovedUrl = JSON.stringify(String(tab.url || ""));
   const wrappedCode = `(() => {
   function __webclawSerialize(value) {
     if (value === undefined) return null;
     try {
-      return JSON.parse(JSON.stringify(value));
-    } catch {
-      return String(value);
+      const json = JSON.stringify(value);
+      if (json === undefined) return null;
+      if (new TextEncoder().encode(json).byteLength > 2000000) {
+        throw new Error("Page script result exceeds the 2,000,000 byte limit. Return a smaller JSON value.");
+      }
+      return JSON.parse(json);
+    } catch (error) {
+      throw new Error(error && error.message ? error.message : "Page script result is not JSON-serializable.");
     }
+  }
+  const input = ${serializedInput};
+  const __webclawApprovedUrl = new URL(${serializedApprovedUrl});
+  const __webclawCurrentUrl = new URL(location.href);
+  __webclawApprovedUrl.hash = "";
+  __webclawCurrentUrl.hash = "";
+  if (__webclawCurrentUrl.href !== __webclawApprovedUrl.href) {
+    throw new Error("Page navigated after run_js approval. Submit a new call for the current page.");
   }
   return (async () => {
     try {

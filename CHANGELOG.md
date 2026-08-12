@@ -4,6 +4,14 @@ All notable changes to WebClaw will be documented in this file.
 
 ## Unreleased
 
+## 0.7.3
+
+- Replace the cumulative `run_js` L0-L5 protocol with four mutually exclusive execution environments: approval-free `compute`, direct `page-isolated` USER_SCRIPT, direct `page-main` MAIN-world code, and explicit allowlisted-RPC `extension`. Remove `level`, nested `webclaw.page.run`, RPC wildcards, and the duplicate global `chrome` proxy without compatibility aliases.
+- Require exact extension RPC methods and narrow VFS/network scopes, revalidate the approved page URL inside injected code, and strictly validate explicit page targets.
+- Bind recovered approval decisions to the complete disclosure, origin set, and Chrome permission set; remembered Schedule approvals no longer bypass a revoked optional permission.
+- Apply Stop and `timeoutMs` waiting limits to page runtimes, cap inline source at 200,000 characters and page results at 2 MB, and show the complete source in the local approval dialog.
+- Update the Tool Schema, Agent recovery guidance, default workspace instructions, built-in manual, privacy disclosures, store notes, and bilingual documentation for the new runtime protocol.
+
 ## 0.7.2
 
 - Stop creating a visible root Task for every user message. Each message now starts an AgentRun with an empty task stack, and Tasks exist only when the model explicitly calls `task_push`.

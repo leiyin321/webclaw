@@ -30,7 +30,11 @@
       event.preventDefault();
       finish(requestId, false, null, event.error || new Error(event.message || "Script syntax error."));
     };
-    worker.postMessage({ type: "START", input: cloneValue(message.input) });
+    worker.postMessage({
+      type: "START",
+      runtime: String(message.runtime || ""),
+      input: cloneValue(message.input)
+    });
   }
 
   function handleWorkerMessage(run, message) {
@@ -102,23 +106,23 @@ const rpcRequests = new Map();
 
 self.onmessage = (event) => {
   const message = event.data || {};
-  if (message.type === "START") start(message.input);
+  if (message.type === "START") start(message);
   if (message.type === "RPC_RESULT") settleRpc(message);
 };
 
-async function start(input) {
+async function start(message) {
+  const input = message.input;
   const rpc = createRpc();
-  const webclaw = Object.freeze({
+  const runtime = String(message.runtime || "");
+  const webclaw = runtime === "extension" ? Object.freeze({
     vfs: createNamespaceProxy(rpc, "vfs"),
     http: Object.freeze({ request: (...args) => rpc("http.request", args) }),
-    page: Object.freeze({ run: (...args) => rpc("page.run", args) }),
     chrome: createNamespaceProxy(rpc, "chrome")
-  });
-  const chrome = createNamespaceProxy(rpc, "chrome");
+  }) : undefined;
   try {
-    const result = await (async (webclaw, chrome, input) => {
+    const result = await (async (webclaw, input) => {
 ${code}
-    })(webclaw, chrome, input);
+    })(webclaw, input);
     if (estimateValueSize(result) > 2000000) {
       throw new Error("Script result exceeds the 2,000,000 byte limit. Save large data to VFS and return a path instead.");
     }

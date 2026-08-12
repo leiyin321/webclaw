@@ -103,7 +103,7 @@ const BUILTIN_TOOLS = builtinToolUiDefinitions();
 
 const ADVANCED_BUILTIN_TOOLS = new Set(BUILTIN_TOOLS.filter((tool) => tool.advanced).map((tool) => tool.name));
 const DEFAULT_DISABLED_BUILTIN_TOOLS = new Set(BUILTIN_TOOLS.filter((tool) => !tool.enabled).map((tool) => tool.name));
-const PRODUCT_DISCLOSURE_VERSION = 1;
+const PRODUCT_DISCLOSURE_VERSION = 2;
 
 const CHAT_HISTORY_KEY = "webclawChatHistory";
 const CHAT_SESSIONS_KEY = "webclawChatSessions";

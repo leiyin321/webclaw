@@ -66,10 +66,10 @@
 
         <label class="check-row">
           <input id="allowUnsafePageJs" type="checkbox">
-          <span>Allow agent JavaScript execution</span>
+          <span>Allow agent page and extension JavaScript execution</span>
         </label>
 
-        <p class="settings-note">JavaScript execution is off by default. Each ad-hoc <code>run_js</code> call shows its L0-L5 level, capability scopes, targets, and source for approval. An exact scheduled operation is rechecked if its Schedule, level, capabilities, targets, or code changes.</p>
+        <p class="settings-note">Page and extension JavaScript execution is off by default. Approval-free <code>compute</code> has no external capabilities. Other <code>run_js</code> calls show their runtime, RPC scopes or page target, and source for approval. An exact scheduled operation is rechecked if its Schedule, runtime, capabilities, target, or code changes.</p>
         <button id="saveSettings" type="button">Save settings</button>
       </div>
 
@@ -781,7 +781,7 @@
           <ul>
             <li>Your prompt and relevant history are sent to the model provider you select. Page content, files, media, and tool results are included only when needed for your request.</li>
             <li>Site and external service access is requested per origin before first use. You can deny a request or revoke access in Chrome extension settings.</li>
-            <li><code>run_js</code> is disabled by default. Ad-hoc execution requires approval each time; an exact scheduled operation may reuse a saved approval until its Schedule, L0-L5 level, capability scopes, targets, or code changes.</li>
+            <li><code>run_js</code> compute performs isolated approval-free calculation. Page and extension runtimes are disabled by default and require approval; an exact scheduled operation is rechecked when its Schedule, runtime, capabilities, target, or code changes.</li>
             <li>Channels, Schedules, and self-configuration are optional advanced features. Enabled automations may run while Chrome is open.</li>
           </ul>
           <p>Review the <a href="https://github.com/leiyin321/webclaw/blob/main/PRIVACY.md" target="_blank" rel="noreferrer">privacy policy</a> for retention, deletion, and provider details.</p>

@@ -125,11 +125,29 @@ requireCondition(
     readText("src/script-runner-sandbox.html").includes("worker-src blob:") &&
     readText("src/script-runner-sandbox.js").includes("new Worker(url)") &&
     readText("src/script-runner-sandbox.js").includes("worker.terminate()") &&
+    readText("src/script-runner-sandbox.js").includes('runtime === "extension"') &&
+    !readText("src/script-runner-sandbox.js").includes("page: Object.freeze") &&
     readText("src/script-runner-offscreen.js").includes("WEBCLAW_SCRIPT_SANDBOX_RPC") &&
     source.includes("handleRunJsRpcMessage") &&
-    source.includes("runJsChromeMethodAllowed") &&
+    source.includes("runJsRpcMethodAllowed") &&
+    source.includes('runtime === "compute"') &&
+    source.includes('normalizeRunJsRuntime(args.runtime) !== "compute" && !settings.allowUnsafePageJs') &&
+    source.includes('if (runtime !== "compute") {') &&
+    source.includes('if (run.runtime === "extension") activeScriptRuns.set') &&
+    source.includes('runtime === "page-main" ? "MAIN" : "USER_SCRIPT"') &&
+    source.includes("waitForPageJavaScript(") &&
+    source.includes("run_js inline code exceeds the 200,000 character limit") &&
+    source.includes("Page script result exceeds the 2,000,000 byte limit") &&
+    source.includes("Page navigated after run_js approval") &&
+    !source.includes("truncateText(code, 12000)") &&
+    source.includes("missingPermissions.length === 0") &&
+    source.includes('String(expected.details || "") === String(actual.details || "")') &&
+    source.includes("JSON.stringify(uniqueStrings(expected.permissions))") &&
+    !source.includes("RUN_JS_LEVELS") &&
+    !source.includes("normalizeRunJsLevel") &&
+    !source.includes('else if (path === "page.run")') &&
     source.includes("Script RPC call limit exceeded"),
-  "run_js L0-L5 sandbox or capability-scoped RPC boundary is incomplete"
+  "run_js runtime isolation or capability-scoped RPC boundary is incomplete"
 );
 requireCondition(readText("src/document-engine-sandbox.html").includes("../build/document/document-sandbox.js"), "document sandbox page must load the packaged sandbox bundle");
 requireCondition(existsSync(resolve(root, "build/document/document-sandbox.js")), "document sandbox bundle is missing; run npm run build:documents");
@@ -208,7 +226,7 @@ requireCondition(
   "controlled active Provider switching and rollback are missing"
 );
 requireCondition(
-  source.includes("webclaw-default-manual: 0.7.2-r1") &&
+  source.includes("webclaw-default-manual: 0.7.3-r1") &&
     source.includes("REPLACEABLE_DEFAULT_KNOWLEDGE_MANUAL_HASHES") &&
     source.includes("qxBFf1iNGSrbPVRGoSSOQUH8Mu9b6rgnrTBznpwsH1s") &&
     source.includes("qmON25C52Otm3zxd8xOE_dlGJ9DX-j61ECdtgLwChHA") &&
@@ -220,9 +238,20 @@ requireCondition(
     source.includes("8Q4-Lrp4wlIcHOAUmRZJZXbY-hxxTEOPi4HUEYIWegw") &&
     source.includes("yw9YuL1Vy3_VyqxVFkDzr5e4fJ3Nkhc-Z37vJmeoaOk") &&
     source.includes("t22iHPwq8td1DdSnld0Ey3QPw3A9eaQzClv8D4EfT38") &&
+    source.includes("lD_L4uzIxOylcZH0I5DOQISmKUDao_KdL4tyvp0Y0Gw") &&
+    source.includes("Fv9ygZ0Hf9ctlpzqjAHk8zAEi6qi2uk40UEca0bxtfY") &&
     source.includes("expectedVersion: existing.entry.version") &&
-    source.includes('"webclaw", "manual", "operations", "0.7.2"'),
+    source.includes('"webclaw", "manual", "operations", "0.7.3"'),
   "versioned default knowledge manual migration is missing"
+);
+requireCondition(
+  source.includes("REPLACEABLE_WORKSPACE_TEMPLATE_HASHES") &&
+    source.includes("SrbAKeFLmbsG8bXtt8nOdNQxIDB6LYO53ytdy5wTGeE") &&
+    source.includes("GtOgr9Xxs9JBFQ3ZiFboJgUpLvgju8F2jinIU1YHRmU") &&
+    source.includes("RzUjP_Mhrywu7-60z_Ij3Oto3zV37NSuOX-DyCvE_JE") &&
+    source.includes("isReplaceableDefault") &&
+    source.includes("isLegacyTemplate || isReplaceableDefault"),
+  "versioned default workspace Tool instructions migration is missing"
 );
 requireCondition(
   builtinToolDefinition("browser_clipboard_read")?.optionalPermissions?.join(",") === "clipboardRead" &&

@@ -55,6 +55,7 @@ async function execute(message) {
       type: "WEBCLAW_SCRIPT_SANDBOX_EXECUTE",
       requestId,
       code: String(message.code || ""),
+      runtime: String(message.runtime || ""),
       input: message.input
     }, "*");
   });

@@ -43,15 +43,18 @@ assert.deepEqual(builtinToolInputSchema("qiyewechat_notification").required, ["c
 assert.equal(Object.hasOwn(builtinToolInputSchema("qiyewechat_notification").properties, "payload"), false);
 assert.deepEqual(builtinToolInputSchema("web_search").required, ["query"]);
 assert.equal(builtinToolDefinition("search_web"), null);
-assert.deepEqual(builtinToolInputSchema("run_js").required, ["level"]);
-assert.deepEqual(builtinToolInputSchema("run_js").properties.level.enum, ["L0", "L1", "L2", "L3", "L4", "L5"]);
-assert.equal(Object.hasOwn(builtinToolInputSchema("run_js").properties, "world"), false);
-assert.ok(builtinToolInputSchema("run_js").properties.capabilities.properties.chrome);
-assert.match(builtinToolDefinition("run_js").description, /window\/document\/localStorage/);
-assert.match(builtinToolInputSchema("run_js").properties.code.description, /webclaw RPC/);
-assert.match(builtinToolInputSchema("run_js").properties.capabilities.description, /Declaring level alone is insufficient/);
-assert.equal(builtinToolDefinition("run_js").example.tool.args.level, "L3");
-assert.match(builtinToolDefinition("run_js").example.tool.args.code, /webclaw\.page\.run/);
+assert.deepEqual(builtinToolInputSchema("run_js").required, ["runtime"]);
+assert.deepEqual(builtinToolInputSchema("run_js").properties.runtime.enum, ["compute", "page-isolated", "page-main", "extension"]);
+assert.equal(Object.hasOwn(builtinToolInputSchema("run_js").properties, "level"), false);
+assert.ok(builtinToolInputSchema("run_js").properties.capabilities.properties.methods);
+assert.equal(Object.hasOwn(builtinToolInputSchema("run_js").properties.capabilities.properties, "page"), false);
+assert.match(builtinToolDefinition("run_js").description, /non-cumulative runtime/);
+assert.match(builtinToolInputSchema("run_js").properties.code.description, /window\/document directly/);
+assert.equal(builtinToolInputSchema("run_js").properties.code.maxLength, 200000);
+assert.match(builtinToolInputSchema("run_js").properties.capabilities.description, /Every RPC requires/);
+assert.equal(builtinToolDefinition("run_js").example.tool.args.runtime, "page-isolated");
+assert.doesNotMatch(builtinToolDefinition("run_js").example.tool.args.code, /webclaw\.page\.run/);
+assert.match(builtinToolDefinition("run_js").example.tool.args.code, /window\.confirm/);
 assert.deepEqual(
   validateJsonSchema(
     builtinToolDefinition("run_js").example.tool.args,
@@ -60,6 +63,19 @@ assert.deepEqual(
   ),
   []
 );
+assert.ok(validateJsonSchema(
+  { level: "L3", code: "return document.title;" },
+  builtinToolInputSchema("run_js"),
+  { requiredNonEmpty: true }
+).length > 0, "the removed run_js level protocol must fail validation");
+assert.deepEqual(validateJsonSchema({
+  runtime: "extension",
+  code: "return webclaw.vfs.read('/workspace/a.txt');",
+  capabilities: {
+    methods: ["vfs.read"],
+    vfs: { read: ["/workspace/a.txt"] }
+  }
+}, builtinToolInputSchema("run_js"), { requiredNonEmpty: true }), []);
 
 for (const tool of definitions) {
   assert.equal(tool.builtin, true, `${tool.name} must be marked built-in`);

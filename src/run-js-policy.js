@@ -1,24 +1,45 @@
-export const RUN_JS_LEVELS = Object.freeze({ L0: 0, L1: 1, L2: 2, L3: 3, L4: 4, L5: 5 });
+export const RUN_JS_RUNTIMES = Object.freeze([
+  "compute",
+  "page-isolated",
+  "page-main",
+  "extension"
+]);
+
+export const RUN_JS_VFS_METHODS = Object.freeze([
+  "vfs.list", "vfs.stat", "vfs.read", "vfs.glob", "vfs.hash", "vfs.diff",
+  "vfs.search", "vfs.usage", "vfs.write", "vfs.edit", "vfs.mkdir",
+  "vfs.move", "vfs.copy", "vfs.touch", "vfs.delete", "vfs.restore",
+  "vfs.purge", "vfs.emptyTrash"
+]);
 
 export const RUN_JS_CHROME_METHODS = Object.freeze([
-  "tabs.query", "tabs.get", "tabs.create", "tabs.update", "tabs.move", "tabs.reload",
-  "tabs.duplicate", "tabs.remove", "tabs.group", "tabs.ungroup", "tabs.highlight",
-  "tabs.discard", "tabs.goBack", "tabs.goForward", "tabs.getZoom", "tabs.setZoom",
-  "tabs.captureVisibleTab", "tabs.detectLanguage",
-  "windows.get", "windows.getCurrent", "windows.getLastFocused", "windows.getAll",
-  "windows.create", "windows.update", "windows.remove",
-  "bookmarks.get", "bookmarks.getChildren", "bookmarks.getRecent", "bookmarks.getSubTree",
-  "bookmarks.getTree", "bookmarks.search", "bookmarks.create", "bookmarks.move",
-  "bookmarks.update", "bookmarks.remove", "bookmarks.removeTree",
-  "history.search", "history.getVisits", "history.addUrl", "history.deleteUrl",
-  "history.deleteRange", "history.deleteAll",
-  "downloads.download", "downloads.search", "downloads.pause", "downloads.resume",
-  "downloads.cancel", "downloads.getFileIcon", "downloads.open", "downloads.show",
-  "downloads.showDefaultFolder", "downloads.erase", "downloads.removeFile",
-  "sessions.getRecentlyClosed", "sessions.getDevices", "sessions.restore",
-  "tabGroups.get", "tabGroups.query", "tabGroups.update", "tabGroups.move",
-  "notifications.create", "notifications.update", "notifications.clear",
-  "notifications.getAll", "notifications.getPermissionLevel"
+  "chrome.tabs.query", "chrome.tabs.get", "chrome.tabs.create", "chrome.tabs.update",
+  "chrome.tabs.move", "chrome.tabs.reload", "chrome.tabs.duplicate", "chrome.tabs.remove",
+  "chrome.tabs.group", "chrome.tabs.ungroup", "chrome.tabs.highlight", "chrome.tabs.discard",
+  "chrome.tabs.goBack", "chrome.tabs.goForward", "chrome.tabs.getZoom", "chrome.tabs.setZoom",
+  "chrome.tabs.captureVisibleTab", "chrome.tabs.detectLanguage",
+  "chrome.windows.get", "chrome.windows.getCurrent", "chrome.windows.getLastFocused",
+  "chrome.windows.getAll", "chrome.windows.create", "chrome.windows.update", "chrome.windows.remove",
+  "chrome.bookmarks.get", "chrome.bookmarks.getChildren", "chrome.bookmarks.getRecent",
+  "chrome.bookmarks.getSubTree", "chrome.bookmarks.getTree", "chrome.bookmarks.search",
+  "chrome.bookmarks.create", "chrome.bookmarks.move", "chrome.bookmarks.update",
+  "chrome.bookmarks.remove", "chrome.bookmarks.removeTree",
+  "chrome.history.search", "chrome.history.getVisits", "chrome.history.addUrl",
+  "chrome.history.deleteUrl", "chrome.history.deleteRange", "chrome.history.deleteAll",
+  "chrome.downloads.download", "chrome.downloads.search", "chrome.downloads.pause",
+  "chrome.downloads.resume", "chrome.downloads.cancel", "chrome.downloads.getFileIcon",
+  "chrome.downloads.open", "chrome.downloads.show", "chrome.downloads.showDefaultFolder",
+  "chrome.downloads.erase", "chrome.downloads.removeFile",
+  "chrome.sessions.getRecentlyClosed", "chrome.sessions.getDevices", "chrome.sessions.restore",
+  "chrome.tabGroups.get", "chrome.tabGroups.query", "chrome.tabGroups.update", "chrome.tabGroups.move",
+  "chrome.notifications.create", "chrome.notifications.update", "chrome.notifications.clear",
+  "chrome.notifications.getAll", "chrome.notifications.getPermissionLevel"
+]);
+
+export const RUN_JS_RPC_METHODS = Object.freeze([
+  ...RUN_JS_VFS_METHODS,
+  "http.request",
+  ...RUN_JS_CHROME_METHODS
 ]);
 
 export const RUN_JS_OPTIONAL_PERMISSION_BY_NAMESPACE = Object.freeze({
@@ -30,52 +51,78 @@ export const RUN_JS_OPTIONAL_PERMISSION_BY_NAMESPACE = Object.freeze({
   notifications: "notifications"
 });
 
-const CHROME_METHOD_SET = new Set(RUN_JS_CHROME_METHODS);
+const RPC_METHOD_SET = new Set(RUN_JS_RPC_METHODS);
+const VFS_READ_METHODS = new Set([
+  "vfs.list", "vfs.stat", "vfs.read", "vfs.glob", "vfs.hash", "vfs.diff",
+  "vfs.search", "vfs.usage", "vfs.copy"
+]);
+const VFS_WRITE_METHODS = new Set([
+  "vfs.write", "vfs.edit", "vfs.mkdir", "vfs.move", "vfs.copy", "vfs.touch",
+  "vfs.delete", "vfs.restore", "vfs.purge", "vfs.emptyTrash"
+]);
 
-export function normalizeRunJsLevel(value) {
-  const level = String(value || "L0").toUpperCase();
-  if (!(level in RUN_JS_LEVELS)) throw new Error(`Invalid run_js level: ${value}. Expected L0, L1, L2, L3, L4, or L5.`);
-  return level;
+export function normalizeRunJsRuntime(value) {
+  const runtime = String(value || "").trim().toLowerCase();
+  if (!RUN_JS_RUNTIMES.includes(runtime)) {
+    throw new Error(`Invalid run_js runtime: ${value || "(empty)"}. Expected ${RUN_JS_RUNTIMES.join(", ")}.`);
+  }
+  return runtime;
 }
 
-export function normalizeRunJsCapabilities(value, level) {
-  const rank = RUN_JS_LEVELS[normalizeRunJsLevel(level)];
+export function normalizeRunJsTarget(value, runtime) {
+  const normalizedRuntime = normalizeRunJsRuntime(runtime);
   const input = value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  const vfsInput = input.vfs && typeof input.vfs === "object" ? input.vfs : {};
-  const networkInput = input.network && typeof input.network === "object" ? input.network : {};
-  const pageInput = input.page && typeof input.page === "object" ? input.page : {};
-  const pageRequested = rank === RUN_JS_LEVELS.L3 || rank === RUN_JS_LEVELS.L4 || Object.hasOwn(input, "page");
-  if (rank < 1 && (hasItems(vfsInput.read) || hasItems(vfsInput.write))) throw new Error("VFS capabilities require run_js level L1 or higher.");
-  if (rank < 2 && hasItems(networkInput.origins)) throw new Error("Network capabilities require run_js level L2 or higher.");
-  if (rank < 3 && (hasItems(pageInput.tabIds) || hasItems(pageInput.worlds))) throw new Error("Page capabilities require run_js level L3 or higher.");
-  if (rank < 5 && hasItems(input.chrome)) throw new Error("Chrome API capabilities require run_js level L5.");
+  assertOnlyKeys(input, ["tab", "tabId"], "run_js target");
+  const hasTarget = Object.keys(input).length > 0;
+  if (!["page-isolated", "page-main"].includes(normalizedRuntime)) {
+    if (hasTarget) throw new Error(`run_js runtime ${normalizedRuntime} does not accept a page target.`);
+    return { tab: "", tabId: null };
+  }
+  const tab = String(input.tab || "").trim().toLowerCase();
+  const hasTabId = Object.hasOwn(input, "tabId");
+  const tabId = hasTabId ? input.tabId : null;
+  if (tab && tab !== "active") throw new Error("run_js target.tab must be active when provided.");
+  if (hasTabId && (typeof tabId !== "number" || !Number.isInteger(tabId) || tabId < 0)) {
+    throw new Error("run_js target.tabId must be a non-negative integer.");
+  }
+  if (tab === "active" && hasTabId) throw new Error("run_js target must provide either tab=active or tabId, not both.");
+  if (!tab && !hasTabId) throw new Error("run_js page runtime requires target.tab=active or target.tabId.");
+  return { tab, tabId };
+}
+
+export function normalizeRunJsCapabilities(value, runtime) {
+  const normalizedRuntime = normalizeRunJsRuntime(runtime);
+  const input = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  if (normalizedRuntime !== "extension") {
+    if (Object.keys(input).length > 0) {
+      throw new Error(`run_js runtime ${normalizedRuntime} does not accept RPC capabilities.`);
+    }
+    return emptyCapabilities();
+  }
+
+  assertOnlyKeys(input, ["methods", "vfs", "network"], "run_js capabilities");
+  const vfsInput = input.vfs && typeof input.vfs === "object" && !Array.isArray(input.vfs) ? input.vfs : {};
+  const networkInput = input.network && typeof input.network === "object" && !Array.isArray(input.network) ? input.network : {};
+  assertOnlyKeys(vfsInput, ["read", "write"], "run_js capabilities.vfs");
+  assertOnlyKeys(networkInput, ["origins"], "run_js capabilities.network");
   const capabilities = {
+    methods: normalizedRpcMethods(input.methods),
     vfs: {
-      read: rank >= RUN_JS_LEVELS.L1 ? normalizedPathScopes(vfsInput.read, rank === RUN_JS_LEVELS.L1 ? ["/workspace/**"] : []) : [],
-      write: rank >= RUN_JS_LEVELS.L1 ? normalizedPathScopes(vfsInput.write, rank === RUN_JS_LEVELS.L1 ? ["/workspace/**"] : []) : []
+      read: normalizedPathScopes(vfsInput.read),
+      write: normalizedPathScopes(vfsInput.write)
     },
     network: {
-      origins: rank >= RUN_JS_LEVELS.L2 ? normalizedOrigins(networkInput.origins) : []
-    },
-    page: {
-      tabIds: rank >= RUN_JS_LEVELS.L3 && pageRequested ? uniqueIntegers(pageInput.tabIds) : [],
-      worlds: rank >= RUN_JS_LEVELS.L3 && pageRequested
-        ? normalizedWorlds(pageInput.worlds, rank >= RUN_JS_LEVELS.L4 ? ["USER_SCRIPT", "MAIN"] : ["USER_SCRIPT"])
-        : []
-    },
-    chrome: rank >= RUN_JS_LEVELS.L5 ? normalizedChromeMethods(input.chrome) : []
+      origins: normalizedOrigins(networkInput.origins)
+    }
   };
-  assertCapabilitiesFitLevel(capabilities, rank);
+  if (!capabilities.methods.length) throw new Error("run_js extension runtime requires at least one capabilities.methods entry.");
+  assertCapabilitiesMatchMethods(capabilities);
   return capabilities;
 }
 
-export function assertCapabilitiesFitLevel(capabilities, levelOrRank) {
-  const rank = typeof levelOrRank === "number" ? levelOrRank : RUN_JS_LEVELS[normalizeRunJsLevel(levelOrRank)];
-  if (rank < 1 && (capabilities.vfs.read.length || capabilities.vfs.write.length)) throw new Error("L0 cannot use VFS capabilities.");
-  if (rank < 2 && capabilities.network.origins.length) throw new Error("L0-L1 cannot use network capabilities.");
-  if (rank < 3 && (capabilities.page.tabIds.length || capabilities.page.worlds.length)) throw new Error("L0-L2 cannot use page capabilities.");
-  if (rank < 4 && capabilities.page.worlds.includes("MAIN")) throw new Error("Page MAIN world requires run_js level L4 or L5.");
-  if (rank < 5 && capabilities.chrome.length) throw new Error("Chrome API capabilities require run_js level L5.");
+export function runJsRpcMethodAllowed(path, declaredMethods) {
+  const method = String(path || "");
+  return RPC_METHOD_SET.has(method) && (Array.isArray(declaredMethods) ? declaredMethods : []).includes(method);
 }
 
 export function normalizeVfsPath(value) {
@@ -143,25 +190,40 @@ export function urlMatchesRunJsOrigin(value, patterns) {
   });
 }
 
-export function runJsChromeMethodAllowed(path, declaredMethods) {
-  const method = String(path || "");
-  if (!CHROME_METHOD_SET.has(method)) return false;
-  return (Array.isArray(declaredMethods) ? declaredMethods : []).some((declared) => {
-    const value = String(declared || "");
-    return value === method || (value.endsWith(".*") && method.startsWith(value.slice(0, -1)));
-  });
-}
-
 export function runJsOptionalPermissions(methods) {
   return [...new Set((Array.isArray(methods) ? methods : []).map((method) => {
-    const namespace = String(method || "").split(".")[0];
-    return RUN_JS_OPTIONAL_PERMISSION_BY_NAMESPACE[namespace] || "";
+    const match = /^chrome\.([^.]+)\./.exec(String(method || ""));
+    return match ? RUN_JS_OPTIONAL_PERMISSION_BY_NAMESPACE[match[1]] || "" : "";
   }).filter(Boolean))];
 }
 
-function normalizedPathScopes(value, fallback) {
-  const source = Array.isArray(value) ? value : fallback;
-  return [...new Set(source.map((item) => {
+function emptyCapabilities() {
+  return { methods: [], vfs: { read: [], write: [] }, network: { origins: [] } };
+}
+
+function assertCapabilitiesMatchMethods(capabilities) {
+  const methods = new Set(capabilities.methods);
+  const usesVfsRead = [...methods].some((method) => VFS_READ_METHODS.has(method));
+  const usesVfsWrite = [...methods].some((method) => VFS_WRITE_METHODS.has(method));
+  const usesHttp = methods.has("http.request");
+  if (usesVfsRead && !capabilities.vfs.read.length) throw new Error("Declared VFS read RPC methods require capabilities.vfs.read scopes.");
+  if (usesVfsWrite && !capabilities.vfs.write.length) throw new Error("Declared VFS write RPC methods require capabilities.vfs.write scopes.");
+  if (usesHttp && !capabilities.network.origins.length) throw new Error("http.request requires capabilities.network.origins.");
+  if (!usesVfsRead && !usesHttp && capabilities.vfs.read.length) throw new Error("capabilities.vfs.read requires a declared VFS read RPC method or http.request multipart source.");
+  if (!usesVfsWrite && !usesHttp && capabilities.vfs.write.length) throw new Error("capabilities.vfs.write requires a declared VFS write RPC method or http.request VFS destination.");
+  if (!usesHttp && capabilities.network.origins.length) throw new Error("capabilities.network.origins requires the http.request method.");
+}
+
+function normalizedRpcMethods(value) {
+  return [...new Set((Array.isArray(value) ? value : []).map((item) => String(item || "").trim()).filter(Boolean))].map((method) => {
+    if (method.includes("*")) throw new Error(`run_js RPC methods must be explicit; wildcards are not allowed: ${method}`);
+    if (!RPC_METHOD_SET.has(method)) throw new Error(`Unsupported run_js RPC method: ${method}`);
+    return method;
+  });
+}
+
+function normalizedPathScopes(value) {
+  return [...new Set((Array.isArray(value) ? value : []).map((item) => {
     const text = String(item || "").trim();
     const suffix = text.endsWith("/**") ? "/**" : text.endsWith("/*") ? "/*" : "";
     const root = normalizeVfsPath(suffix ? text.slice(0, -suffix.length) || "/" : text);
@@ -180,34 +242,6 @@ function normalizedOrigins(value) {
   }))];
 }
 
-function normalizedWorlds(value, fallback) {
-  const worlds = Array.isArray(value) && value.length ? value : fallback;
-  return [...new Set(worlds.map((item) => String(item || "").toUpperCase()))].map((world) => {
-    if (!["USER_SCRIPT", "MAIN"].includes(world)) throw new Error(`Unsupported run_js page world: ${world}`);
-    return world;
-  });
-}
-
-function normalizedChromeMethods(value) {
-  return [...new Set((Array.isArray(value) ? value : []).map((item) => String(item || "").trim()).filter(Boolean))].map((method) => {
-    if (method.endsWith(".*")) {
-      const namespace = method.slice(0, -2);
-      if (!RUN_JS_CHROME_METHODS.some((item) => item.startsWith(`${namespace}.`))) throw new Error(`Unsupported run_js Chrome namespace: ${namespace}`);
-      return method;
-    }
-    if (!CHROME_METHOD_SET.has(method)) throw new Error(`Unsupported run_js Chrome method: ${method}`);
-    return method;
-  });
-}
-
-function uniqueIntegers(value) {
-  return [...new Set((Array.isArray(value) ? value : []).map(Number).filter((item) => Number.isInteger(item) && item >= 0))];
-}
-
-function hasItems(value) {
-  return Array.isArray(value) && value.length > 0;
-}
-
 function normalizedPageTargetUrl(value) {
   try {
     const url = new URL(String(value || ""));
@@ -217,4 +251,10 @@ function normalizedPageTargetUrl(value) {
   } catch {
     return "";
   }
+}
+
+function assertOnlyKeys(value, allowed, label) {
+  const allowedSet = new Set(allowed);
+  const unknown = Object.keys(value).filter((key) => !allowedSet.has(key));
+  if (unknown.length) throw new Error(`${label} contains unsupported fields: ${unknown.join(", ")}`);
 }
