@@ -110,6 +110,8 @@ assert.equal(sandbox.includes("new Worker(url)"), true);
 assert.equal(sandbox.includes("worker.terminate()"), true);
 assert.equal(sandbox.includes('runtime === "extension"'), true);
 assert.equal(sandbox.includes("page: Object.freeze"), false);
+assert.equal(sandbox.includes("let rpcSequence = 0"), true);
+assert.equal(sandbox.includes("crypto.randomUUID()"), false);
 assert.equal(/\beval\s*\(/.test(sandbox), false);
 assert.equal(/\bnew\s+Function\s*\(/.test(sandbox), false);
 

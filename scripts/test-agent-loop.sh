@@ -18,6 +18,7 @@ for test_file in \
   scripts/test-agent-terminal-outcome.mjs \
   scripts/test-json-schema-validator.mjs \
   scripts/test-knowledge-base.mjs \
+  scripts/test-markdown.mjs \
   scripts/test-preview-sandbox.mjs \
   scripts/test-run-js-policy.mjs \
   scripts/test-tool-registry.mjs \

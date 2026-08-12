@@ -10,7 +10,7 @@ WebClaw 目前是实验性的浏览器原生 Agent 框架，适合本地开发�
 
 ## 功能概览
 
-- Chrome Side Panel 会话界面。
+- Chrome Side Panel 会话界面；模型最终回复和流式文本支持安全 Markdown 渲染，包括标题、强调、列表、引用、代码块、表格与链接。
 - 设置与文件管理器通过独立扩展窗口打开，不遮挡会话。
 - 多会话 Session 管理，所有通道消息进入当前活跃会话。
 - Provider 管理：Local Ollama、OpenAI-compatible API、OpenCode Zen、Chrome AI、Codex / ChatGPT OAuth、GitHub Copilot OAuth。

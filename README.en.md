@@ -11,7 +11,7 @@ or message channels.
 
 ## Features
 
-- Side panel chat UI.
+- Side panel chat UI with safe Markdown rendering for final and streaming model responses, including headings, emphasis, lists, quotes, code, tables, and links.
 - Settings and the file manager open in separate extension windows, leaving chat unobstructed.
 - Local Ollama provider through `http://localhost:11434/api/chat`.
 - OpenAI API format compatible provider through either `/v1/responses` or `/v1/chat/completions`.

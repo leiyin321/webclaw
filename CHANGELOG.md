@@ -4,6 +4,9 @@ All notable changes to WebClaw will be documented in this file.
 
 ## Unreleased
 
+- Fix `extension` run_js RPC startup in Manifest Sandbox workers where `crypto.randomUUID()` is unavailable by using a run-local monotonic call ID.
+- Render assistant final and streaming responses as locally parsed, HTML-escaped Markdown with compact chat styles for headings, emphasis, lists, quotes, code, tables, links, and task items; keep user, Tool, Plan, and Task messages as plain text.
+
 ## 0.7.3
 
 - Replace the cumulative `run_js` L0-L5 protocol with four mutually exclusive execution environments: approval-free `compute`, direct `page-isolated` USER_SCRIPT, direct `page-main` MAIN-world code, and explicit allowlisted-RPC `extension`. Remove `level`, nested `webclaw.page.run`, RPC wildcards, and the duplicate global `chrome` proxy without compatibility aliases.

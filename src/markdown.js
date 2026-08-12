@@ -21,6 +21,7 @@ export function parseMarkdown(source) {
   let list = null;
   let code = null;
   let table = null;
+  let quote = [];
   const flushParagraph = () => {
     if (paragraph.length) blocks.push({ type: "paragraph", lines: paragraph.splice(0) });
   };
@@ -31,6 +32,9 @@ export function parseMarkdown(source) {
   const flushTable = () => {
     if (table) blocks.push(table);
     table = null;
+  };
+  const flushQuote = () => {
+    if (quote.length) blocks.push({ type: "blockquote", lines: quote.splice(0) });
   };
 
   for (; index < lines.length; index += 1) {
@@ -44,14 +48,21 @@ export function parseMarkdown(source) {
     }
     const fence = line.match(/^\s*```\s*([\w+-]*)\s*$/);
     if (fence) {
-      flushParagraph(); flushList(); flushTable();
+      flushParagraph(); flushList(); flushTable(); flushQuote();
       code = { language: fence[1] || "", lines: [] };
       continue;
     }
     if (!line.trim()) {
-      flushParagraph(); flushList(); flushTable();
+      flushParagraph(); flushList(); flushTable(); flushQuote();
       continue;
     }
+    const blockquote = line.match(/^\s{0,3}>\s?(.*)$/);
+    if (blockquote) {
+      flushParagraph(); flushList(); flushTable();
+      quote.push(blockquote[1]);
+      continue;
+    }
+    flushQuote();
     const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/);
     if (heading) {
       flushParagraph(); flushList(); flushTable();
@@ -94,18 +105,23 @@ export function parseMarkdown(source) {
     paragraph.push(line);
   }
   if (code) blocks.push({ type: "code", language: code.language, content: code.lines.join("\n") });
-  flushParagraph(); flushList(); flushTable();
+  flushParagraph(); flushList(); flushTable(); flushQuote();
   return { frontMatter, blocks, lines, text };
 }
 
 export function renderMarkdown(source, options = {}) {
   const document = typeof source === "string" ? parseMarkdown(source) : source;
-  const body = document.blocks.map((block) => renderBlock(block)).join("\n");
+  const body = renderMarkdownFragment(document, options);
   const title = escapeHtml(options.title || findTitle(document) || "Markdown document");
   const frontMatter = Object.keys(document.frontMatter || {}).length
     ? `<details class="front-matter"><summary>Front Matter</summary><pre>${escapeHtml(JSON.stringify(document.frontMatter, null, 2))}</pre></details>`
     : "";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>${MARKDOWN_CSS}</style></head><body><main>${frontMatter}${body}</main></body></html>`;
+}
+
+export function renderMarkdownFragment(source, options = {}) {
+  const document = typeof source === "string" ? parseMarkdown(source) : source;
+  return document.blocks.map((block) => renderBlock(block, options)).join("\n");
 }
 
 export function markdownOutline(documentOrSource) {
@@ -129,35 +145,39 @@ export function markdownToText(documentOrSource) {
   }).join("\n\n");
 }
 
-function renderBlock(block) {
+function renderBlock(block, options = {}) {
   if (block.type === "heading") {
-    const id = slugify(block.text);
-    return `<h${block.level} id="${id}">${renderInline(block.raw || block.text)}</h${block.level}>`;
+    const id = options.headingIds === false ? "" : ` id="${slugify(block.text)}"`;
+    return `<h${block.level}${id}>${renderInline(block.raw || block.text, options)}</h${block.level}>`;
   }
-  if (block.type === "paragraph") return `<p>${renderInline(block.lines.join("\n")).replace(/\n/g, "<br>\n")}</p>`;
+  if (block.type === "paragraph") return `<p>${renderInline(block.lines.join("\n"), options).replace(/\n/g, "<br>\n")}</p>`;
   if (block.type === "code") return `<pre><code class="language-${escapeHtml(block.language)}">${escapeHtml(block.content)}</code></pre>`;
+  if (block.type === "blockquote") return `<blockquote>${renderInline(block.lines.join("\n"), options).replace(/\n/g, "<br>\n")}</blockquote>`;
   if (block.type === "separator") return "<hr>";
   if (block.type === "list") {
     const tag = block.ordered ? "ol" : "ul";
-    return `<${tag}>${block.items.map((item) => `<li>${item.checked === undefined ? "" : `<input type="checkbox" disabled ${item.checked ? "checked" : ""}> `}${renderInline(item.text)}</li>`).join("")}</${tag}>`;
+    return `<${tag}>${block.items.map((item) => `<li>${item.checked === undefined ? "" : `<input type="checkbox" disabled ${item.checked ? "checked" : ""}> `}${renderInline(item.text, options)}</li>`).join("")}</${tag}>`;
   }
   if (block.type === "table") {
-    const head = `<thead><tr>${block.header.map((cell, index) => `<th${alignment(block.alignments?.[index])}>${renderInline(cell)}</th>`).join("")}</tr></thead>`;
-    const rows = block.rows.map((row) => `<tr>${row.map((cell, index) => `<td${alignment(block.alignments?.[index])}>${renderInline(cell)}</td>`).join("")}</tr>`).join("");
+    const head = `<thead><tr>${block.header.map((cell, index) => `<th${alignment(block.alignments?.[index])}>${renderInline(cell, options)}</th>`).join("")}</tr></thead>`;
+    const rows = block.rows.map((row) => `<tr>${row.map((cell, index) => `<td${alignment(block.alignments?.[index])}>${renderInline(cell, options)}</td>`).join("")}</tr>`).join("");
     return `<table>${head}<tbody>${rows}</tbody></table>`;
   }
   return "";
 }
 
-function renderInline(value) {
+function renderInline(value, options = {}) {
   let output = escapeHtml(value);
   output = output.replace(/`([^`]+)`/g, "<code>$1</code>");
   output = output.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   output = output.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+  output = output.replace(/~~([^~]+)~~/g, "<del>$1</del>");
   output = output.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "<em>$1</em>");
   output = output.replace(/(?<!_)_([^_]+)_(?!_)/g, "<em>$1</em>");
-  output = output.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, href) => `<img alt="${alt}" src="${safeUrl(href)}">`);
-  output = output.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => `<a href="${safeUrl(href)}" target="_blank" rel="noreferrer">${label}</a>`);
+  output = output.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, href) => options.allowImages === false
+    ? `<a href="${safeUrl(href, options)}" target="_blank" rel="noopener noreferrer">[Image: ${alt || "image"}]</a>`
+    : `<img alt="${alt}" src="${safeUrl(href, options)}">`);
+  output = output.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => `<a href="${safeUrl(href, options)}" target="_blank" rel="noopener noreferrer">${label}</a>`);
   return output;
 }
 
@@ -186,8 +206,9 @@ function slugify(value) {
   return String(value || "heading").toLowerCase().trim().replace(/[^\w\u4e00-\u9fff -]/g, "").replace(/\s+/g, "-") || "heading";
 }
 
-function safeUrl(value) {
+function safeUrl(value, options = {}) {
   const raw = String(value || "").trim();
+  if (options.allowRelativeLinks === false && !/^(?:https?:|mailto:|tel:|#)/i.test(raw)) return "#";
   try {
     const parsed = new URL(raw, "https://webclaw.invalid/");
     if (!SAFE_PROTOCOLS.has(parsed.protocol)) return "#";

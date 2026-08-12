@@ -21,6 +21,7 @@ import {
 import { normalizeOpenAICompatibleApiProtocol } from "./openai-compatible-api.js";
 import { buildVfsPreviewDocument } from "./vfs-preview.js";
 import { normalizeWebSearchConfig } from "./web-search.js";
+import { renderMarkdownFragment } from "./markdown.js";
 import {
   builtinToolUiDefinitions,
   isRemovedBuiltinToolName
@@ -111,6 +112,7 @@ const OPERATION_APPROVAL_GRANTS_KEY = "webclawOperationApprovalGrants";
 const MAX_STORED_CHAT_MESSAGES = 200;
 const MAX_STORED_SESSIONS = 80;
 const MAX_STORED_TURNS = 100;
+const messageNodeSources = new WeakMap();
 const standaloneView = new URLSearchParams(window.location.search).get("view");
 
 const elements = {
@@ -975,7 +977,7 @@ function streamAgentRequest(startMessage) {
       }
       if (message.type === "delta") {
         if (!activeAssistantNode) activeAssistantNode = appendMessage("assistant", "");
-        updateMessage(activeAssistantNode, `${activeAssistantNode.textContent}${message.delta || ""}`);
+        updateMessage(activeAssistantNode, `${messageNodeSource(activeAssistantNode)}${message.delta || ""}`);
         return;
       }
       if (message.type === "tool_call") {
@@ -1070,7 +1072,7 @@ function handleAgentEvent(event) {
         status: "in_progress"
       });
     }
-    updateMessage(activeAssistantNode, `${activeAssistantNode.textContent}${event.delta || ""}`, {
+    updateMessage(activeAssistantNode, `${messageNodeSource(activeAssistantNode)}${event.delta || ""}`, {
       status: "in_progress"
     });
     return;
@@ -5192,8 +5194,10 @@ function updateMessage(node, content, options = {}) {
 
 function setMessageNodeContent(node, content, status = undefined) {
   const text = String(content || "");
+  messageNodeSources.set(node, text);
   if (!node.classList.contains("task")) {
-    node.textContent = text;
+    if (node.classList.contains("assistant")) renderAssistantMarkdown(node, text);
+    else node.textContent = text;
     return;
   }
   const [heading = "Task execution", ...lines] = text.split("\n");
@@ -5214,6 +5218,24 @@ function setMessageNodeContent(node, content, status = undefined) {
   node.replaceChildren(summary, body);
   if (status !== undefined) node.dataset.status = String(status || "");
   node.open = ["in_progress", "running"].includes(currentStatus);
+}
+
+function messageNodeSource(node) {
+  return messageNodeSources.get(node) || "";
+}
+
+function renderAssistantMarkdown(node, source) {
+  if (!source) {
+    node.replaceChildren();
+    return;
+  }
+  const html = renderMarkdownFragment(source, {
+    allowImages: false,
+    allowRelativeLinks: false,
+    headingIds: false
+  });
+  const parsed = new DOMParser().parseFromString(`<body>${html}</body>`, "text/html");
+  node.replaceChildren(...[...parsed.body.childNodes].map((child) => child.cloneNode(true)));
 }
 
 function setBusy(busy, text = "Ready") {

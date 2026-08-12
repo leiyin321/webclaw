@@ -126,6 +126,8 @@ requireCondition(
     readText("src/script-runner-sandbox.js").includes("new Worker(url)") &&
     readText("src/script-runner-sandbox.js").includes("worker.terminate()") &&
     readText("src/script-runner-sandbox.js").includes('runtime === "extension"') &&
+    readText("src/script-runner-sandbox.js").includes("let rpcSequence = 0") &&
+    !readText("src/script-runner-sandbox.js").includes("crypto.randomUUID()") &&
     !readText("src/script-runner-sandbox.js").includes("page: Object.freeze") &&
     readText("src/script-runner-offscreen.js").includes("WEBCLAW_SCRIPT_SANDBOX_RPC") &&
     source.includes("handleRunJsRpcMessage") &&

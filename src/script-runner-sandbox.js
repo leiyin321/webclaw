@@ -103,6 +103,7 @@
   function workerSource(requestId, code) {
     return `
 const rpcRequests = new Map();
+let rpcSequence = 0;
 
 self.onmessage = (event) => {
   const message = event.data || {};
@@ -149,7 +150,7 @@ function createNamespaceProxy(rpc, prefix) {
 
 function createRpc() {
   return (path, args) => new Promise((resolve, reject) => {
-    const callId = crypto.randomUUID();
+    const callId = "rpc-" + (++rpcSequence);
     rpcRequests.set(callId, { resolve, reject });
     self.postMessage({ type: "RPC", callId, path, args: cloneValue(args) });
   });
