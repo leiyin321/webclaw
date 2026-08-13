@@ -124,7 +124,35 @@ async function fetchBytes(url, label) {
     const body = await response.text().catch(() => "");
     throw new Error(`${label}: CDN HTTP ${response.status}: ${body.slice(0, 300)}`);
   }
-  return response.arrayBuffer();
+  const contentLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > MAX_MEDIA_BYTES) {
+    throw new Error(`${label}: media exceeds ${MAX_MEDIA_BYTES} bytes`);
+  }
+  if (!response.body) {
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > MAX_MEDIA_BYTES) throw new Error(`${label}: media exceeds ${MAX_MEDIA_BYTES} bytes`);
+    return buffer;
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (total + value.byteLength > MAX_MEDIA_BYTES) {
+      await reader.cancel().catch(() => {});
+      throw new Error(`${label}: media exceeds ${MAX_MEDIA_BYTES} bytes`);
+    }
+    chunks.push(value);
+    total += value.byteLength;
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes.buffer;
 }
 
 async function saveMedia(buffer, metadata) {

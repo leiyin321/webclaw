@@ -112,7 +112,10 @@ const OPERATION_APPROVAL_GRANTS_KEY = "webclawOperationApprovalGrants";
 const MAX_STORED_CHAT_MESSAGES = 200;
 const MAX_STORED_SESSIONS = 80;
 const MAX_STORED_TURNS = 100;
+const STREAM_RENDER_INTERVAL_MS = 50;
+const STREAM_PERSIST_DEBOUNCE_MS = 500;
 const messageNodeSources = new WeakMap();
+const assistantRenderTimers = new WeakMap();
 const standaloneView = new URLSearchParams(window.location.search).get("view");
 
 const elements = {
@@ -350,6 +353,7 @@ const activeAgentItemNodes = new Map();
 const activeTaskRunViews = new Map();
 let pendingAgentApproval = null;
 let chatSessionWriteQueue = Promise.resolve();
+let chatHistoryPersistTimer = null;
 let contextCompactionWriteQueue = Promise.resolve();
 let wechatDrainTimer = null;
 let wechatAutoConnectStarted = false;
@@ -976,8 +980,8 @@ function streamAgentRequest(startMessage) {
         return;
       }
       if (message.type === "delta") {
-        if (!activeAssistantNode) activeAssistantNode = appendMessage("assistant", "");
-        updateMessage(activeAssistantNode, `${messageNodeSource(activeAssistantNode)}${message.delta || ""}`);
+        if (!activeAssistantNode) activeAssistantNode = appendMessage("assistant", "", { streaming: true });
+        updateMessage(activeAssistantNode, `${messageNodeSource(activeAssistantNode)}${message.delta || ""}`, { streaming: true });
         return;
       }
       if (message.type === "tool_call") {
@@ -1069,11 +1073,13 @@ function handleAgentEvent(event) {
         turnId: event.turnId,
         itemId: event.itemId,
         kind: "agent_message",
-        status: "in_progress"
+        status: "in_progress",
+        streaming: true
       });
     }
     updateMessage(activeAssistantNode, `${messageNodeSource(activeAssistantNode)}${event.delta || ""}`, {
-      status: "in_progress"
+      status: "in_progress",
+      streaming: true
     });
     return;
   }
@@ -1849,7 +1855,7 @@ function nextManualSessionTitle() {
   return `Chat ${count}`;
 }
 
-function persistChatHistory() {
+function persistChatHistory(options = {}) {
   const session = activeSession();
   session.messages = storedChatMessages.slice(-MAX_STORED_CHAT_MESSAGES);
   session.updatedAt = Date.now();
@@ -1858,8 +1864,19 @@ function persistChatHistory() {
     ...chatSessions.sessions.filter((item) => item.id !== session.id)
   ].slice(0, MAX_STORED_SESSIONS);
   chatSessions.activeSessionId = session.id;
+  if (options.debounce) {
+    clearTimeout(chatHistoryPersistTimer);
+    chatHistoryPersistTimer = setTimeout(() => {
+      chatHistoryPersistTimer = null;
+      renderSessionList();
+      persistChatSessions();
+    }, STREAM_PERSIST_DEBOUNCE_MS);
+    return chatSessionWriteQueue;
+  }
+  clearTimeout(chatHistoryPersistTimer);
+  chatHistoryPersistTimer = null;
   renderSessionList();
-  persistChatSessions();
+  return persistChatSessions();
 }
 
 function persistChatSessions(options = {}) {
@@ -5137,7 +5154,7 @@ function appendMessage(role, content, options = {}) {
         time: Date.now()
       });
       while (storedChatMessages.length > MAX_STORED_CHAT_MESSAGES) storedChatMessages.shift();
-      persistChatHistory();
+      persistChatHistory({ debounce: options.streaming === true });
     }
     return null;
   }
@@ -5168,7 +5185,7 @@ function appendMessage(role, content, options = {}) {
       time: Date.now()
     });
     while (storedChatMessages.length > MAX_STORED_CHAT_MESSAGES) storedChatMessages.shift();
-    persistChatHistory();
+    persistChatHistory({ debounce: options.streaming === true });
   }
   elements.messages.append(node);
   elements.messages.scrollTop = elements.messages.scrollHeight;
@@ -5176,18 +5193,25 @@ function appendMessage(role, content, options = {}) {
 }
 
 function updateMessage(node, content, options = {}) {
-  setMessageNodeContent(node, content, options.status);
+  const text = String(content || "");
+  if (options.streaming === true && node.classList.contains("assistant")) {
+    messageNodeSources.set(node, text);
+    scheduleAssistantMarkdownRender(node);
+  } else {
+    cancelAssistantMarkdownRender(node);
+    setMessageNodeContent(node, text, options.status);
+  }
   const id = node.dataset.historyId;
   const stored = id ? storedChatMessages.find((message) => message.id === id) : null;
   if (stored) {
-    stored.content = String(content || "");
-    stored.modelContent = String(content || "");
+    stored.content = text;
+    stored.modelContent = text;
     if (options.status !== undefined) stored.status = String(options.status || "");
     if (options.result !== undefined) stored.result = options.result;
     if (options.durationMs !== undefined) stored.durationMs = Number(options.durationMs || 0);
     if (options.plan !== undefined) stored.plan = options.plan;
     stored.time = Date.now();
-    persistChatHistory();
+    persistChatHistory({ debounce: options.streaming === true });
   }
   elements.messages.scrollTop = elements.messages.scrollHeight;
 }
@@ -5236,6 +5260,22 @@ function renderAssistantMarkdown(node, source) {
   });
   const parsed = new DOMParser().parseFromString(`<body>${html}</body>`, "text/html");
   node.replaceChildren(...[...parsed.body.childNodes].map((child) => child.cloneNode(true)));
+}
+
+function scheduleAssistantMarkdownRender(node) {
+  if (assistantRenderTimers.has(node)) return;
+  const timer = setTimeout(() => {
+    assistantRenderTimers.delete(node);
+    renderAssistantMarkdown(node, messageNodeSource(node));
+    elements.messages.scrollTop = elements.messages.scrollHeight;
+  }, STREAM_RENDER_INTERVAL_MS);
+  assistantRenderTimers.set(node, timer);
+}
+
+function cancelAssistantMarkdownRender(node) {
+  const timer = assistantRenderTimers.get(node);
+  if (timer !== undefined) clearTimeout(timer);
+  assistantRenderTimers.delete(node);
 }
 
 function setBusy(busy, text = "Ready") {

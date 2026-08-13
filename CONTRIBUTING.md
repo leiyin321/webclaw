@@ -5,28 +5,27 @@ Thanks for helping improve WebClaw.
 ## Development Setup
 
 1. Clone the repository.
-2. Open `chrome://extensions`.
-3. Enable Developer mode.
-4. Click `Load unpacked`.
-5. Select the repository directory.
+2. Run `npm ci && npm run build:documents` to install the fixed document-engine dependencies and build `build/document/document-sandbox.js`.
+3. Open `chrome://extensions`.
+4. Enable Developer mode.
+5. Click `Load unpacked`.
+6. Select the repository directory.
 
-No build step is required. WebClaw is a plain Manifest V3 extension.
+The extension itself is plain Manifest V3 source, but the Office/PDF document engines require the local bundle generated in step 2.
 
 ## Validation
 
 Run these checks before opening a pull request:
 
 ```bash
-node --check src/background.js
-node --check src/content.js
-node --check src/sidepanel.js
-node --check src/chrome-ai-offscreen.js
-node --check src/wechat-offscreen.js
-node --check src/wechat-api.js
-node --check src/wechat-media.js
-node --check src/wechat-message.js
-node --check src/wechat-storage.js
-node -e "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')); console.log('manifest ok')"
+npm run build:documents
+npm run test:documents
+./scripts/check-syntax.sh
+node scripts/test-agent-runtime.mjs
+./scripts/test-agent-loop.sh
+node scripts/test-provider-client-metadata.mjs
+node scripts/test-openai-compatible-structured-output.mjs
+node scripts/validate-release.mjs
 ```
 
 ## Pull Request Guidelines

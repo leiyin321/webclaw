@@ -3859,7 +3859,7 @@ async function runAgent(uiMessages, options = {}) {
           taskStack: taskStackSnapshot(taskRun)
         }
       ),
-      executeTool: async ({ step, messages: modelMessages, toolCall, runtimeState, signal: toolSignal }) => {
+      executeTool: async ({ step, messages: modelMessages, toolCall, operationKey, runtimeState, signal: toolSignal }) => {
         const toolName = canonicalToolName(toolCall.name);
         const toolArgs = toolCall.args || {};
         const toolCallId = String(toolCall.callId || createAgentId("call"));
@@ -3900,6 +3900,7 @@ async function runAgent(uiMessages, options = {}) {
           contextCompaction,
           runtimeState,
           toolBudgetConsumed: true,
+          operationKey,
           toolCall: {
             callId: toolCallId,
             name: toolName,
@@ -7375,6 +7376,15 @@ function originPatternForUrl(value) {
   }
 }
 
+function isPrivateOrLoopbackHost(value) {
+  const host = String(value || "").replace(/^\[|\]$/g, "").toLowerCase();
+  if (host === "localhost" || host.endsWith(".localhost") || host === "::1") return true;
+  if (host === "[::1]") return true;
+  const parts = host.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  return parts[0] === 10 || parts[0] === 127 || (parts[0] === 192 && parts[1] === 168) || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) || (parts[0] === 169 && parts[1] === 254);
+}
+
 async function missingOriginPermissions(origins) {
   const missing = [];
   for (const origin of uniqueStrings(origins)) {
@@ -8319,11 +8329,14 @@ async function httpRequest(args, options = {}) {
   if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
     throw new Error("http_request only supports http and https URLs.");
   }
+  const privateNetworkWarning = isPrivateOrLoopbackHost(parsedUrl.hostname)
+    ? "\nSecurity note: this endpoint is a loopback or private-network address. Review it before allowing access from an Agent Tool."
+    : "";
   await ensureUrlPermission(
     url,
     "WebClaw needs access to this endpoint to send the HTTP request requested by the current tool call.",
     options,
-    `${String(args.method || "GET").toUpperCase()} ${url}`
+    `${String(args.method || "GET").toUpperCase()} ${url}${privateNetworkWarning}`
   );
   const method = String(args.method || "GET").toUpperCase();
   if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) {
@@ -8364,14 +8377,22 @@ async function httpRequest(args, options = {}) {
       redirect: args.redirect === "manual" ? "manual" : "follow",
       signal: controller.signal
     });
-    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (response.redirected) {
+      const finalOrigin = originPatternForUrl(response.url);
+      const initialOrigin = originPatternForUrl(url);
+      if (finalOrigin && finalOrigin !== initialOrigin) {
+        const finalGranted = await chrome.permissions.contains({ origins: [finalOrigin] });
+        if (!finalGranted) {
+          throw new Error(`http_request redirect target is not authorized: ${response.url}`);
+        }
+      }
+    }
     const maxBytes = Math.floor(clampNumber(args.maxBytes, 1000, 20 * 1024 * 1024, 2 * 1024 * 1024));
     const contentType = response.headers.get("content-type") || "application/octet-stream";
     const responseType = normalizedHttpResponseType(args.responseType, contentType);
     const saveToVfs = String(args.saveToVfs || "").trim();
-    if (bytes.byteLength > maxBytes && (saveToVfs || responseType !== "text")) {
-      throw new Error(`http_request response is ${bytes.byteLength} bytes, above maxBytes=${maxBytes}. Increase maxBytes explicitly if the response is expected.`);
-    }
+    const allowTruncatedText = !saveToVfs && responseType === "text";
+    const bytes = await readHttpResponseBytes(response, maxBytes, allowTruncatedText);
     let savedFile = null;
     if (saveToVfs) {
       savedFile = await vfsWriteFile(saveToVfs, new Blob([bytes], { type: contentType }), {
@@ -8401,8 +8422,8 @@ async function httpRequest(args, options = {}) {
       responseType,
       body: text,
       ...(json !== null ? { json } : {}),
-      bytes: bytes.byteLength,
-      truncated: bytes.byteLength > maxBytes,
+      bytes: Number(bytes.totalBytes || bytes.byteLength),
+      truncated: bytes.truncated === true || bytes.byteLength > maxBytes,
       ...(savedFile ? { savedToVfs: savedFile.path, savedEntry: savedFile.entry } : {})
     };
   } catch (error) {
@@ -8414,6 +8435,58 @@ async function httpRequest(args, options = {}) {
     clearTimeout(timer);
     options.signal?.removeEventListener("abort", abortFromParent);
   }
+}
+
+async function readHttpResponseBytes(response, maxBytes, allowTruncatedText = false) {
+  const contentLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > maxBytes && !allowTruncatedText) {
+    throw new Error(`http_request response is ${contentLength} bytes, above maxBytes=${maxBytes}. Increase maxBytes explicitly if the response is expected.`);
+  }
+  if (!response.body) {
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > maxBytes && !allowTruncatedText) {
+      throw new Error(`http_request response is ${buffer.byteLength} bytes, above maxBytes=${maxBytes}. Increase maxBytes explicitly if the response is expected.`);
+    }
+    const bytes = new Uint8Array(buffer.slice(0, maxBytes));
+    if (buffer.byteLength > maxBytes) {
+      bytes.truncated = true;
+      bytes.totalBytes = Number.isFinite(contentLength) ? contentLength : buffer.byteLength;
+    }
+    return bytes;
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  let truncated = false;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const remaining = maxBytes - total;
+    if (value.byteLength > remaining) {
+      if (!allowTruncatedText) {
+        await reader.cancel().catch(() => {});
+        throw new Error(`http_request response exceeds maxBytes=${maxBytes}. Increase maxBytes explicitly if the response is expected.`);
+      }
+      chunks.push(value.subarray(0, remaining));
+      total += remaining;
+      truncated = true;
+      await reader.cancel().catch(() => {});
+      break;
+    }
+    chunks.push(value);
+    total += value.byteLength;
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  if (truncated) {
+    bytes.truncated = true;
+    bytes.totalBytes = Number.isFinite(contentLength) ? contentLength : total;
+  }
+  return bytes;
 }
 
 function normalizedHttpResponseType(value, contentType) {

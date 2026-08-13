@@ -59,8 +59,8 @@ const uncertainScheduler = createAgentToolScheduler({
   }
 });
 const uncertainCall = { callId: "notify", name: "qiyewechat_notification", args: { content: "x" } };
-await uncertainScheduler.executeBatch([uncertainCall], { runId: "run-3" });
-startedOperations.set("run-3:notify:qiyewechat_notification", {
+const uncertainFirst = await uncertainScheduler.executeBatch([uncertainCall], { runId: "run-3" });
+startedOperations.set(uncertainFirst.results[0].operationKey, {
   status: "started",
   value: { metadata: inferToolExecutionMetadata("qiyewechat_notification", uncertainCall.args) }
 });
@@ -85,6 +85,7 @@ assert.equal(invalidExecuted, false);
 
 const timedOperations = new Map();
 let timeoutAborted = false;
+let timeoutExecutions = 0;
 const timeoutScheduler = createAgentToolScheduler({
   resolveMetadata: () => ({
     effects: ["external_write"],
@@ -98,6 +99,7 @@ const timeoutScheduler = createAgentToolScheduler({
     async complete(key, value) { timedOperations.set(key, { status: "completed", value }); }
   },
   execute: async (_call, context) => new Promise((_resolve, reject) => {
+    timeoutExecutions += 1;
     context.signal.addEventListener("abort", () => {
       timeoutAborted = true;
       reject(context.signal.reason);
@@ -105,12 +107,22 @@ const timeoutScheduler = createAgentToolScheduler({
   })
 });
 const timed = await timeoutScheduler.executeBatch([
-  { callId: "timeout", name: "external_send", args: {} }
+  { callId: "timeout", name: "external_send", args: { content: "same message" } }
 ], { runId: "run-timeout" });
-assert.equal(timed.results[0].result.errorType, "tool_timeout");
+assert.equal(timed.results[0].result.errorType, "operation_state_unknown");
 assert.equal(timed.results[0].result.effectState, "unknown");
+assert.equal(timed.results[0].observation.error.retryable, false);
+assert.equal(timed.results[0].recoveryRequired, true);
 assert.equal(timeoutAborted, true);
-assert.equal(timedOperations.get("run-timeout:timeout:external_send").status, "started");
+assert.equal(timedOperations.get(timed.results[0].operationKey).status, "started");
+assert.equal([...timedOperations.keys()].some((key) => key.startsWith("run-timeout:uncertain:external_send:")), true);
+
+const blockedRetry = await timeoutScheduler.executeBatch([
+  { callId: "timeout-retry", name: "external_send", args: { content: "same message" } }
+], { runId: "run-timeout" });
+assert.equal(blockedRetry.results[0].result.errorType, "operation_state_unknown");
+assert.notEqual(blockedRetry.results[0].operationKey, timed.results[0].operationKey);
+assert.equal(timeoutExecutions, 1);
 
 const stoppedController = new AbortController();
 stoppedController.abort(new Error("Stopped"));

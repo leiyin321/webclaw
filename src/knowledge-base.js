@@ -74,11 +74,12 @@ export async function knowledgeSearch(query, options = {}) {
   const db = await openDatabase();
   const transaction = db.transaction([DOCUMENTS, CHUNKS], "readonly");
   const documents = await requestAsPromise(transaction.objectStore(DOCUMENTS).getAll());
-  const chunks = await requestAsPromise(transaction.objectStore(CHUNKS).getAll());
-  await transactionDone(transaction);
-  db.close();
   const filteredDocuments = documents.filter((document) => matchesDocumentFilter(document, options));
   const documentById = new Map(filteredDocuments.map((document) => [document.id, document]));
+  const chunkIndex = transaction.objectStore(CHUNKS).index("documentId");
+  const chunks = (await Promise.all(filteredDocuments.map((document) => requestAsPromise(chunkIndex.getAll(document.id))))).flat();
+  await transactionDone(transaction);
+  db.close();
   const normalizedQuery = normalizeText(query).toLowerCase();
   const results = chunks
     .map((chunk) => ({ chunk, document: documentById.get(chunk.documentId), score: scoreChunk(chunk.content, terms, normalizedQuery) }))

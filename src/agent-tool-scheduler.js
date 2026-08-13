@@ -13,12 +13,18 @@ export function createAgentToolScheduler(options = {}) {
   return {
     async executeBatch(toolCalls, context = {}) {
       const calls = normalizeToolCalls(toolCalls);
-      const scheduled = await Promise.all(calls.map(async (call, index) => ({
-        call,
-        index,
-        metadata: normalizeExecutionMetadata(await resolveMetadata(call, context)),
-        operationKey: operationKeyFor(call, context)
-      })));
+      const scheduled = await Promise.all(calls.map(async (call, index) => {
+        const metadata = normalizeExecutionMetadata(await resolveMetadata(call, context));
+        return {
+          call,
+          index,
+          metadata,
+          operationKey: operationKeyFor(call, context),
+          uncertainEffectKey: metadata.idempotency === "unknown"
+            ? await uncertainEffectKeyFor(call, context)
+            : ""
+        };
+      }));
       const waves = scheduleExecutionWaves(scheduled);
       const results = new Array(scheduled.length);
 
@@ -101,6 +107,27 @@ async function executeScheduledCall(entry, context, execute, operationStore, val
       durationMs: 0
     };
   }
+  if (entry.uncertainEffectKey) {
+    const uncertainEffect = await operationStore.get(entry.uncertainEffectKey);
+    if (uncertainEffect) {
+      const result = {
+        ok: false,
+        error: "An equivalent Tool execution previously timed out after it started. Its external effect is unknown, so WebClaw will not replay it automatically. Verify the target state before trying a different operation.",
+        errorType: "operation_state_unknown",
+        effectState: "unknown",
+        operationKey: uncertainEffect.value?.operationKey || entry.operationKey
+      };
+      return {
+        call: entry.call,
+        result,
+        observation: normalizeToolObservation(entry.call, result, entry.metadata),
+        metadata: entry.metadata,
+        operationKey: entry.operationKey,
+        durationMs: 0,
+        recoveryRequired: true
+      };
+    }
+  }
   const existing = await operationStore.get(entry.operationKey);
   throwIfStopped(context.signal);
   if (existing?.status === "completed") {
@@ -160,10 +187,15 @@ async function executeScheduledCall(entry, context, execute, operationStore, val
     if (context.signal?.aborted || error?.name === "AbortError" || error?.message === "Stopped") {
       throw error;
     }
+    const timedOut = error?.name === "TimeoutError";
+    const effectUnknown = timedOut && !["safe", "retry_safe"].includes(entry.metadata.idempotency);
     const result = {
       ok: false,
-      error: error?.message || String(error),
-      errorType: error?.name === "TimeoutError" ? "tool_timeout" : "tool_execution_error"
+      error: effectUnknown
+        ? "The Tool timed out after execution started. Its external effect is unknown, so WebClaw will not retry the same operation automatically. Verify the target state before trying a different operation."
+        : error?.message || String(error),
+      errorType: effectUnknown ? "operation_state_unknown" : timedOut ? "tool_timeout" : "tool_execution_error",
+      ...(timedOut ? { effectState: "unknown" } : {})
     };
     const value = {
       call: entry.call,
@@ -173,9 +205,17 @@ async function executeScheduledCall(entry, context, execute, operationStore, val
       operationKey: entry.operationKey,
       durationMs: Date.now() - startedAt
     };
-    if (error?.name === "TimeoutError") {
-      value.result.effectState = "unknown";
-      value.observation.result = value.result;
+    if (timedOut) {
+      if (effectUnknown) {
+        value.recoveryRequired = true;
+        await operationStore.start(entry.uncertainEffectKey, {
+          call: entry.call,
+          metadata: entry.metadata,
+          operationKey: entry.operationKey,
+          effectState: "unknown",
+          startedAt
+        });
+      }
       return value;
     }
     await operationStore.complete(entry.operationKey, value);
@@ -232,6 +272,23 @@ function resourceKeysOverlap(left, right) {
 
 function operationKeyFor(call, context) {
   return [String(context.runId || "run"), call.callId, call.name].join(":");
+}
+
+async function uncertainEffectKeyFor(call, context) {
+  const runId = String(context.runId || "run");
+  const fingerprint = await sha256Hex(stableSerialize({ name: call.name, args: call.args }));
+  return [runId, "uncertain", call.name, fingerprint].join(":");
+}
+
+function stableSerialize(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(value[key])}`).join(",")}}`;
+}
+
+async function sha256Hex(value) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function writeMetadata(resources, idempotency, risk = "normal") {

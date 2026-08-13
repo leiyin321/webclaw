@@ -93,6 +93,13 @@ assert.deepEqual(sanitizeAgentRunValue({ apiKey: "x", nested: { cookie: "y" } })
   apiKey: "[redacted]",
   nested: { cookie: "[redacted]" }
 });
+assert.deepEqual(sanitizeAgentRunValue({
+  authorizationScope: { type: "schedule", id: "schedule-1" },
+  authorizationMode: "sidepanel"
+}), {
+  authorizationScope: { type: "schedule", id: "schedule-1" },
+  authorizationMode: "sidepanel"
+});
 assert.match(sanitizeAgentRunValue("Authorization: Bearer abcdefghijklmnopqrstuvwxyz"), /Bearer \[redacted\]/);
 assert.doesNotMatch(sanitizeAgentRunValue("key=sk-abcdefghijklmnop"), /sk-abcdefghijklmnop/);
 assert.equal(classifyAgentRunRecovery({ checkpoint: { phase: "after_tool" } }).action, "resume_model");
@@ -123,6 +130,20 @@ const completedRecovery = await resolveAgentRunRecovery(operationRecoveryRun, as
 }));
 assert.equal(completedRecovery.action, "resume_tool");
 
+let requestedOperationKey = "";
+const checkpointKeyRecovery = await resolveAgentRunRecovery({
+  ...operationRecoveryRun,
+  checkpoint: {
+    ...operationRecoveryRun.checkpoint,
+    operationKey: "recovery-run:call-1:external_send"
+  }
+}, async (key) => {
+  requestedOperationKey = key;
+  return { status: "started", value: { metadata: { idempotency: "unknown" } } };
+});
+assert.equal(requestedOperationKey, "recovery-run:call-1:external_send");
+assert.equal(checkpointKeyRecovery.action, "inspect_operation");
+
 const failingJournal = createAgentRunJournal({
   async claimRun() { return true; },
   async appendEvent() { throw new Error("storage unavailable"); },
@@ -150,7 +171,7 @@ try {
   partiallyFailingJournal.append("turn_completed");
   await partiallyFailingJournal.close("completed");
   assert.equal(partiallyFailingJournal.terminalCommitted, true);
-  await assert.rejects(() => partiallyFailingJournal.flush(), /event write failed/);
+  assert.deepEqual(await partiallyFailingJournal.flush(), { ok: true });
   await partiallyFailingJournal.close("failed");
   assert.equal(completeCalls, 1);
 } finally {

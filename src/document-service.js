@@ -1010,6 +1010,7 @@ async function readZip(blob) {
   let totalUncompressed = 0;
   let cursor = directoryOffset;
   for (let index = 0; index < count; index += 1) {
+    if (cursor < 0 || cursor + 46 > bytes.length) throw new Error("Office ZIP central directory is truncated.");
     if (view.getUint32(cursor, true) !== 0x02014b50) throw new Error("Office ZIP central directory is invalid.");
     const method = view.getUint16(cursor + 10, true);
     const compressedSize = view.getUint32(cursor + 20, true);
@@ -1018,22 +1019,29 @@ async function readZip(blob) {
     const extraLength = view.getUint16(cursor + 30, true);
     const commentLength = view.getUint16(cursor + 32, true);
     const localOffset = view.getUint32(cursor + 42, true);
-    const name = new TextDecoder().decode(bytes.slice(cursor + 46, cursor + 46 + nameLength));
+    const nameEnd = cursor + 46 + nameLength;
+    const recordEnd = nameEnd + extraLength + commentLength;
+    if (nameEnd > bytes.length || recordEnd > bytes.length) throw new Error("Office ZIP central directory entry is truncated.");
+    const name = new TextDecoder().decode(bytes.slice(cursor + 46, nameEnd));
     if (name.startsWith("/") || name.split("/").includes("..")) throw new Error(`Office package contains an unsafe ZIP path: ${name}`);
     if (uncompressedSize > MAX_ZIP_ENTRY_BYTES || compressedSize > MAX_ZIP_ENTRY_BYTES) throw new Error(`Office ZIP entry exceeds the per-entry limit: ${name}`);
     totalUncompressed += uncompressedSize;
     if (totalUncompressed > MAX_ZIP_UNCOMPRESSED_BYTES) throw new Error("Office package exceeds the total uncompressed size limit.");
     entries.set(name, { method, compressedSize, uncompressedSize, localOffset });
-    cursor += 46 + nameLength + extraLength + commentLength;
+    cursor = recordEnd;
   }
   const get = async (path) => {
     const entry = entries.get(path);
     if (!entry) return null;
     const local = entry.localOffset;
+    if (local + 30 > bytes.length) throw new Error(`Office ZIP entry is invalid: ${path}`);
     if (view.getUint32(local, true) !== 0x04034b50) throw new Error(`Office ZIP entry is invalid: ${path}`);
     const nameLength = view.getUint16(local + 26, true);
     const extraLength = view.getUint16(local + 28, true);
-    const compressed = bytes.slice(local + 30 + nameLength + extraLength, local + 30 + nameLength + extraLength + entry.compressedSize);
+    const dataStart = local + 30 + nameLength + extraLength;
+    const dataEnd = dataStart + entry.compressedSize;
+    if (dataStart > bytes.length || dataEnd > bytes.length) throw new Error(`Office ZIP entry is invalid: ${path}`);
+    const compressed = bytes.slice(dataStart, dataEnd);
     if (entry.method === 0) return compressed;
     if (entry.method !== 8 || typeof DecompressionStream === "undefined") throw new Error("Compressed Office packages require the browser DecompressionStream API.");
     const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream("deflate-raw"));

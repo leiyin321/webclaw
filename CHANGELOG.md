@@ -4,6 +4,14 @@ All notable changes to WebClaw will be documented in this file.
 
 ## Unreleased
 
+## 0.7.5
+
+- Harden `http_request` and WeChat media downloads to stream and enforce byte limits before buffering, add a loopback/private-network disclosure, and reject redirects to unauthorized final origins.
+- Prevent persisted VFS preview localStorage values from breaking out of the generated bootstrap script, and add preview file count and total-size limits.
+- Tighten Agent RunStore sensitive-key redaction so non-secret fields such as `authorizationScope` and `authorizationMode` survive recovery, and avoid one transient write error permanently failing later checkpoints.
+- Add ZIP central-directory and local-header bounds checks, decoded image-dimension checks before document engines, and per-document knowledge-search chunk loading.
+- Propagate document-generation cancellation into the Manifest Sandbox engine and align `CONTRIBUTING.md` plus Office document planning docs with the current `0.7.5` build/version state.
+
 ## 0.7.4
 
 - Fix `extension` run_js RPC startup in Manifest Sandbox workers where `crypto.randomUUID()` is unavailable by using a run-local monotonic call ID.

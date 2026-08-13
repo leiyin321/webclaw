@@ -8,6 +8,8 @@ Only messages with the `assistant` role use Markdown rendering. User and Channel
 
 The same behavior applies to streamed assistant deltas and the final response. The UI keeps the original source string separately from the rendered DOM, so a new delta is appended to Markdown source rather than to `textContent` generated from HTML.
 
+Streaming updates are rendered at a bounded interval and chat-history persistence is debounced. The final response always cancels pending work, renders the complete Markdown source, and queues the latest session snapshot immediately. This avoids reparsing and storing the full response for every token-sized delta.
+
 Supported chat syntax includes:
 
 - headings, bold, italic, and strikethrough;
@@ -17,7 +19,7 @@ Supported chat syntax includes:
 - pipe tables and alignment markers;
 - links with `http`, `https`, `mailto`, `tel`, and fragment targets.
 
-This is the shared local parser in `src/markdown.js`, not a remote Markdown service or a new runtime dependency. Document preview continues to use the same parser with document-specific options.
+This is the shared local parser in `src/markdown.js`, not a remote Markdown service or a new runtime dependency. Document preview continues to use the same parser with document-specific options. Inline code and link destinations are tokenized before emphasis is rendered, and a pipe table is recognized only when its header is followed by a valid delimiter row.
 
 ## Security boundary
 
@@ -33,4 +35,4 @@ The chat stylesheet keeps Markdown compact for a narrow Side Panel. Code blocks 
 
 ## Verification
 
-`scripts/test-markdown.mjs` checks supported syntax, HTML escaping, unsafe and relative link blocking, remote-image suppression, and the Side Panel integration. `scripts/test-agent-loop.sh` includes this test in the full Agent regression suite.
+`scripts/test-markdown.mjs` checks supported syntax, protected inline code and URL underscores, table delimiter requirements, blockquote text preservation, HTML escaping, unsafe and relative link blocking, remote-image suppression, and the Side Panel integration. `scripts/test-agent-loop.sh` includes this test in the full Agent regression suite.

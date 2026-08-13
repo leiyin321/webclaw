@@ -6,6 +6,7 @@ export async function normalizeDocumentImageAsset(format, path, blob) {
   if (!IMAGE_TYPES.has(detectedType)) {
     throw new Error(`Unsupported or invalid ${String(format || "document").toUpperCase()} image asset: ${path}`);
   }
+  await assertSafeImageDimensions(blob, path);
   let normalizedBlob = blob;
   let normalizedType = detectedType;
   if (detectedType === "webp") {
@@ -20,6 +21,23 @@ export async function normalizeDocumentImageAsset(format, path, blob) {
     throw new Error(`Unsupported ${String(format || "document").toUpperCase()} image asset: ${path} (${detectedType})`);
   }
   return { blob: normalizedBlob, type: normalizedType };
+}
+
+async function assertSafeImageDimensions(blob, path) {
+  if (typeof createImageBitmap !== "function") return;
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(blob);
+  } catch {
+    return;
+  }
+  try {
+    if (!bitmap.width || !bitmap.height || bitmap.width * bitmap.height > 40_000_000) {
+      throw new Error(`Document image dimensions are invalid or too large: ${path}`);
+    }
+  } finally {
+    bitmap.close?.();
+  }
 }
 
 export async function detectDocumentImageType(blob) {

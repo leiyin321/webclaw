@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { renderMarkdownFragment } from "../src/markdown.js";
+import { markdownToText, parseMarkdown, renderMarkdownFragment } from "../src/markdown.js";
 
 const rendered = renderMarkdownFragment(`# Result
 
@@ -47,6 +47,16 @@ assert.doesNotMatch(escaped, /<img/);
 assert.match(escaped, /\[Image: remote\]/);
 assert.equal((escaped.match(/href="#"/g) || []).length, 2);
 
+const protectedInline = renderMarkdownFragment("`**literal**` and [underscored](https://example.com/a_b_c)");
+assert.match(protectedInline, /<code>\*\*literal\*\*<\/code>/);
+assert.doesNotMatch(protectedInline, /<code><strong>/);
+assert.match(protectedInline, /href="https:\/\/example\.com\/a_b_c"/);
+
+const plainPipe = parseMarkdown("Use A | B for fallback");
+assert.deepEqual(plainPipe.blocks.map((block) => block.type), ["paragraph"]);
+assert.match(renderMarkdownFragment("Use A | B for fallback"), /<p>Use A \| B for fallback<\/p>/);
+assert.equal(markdownToText("> first line\n> second line"), "> first line\n> second line");
+
 const sidepanel = readFileSync(new URL("../src/sidepanel.js", import.meta.url), "utf8");
 const sidepanelCss = readFileSync(new URL("../src/sidepanel.css", import.meta.url), "utf8");
 assert.match(sidepanel, /import \{ renderMarkdownFragment \} from "\.\/markdown\.js"/);
@@ -54,6 +64,9 @@ assert.equal((sidepanel.match(/messageNodeSource\(activeAssistantNode\)/g) || []
 assert.match(sidepanel, /allowImages: false/);
 assert.match(sidepanel, /allowRelativeLinks: false/);
 assert.match(sidepanel, /node\.classList\.contains\("assistant"\)/);
+assert.match(sidepanel, /STREAM_RENDER_INTERVAL_MS/);
+assert.match(sidepanel, /STREAM_PERSIST_DEBOUNCE_MS/);
+assert.match(sidepanel, /streaming: true/);
 assert.match(sidepanelCss, /\.message\.assistant pre/);
 assert.match(sidepanelCss, /\.message\.assistant table/);
 

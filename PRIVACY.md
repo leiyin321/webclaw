@@ -1,6 +1,6 @@
 # WebClaw 隐私政策 / Privacy Policy
 
-生效日期 / Effective date: 2026-08-11
+生效日期 / Effective date: 2026-08-14
 
 WebClaw 是一个“用户控制的浏览器 AI 助手”。它的单一用途是让用户在 Chrome 中与自己选择的模型对话，并在用户授权后执行网页操作、Tool、Channel 和可选的高级自动化。WebClaw 项目不运营用于转发提示词、网页内容或模型响应的后端服务。
 

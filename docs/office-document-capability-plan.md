@@ -1,14 +1,14 @@
 # WebClaw 办公文档能力设计与开发计划
 
-状态：0.7.0 浏览器基础能力已实现；保真编辑、复杂渲染和真实 Office 应用互操作仍属于后续阶段
+状态：当前 `manifest.json` 为 0.7.5；0.7.0 浏览器基础能力已实现，Rich Schema 生成和受限投影在 0.7.x 持续演进；保真编辑、复杂渲染和真实 Office 应用互操作仍属于后续阶段
 
 建议目标版本：0.7.0
 
 适用范围：Markdown、DOCX、XLSX、PPTX、PDF、VFS、Tool Registry、知识库、文件管理器和文档预览
 
-最后更新：2026-08-11
+最后更新：2026-08-14
 
-当前实现说明：已提供统一 `DocumentService`、Markdown 解析/渲染、基础 DOCX/XLSX/PPTX 创建和 rebuild 编辑、ASCII 文本 PDF 创建、DOCX/XLSX/PPTX/PDF 的受控只读投影、段落/单元格/幻灯片 locator、版本与哈希保护、自动 pre-write revision、恢复与确认清理、8 个文档 Tools、独立投影视图、知识库投影 ingest 和自动化测试。当前 Office/PDF 读取使用浏览器原生 ZIP/XML/TextDecoder，不执行宏、外部关系、公式重算、脚本或 OCR。PDF 解析器不能可靠隔离单页文本，因此 0.7.0 明确拒绝 `pdf_page` locator。DOCX/XLSX/PPTX rebuild 编辑不保证样式、图片、动画和未知 OOXML 部件保留。
+当前实现说明：已提供统一 `DocumentService`、Markdown 解析/渲染、基础 DOCX/XLSX/PPTX 创建和 rebuild 编辑、ASCII 文本 PDF 创建、Rich Schema 创建 DOCX/XLSX/PPTX/PDF、DOCX/XLSX/PPTX/PDF 的受控只读投影、段落/单元格/幻灯片 locator、版本与哈希保护、自动 pre-write revision、恢复与确认清理、8 个文档 Tools、独立投影视图、知识库投影 ingest 和自动化测试。当前 Office/PDF 读取使用浏览器原生 ZIP/XML/TextDecoder，不执行宏、外部关系、公式重算、脚本或 OCR。PDF 解析器不能可靠隔离单页文本，因此明确拒绝 `pdf_page` locator。DOCX/XLSX/PPTX rebuild 编辑不保证样式、图片、动画和未知 OOXML 部件保留。
 
 0.7.1 及后续复杂样式生成的可执行开发方案见 [复杂样式文档生成迭代计划](rich-document-generation-plan.md)。
 

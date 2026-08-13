@@ -1,5 +1,8 @@
 import { vfsGetFileBlob, vfsList } from "./virtual-file-system.js";
 
+const MAX_PREVIEW_FILES = 2000;
+const MAX_PREVIEW_TOTAL_BYTES = 50 * 1024 * 1024;
+
 export async function buildVfsPreviewDocument(entryPath, options = {}) {
   const path = String(entryPath || "").trim();
   if (!/^\/[^\0]*\.(?:html?|xhtml|svg)$/i.test(path)) {
@@ -18,12 +21,21 @@ export async function buildVfsPreviewDocument(entryPath, options = {}) {
 
 async function collectFiles(root) {
   const files = [];
+  let fileCount = 0;
+  let totalBytes = 0;
   async function visit(path) {
     const listing = await vfsList(path);
     for (const entry of listing.entries) {
       if (entry.path === "/.trash" || entry.path.startsWith("/.trash/")) continue;
       if (entry.type === "directory") await visit(entry.path);
-      else files.push({ path: entry.path, entry, blob: await vfsGetFileBlob(entry.path) });
+      else {
+        fileCount += 1;
+        totalBytes += Number(entry.size || 0);
+        if (fileCount > MAX_PREVIEW_FILES || totalBytes > MAX_PREVIEW_TOTAL_BYTES) {
+          throw new Error(`Preview exceeds the safety limit of ${MAX_PREVIEW_FILES} files or ${MAX_PREVIEW_TOTAL_BYTES} bytes.`);
+        }
+        files.push({ path: entry.path, entry, blob: await vfsGetFileBlob(entry.path) });
+      }
     }
   }
   await visit(root);
@@ -106,7 +118,17 @@ function createRuntimeBootstrap(resources, cache, currentPath, options = {}) {
   const map = Object.fromEntries([...resources.keys()].map((path) => [path, cache.get(path)?.url || ""]));
   const namespace = String(options.storageNamespace || "preview");
   const storageSeed = options.localStorage && typeof options.localStorage === "object" ? options.localStorage : {};
-  return `<script>\n(() => {\n  const root = ${JSON.stringify(parentPath(currentPath))};\n  const resolve = (value) => { try { return new URL(value, document.baseURI).pathname; } catch { return value; } };\n  const map = ${JSON.stringify(map)};\n  const originalFetch = window.fetch.bind(window);\n  window.fetch = (input, init) => { const value = typeof input === "string" ? input : input?.url; const path = resolve(value || ""); const target = map[path] || map[root + path]; return target ? originalFetch(target, init) : originalFetch(input, init); };\n  const namespace = ${JSON.stringify(namespace)};\n  const values = Object.create(null);\n  for (const [key, value] of Object.entries(${JSON.stringify(storageSeed)})) values[key] = String(value);\n  const persist = (action, key, value) => (window.opener || window.parent)?.postMessage({ type: "WEBCLAW_PREVIEW_STORAGE_SET", namespace, action, key, value }, "*");\n  const storage = { get length() { return Object.keys(values).length; }, key: (index) => Object.keys(values)[Number(index)] ?? null, getItem: (key) => Object.prototype.hasOwnProperty.call(values, String(key)) ? values[String(key)] : null, setItem: (key, value) => { const name = String(key); const next = String(value); values[name] = next; persist("set", name, next); }, removeItem: (key) => { const name = String(key); delete values[name]; persist("remove", name, ""); }, clear: () => { for (const key of Object.keys(values)) delete values[key]; persist("clear", "", ""); } };\n  try { Object.defineProperty(window, "localStorage", { configurable: true, value: storage }); } catch { /* opaque origins may reject the native property; the shim remains available to page code that receives it. */ }\n  const report = (level, args) => (window.opener || window.parent)?.postMessage({ type: "WEBCLAW_PREVIEW_LOG", level, message: args.map(String).join(" ") }, "*");\n  for (const level of ["log", "info", "warn", "error"]) { const original = console[level]; console[level] = (...args) => { original(...args); report(level, args); }; }\n  window.addEventListener("error", (event) => report("error", [event.message, event.filename, event.lineno]));\n  window.addEventListener("unhandledrejection", (event) => report("error", [event.reason]));\n})();\n</script>`;
+  const safeStorageSeed = safeInlineJson(JSON.stringify(storageSeed));
+  return `<script>\n(() => {\n  const root = ${JSON.stringify(parentPath(currentPath))};\n  const resolve = (value) => { try { return new URL(value, document.baseURI).pathname; } catch { return value; } };\n  const map = ${JSON.stringify(map)};\n  const originalFetch = window.fetch.bind(window);\n  window.fetch = (input, init) => { const value = typeof input === "string" ? input : input?.url; const path = resolve(value || ""); const target = map[path] || map[root + path]; return target ? originalFetch(target, init) : originalFetch(input, init); };\n  const namespace = ${JSON.stringify(namespace)};\n  const values = Object.create(null);\n  for (const [key, value] of Object.entries(${safeStorageSeed})) values[key] = String(value);\n  const persist = (action, key, value) => (window.opener || window.parent)?.postMessage({ type: "WEBCLAW_PREVIEW_STORAGE_SET", namespace, action, key, value }, "*");\n  const storage = { get length() { return Object.keys(values).length; }, key: (index) => Object.keys(values)[Number(index)] ?? null, getItem: (key) => Object.prototype.hasOwnProperty.call(values, String(key)) ? values[String(key)] : null, setItem: (key, value) => { const name = String(key); const next = String(value); values[name] = next; persist("set", name, next); }, removeItem: (key) => { const name = String(key); delete values[name]; persist("remove", name, ""); }, clear: () => { for (const key of Object.keys(values)) delete values[key]; persist("clear", "", ""); } };\n  try { Object.defineProperty(window, "localStorage", { configurable: true, value: storage }); } catch { /* opaque origins may reject the native property; the shim remains available to page code that receives it. */ }\n  const report = (level, args) => (window.opener || window.parent)?.postMessage({ type: "WEBCLAW_PREVIEW_LOG", level, message: args.map(String).join(" ") }, "*");\n  for (const level of ["log", "info", "warn", "error"]) { const original = console[level]; console[level] = (...args) => { original(...args); report(level, args); }; }\n  window.addEventListener("error", (event) => report("error", [event.message, event.filename, event.lineno]));\n  window.addEventListener("unhandledrejection", (event) => report("error", [event.reason]));\n})();\n</script>`;
+}
+
+function safeInlineJson(value) {
+  return String(value || "{}")
+    .replace(/&/g, "\\u0026")
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
 }
 
 function resolvePath(value, basePath) {

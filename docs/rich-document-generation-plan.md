@@ -4,11 +4,11 @@
 
 目标版本：0.7.1 - 0.7.5
 
-当前实现进度：0.7.1 核心规范、模板注册、资源校验、构建链和错误分层已完成并通过阶段测试；0.7.2 已完成 DOCX/PDF Rich Spec 首个可用引擎，0.7.3 已完成 XLSX 工作表引擎，0.7.4 已完成 PPTX 基础演示引擎；0.7.5 已补充 DOCX/PDF/PPTX 的本地图片资源嵌入与 PPTX 原生图表。格式引擎由共享 Offscreen Document 调用 manifest sandbox 中的本地静态 bundle，生成结果通过临时 IndexedDB Artifact Store 交回 Service Worker，避免 MV3 Service Worker 动态导入和扩展页 CSP 冲突。CJK PDF 字体、XLSX 图表、复杂 Office 编辑和视觉 QA 仍是后续增强项。
+当前实现进度：0.7.1 核心规范、模板注册、资源校验、构建链和错误分层已完成并通过阶段测试；0.7.2 已完成 DOCX/PDF Rich Spec 首个可用引擎，0.7.3 已完成 XLSX 工作表引擎，0.7.4 已完成 PPTX 基础演示引擎；0.7.5 已发布安全加固与发布流程同步，DOCX/PDF/PPTX 本地图片资源嵌入与 PPTX 原生图表仍作为后续增强项进行验证。格式引擎由共享 Offscreen Document 调用 manifest sandbox 中的本地静态 bundle，生成结果通过临时 IndexedDB Artifact Store 交回 Service Worker，避免 MV3 Service Worker 动态导入和扩展页 CSP 冲突。CJK PDF 字体、XLSX 图表、复杂 Office 编辑和视觉 QA 仍是后续增强项。
 
 基线版本：0.7.0
 
-最后更新：2026-08-11
+最后更新：2026-08-14
 
 适用范围：DOCX、XLSX、PPTX、PDF、Markdown、DocumentService、VFS、Offscreen Document、Tool Registry、文件管理器、知识库和发布构建
 
@@ -317,7 +317,7 @@ Offscreen 只返回 `artifactId` 和小型元数据。DocumentService 读取 Blo
 
 ### 7.4 是否新增 `document_template`
 
-0.7.1 - 0.7.4 不新增。内置模板由 `document_schema` 列出，用户模板通过 VFS 文件管理器和 `fs_*` Tool 管理。
+0.7.1 - 0.7.5 不新增。内置模板由 `document_schema` 列出，用户模板通过 VFS 文件管理器和 `fs_*` Tool 管理。
 
 只有同时满足以下条件时，0.7.5 才增加 `document_template`：
 

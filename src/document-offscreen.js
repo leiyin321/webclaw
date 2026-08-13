@@ -83,6 +83,10 @@ function cancelDocumentGeneration(value) {
   setTimeout(() => cancelled.delete(requestId), 5 * 60 * 1000);
   deleteDocumentArtifact(requestId).catch(() => {});
   const request = pending.get(requestId);
+  frame?.contentWindow?.postMessage({
+    type: "WEBCLAW_DOCUMENT_SANDBOX_CANCEL",
+    requestId
+  }, "*");
   if (!request) return;
   pending.delete(requestId);
   clearTimeout(request.timer);

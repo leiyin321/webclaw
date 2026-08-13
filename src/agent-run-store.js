@@ -5,7 +5,7 @@ const EVENTS_STORE = "events";
 const OPERATIONS_STORE = "toolOperations";
 const ARTIFACTS_STORE = "artifacts";
 const TERMINAL_STATUSES = new Set(["completed", "failed", "interrupted", "cancelled"]);
-const SENSITIVE_KEY = /(authorization|cookie|password|secret|token|api[_-]?key|webhook)/i;
+const SENSITIVE_KEY = /(access[_-]?token|refresh[_-]?token|id[_-]?token|bot[_-]?token|api[_-]?key|client[_-]?secret|cookie|password|secret|webhook|token)/i;
 const DEFAULT_LEASE_TTL_MS = 30000;
 const HEARTBEAT_INTERVAL_MS = 10000;
 
@@ -48,7 +48,8 @@ export async function resolveAgentRunRecovery(run, getOperation) {
   if (!toolCall?.callId || !toolCall?.name) {
     return { ...recovery, reason: recovery.reason || "tool_checkpoint_missing" };
   }
-  const operationKey = [run.runId, toolCall.callId, toolCall.name].join(":");
+  const operationKey = String(run?.checkpoint?.operationKey || "") ||
+    [run.runId, toolCall.callId, toolCall.name].join(":");
   const operation = typeof getOperation === "function" ? await getOperation(operationKey) : null;
   if (!operation) return { ...recovery, operationKey, reason: "tool_operation_missing" };
   if (operation.status === "completed") {
@@ -93,7 +94,10 @@ export function createAgentRunJournal(store, metadata) {
 
   const enqueue = (operation) => {
     queue = queue
-      .then(operation)
+      .then(async () => {
+        lastError = null;
+        await operation();
+      })
       .catch((error) => {
         lastError = error;
         console.warn("WebClaw Agent RunStore write failed", error);

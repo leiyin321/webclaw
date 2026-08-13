@@ -91,15 +91,25 @@ export function parseMarkdown(source) {
       });
       continue;
     }
-    const tableRow = line.trim().startsWith("|") || /^\s*[^|]+\|[^|]+/.test(line);
-    if (tableRow && line.includes("|")) {
-      flushParagraph(); flushList();
-      const cells = splitTableRow(line);
-      if (!table) table = { type: "table", header: cells, rows: [], alignments: [] };
-      else if (table.rows.length === 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell))) {
-        table.alignments = cells.map((cell) => cell.startsWith(":") && cell.endsWith(":") ? "center" : cell.endsWith(":") ? "right" : cell.startsWith(":") ? "left" : "");
-      } else table.rows.push(cells);
+    const tableRow = isTableRow(line);
+    if (table && tableRow) {
+      table.rows.push(splitTableRow(line));
       continue;
+    }
+    if (!table && tableRow) {
+      const cells = splitTableRow(line);
+      const separatorCells = splitTableRow(lines[index + 1] || "");
+      if (isTableSeparator(separatorCells, cells.length)) {
+        flushParagraph(); flushList();
+        table = {
+          type: "table",
+          header: cells,
+          rows: [],
+          alignments: separatorCells.map((cell) => cell.startsWith(":") && cell.endsWith(":") ? "center" : cell.endsWith(":") ? "right" : cell.startsWith(":") ? "left" : "")
+        };
+        index += 1;
+        continue;
+      }
     }
     flushList(); flushTable();
     paragraph.push(line);
@@ -139,9 +149,11 @@ export function markdownToText(documentOrSource) {
     if (block.type === "heading") return `${"#".repeat(block.level)} ${block.text}`;
     if (block.type === "paragraph") return block.lines.join("\n");
     if (block.type === "code") return `\n\`\`\`${block.language}\n${block.content}\n\`\`\``;
+    if (block.type === "blockquote") return block.lines.map((line) => `> ${line}`).join("\n");
     if (block.type === "list") return block.items.map((item, index) => `${block.ordered ? `${index + 1}.` : "-"} ${item.text}`).join("\n");
     if (block.type === "table") return [block.header, ...block.rows].map((row) => `| ${row.join(" | ")} |`).join("\n");
-    return "---";
+    if (block.type === "separator") return "---";
+    return "";
   }).join("\n\n");
 }
 
@@ -167,6 +179,20 @@ function renderBlock(block, options = {}) {
 }
 
 function renderInline(value, options = {}) {
+  const source = String(value || "");
+  const tokenPattern = /(`[^`\n]+`|!\[[^\]]*\]\([^)]+\)|\[[^\]]+\]\([^)]+\))/g;
+  let output = "";
+  let cursor = 0;
+  for (const match of source.matchAll(tokenPattern)) {
+    output += renderInlineEmphasis(source.slice(cursor, match.index));
+    output += renderInlineToken(match[0], options);
+    cursor = Number(match.index) + match[0].length;
+  }
+  output += renderInlineEmphasis(source.slice(cursor));
+  return output;
+}
+
+function renderInlineEmphasis(value) {
   let output = escapeHtml(value);
   output = output.replace(/`([^`]+)`/g, "<code>$1</code>");
   output = output.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
@@ -174,11 +200,21 @@ function renderInline(value, options = {}) {
   output = output.replace(/~~([^~]+)~~/g, "<del>$1</del>");
   output = output.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "<em>$1</em>");
   output = output.replace(/(?<!_)_([^_]+)_(?!_)/g, "<em>$1</em>");
-  output = output.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, href) => options.allowImages === false
-    ? `<a href="${safeUrl(href, options)}" target="_blank" rel="noopener noreferrer">[Image: ${alt || "image"}]</a>`
-    : `<img alt="${alt}" src="${safeUrl(href, options)}">`);
-  output = output.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => `<a href="${safeUrl(href, options)}" target="_blank" rel="noopener noreferrer">${label}</a>`);
   return output;
+}
+
+function renderInlineToken(token, options) {
+  if (token.startsWith("`")) return `<code>${escapeHtml(token.slice(1, -1))}</code>`;
+  const image = token.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+  if (image) {
+    const alt = image[1] || "image";
+    return options.allowImages === false
+      ? `<a href="${safeUrl(image[2], options)}" target="_blank" rel="noopener noreferrer">[Image: ${escapeHtml(alt)}]</a>`
+      : `<img alt="${escapeHtml(alt)}" src="${safeUrl(image[2], options)}">`;
+  }
+  const link = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+  if (link) return `<a href="${safeUrl(link[2], options)}" target="_blank" rel="noopener noreferrer">${renderInlineEmphasis(link[1])}</a>`;
+  return renderInlineEmphasis(token);
 }
 
 function stripInlineMarkdown(value) {
@@ -188,6 +224,15 @@ function stripInlineMarkdown(value) {
 function splitTableRow(line) {
   const value = String(line || "").trim().replace(/^\|/, "").replace(/\|$/, "");
   return value.split("|").map((cell) => cell.trim());
+}
+
+function isTableRow(line) {
+  const value = String(line || "");
+  return value.includes("|") && splitTableRow(value).length >= 2;
+}
+
+function isTableSeparator(cells, expectedColumns) {
+  return cells.length === expectedColumns && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
 }
 
 function parseFrontMatterValue(value) {

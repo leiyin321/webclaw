@@ -1055,6 +1055,8 @@ transaction: tool_call_completed + result + checkpoint
 
 如果进程在两阶段之间退出，恢复逻辑必须根据 Tool 的 idempotency 类型处理，不能假设操作一定失败或一定成功。
 
+当前实现对 `safe` 和 `retry_safe` 操作允许按既定策略恢复。`unknown` 副作用操作若在启动后超时，会额外写入由 `runId + Tool name + 规范化参数摘要` 组成的不确定副作用标记；同一 Run 中即使模型换用新的 `callId` 重试相同参数，也会返回 `operation_state_unknown`，直到用户核验目标状态或改用不同操作。正常完成的相同参数调用仍按各自 `callId` 执行，不会被该保护误判为重复。
+
 ### 20.4 Checkpoint 时机
 
 必须保存：
